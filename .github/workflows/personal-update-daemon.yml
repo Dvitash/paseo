@@ -1,0 +1,47 @@
+name: Update Personal Daemon
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-daemon-update
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Dvitash/paseo' && github.ref == 'refs/heads/main' && github.actor == 'Dvitash'
+    uses: ./.github/workflows/personal-build.yml
+    with:
+      desktop: none
+
+  queued:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain update handoff
+        env:
+          COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          ARTIFACT: ${{ needs.build.outputs.daemon-artifact }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          {
+            echo '## Daemon update queued'
+            echo
+            echo "Commit: \`$COMMIT\`"
+            echo "Artifact: \`$ARTIFACT\`"
+            echo
+            echo 'The personal updater on your box checks for successful manual runs every minute.'
+            echo 'It stages this bundle separately, waits for idle agents, then restarts paseo.service.'
+            echo 'Pause new agent work while an update is pending; idle checks are not an atomic maintenance lock.'
+            echo 'Workflow success means the bundle is ready, not that the daemon has restarted.'
+            echo "Check the personal-daemon commit status: https://github.com/$REPOSITORY/commit/$COMMIT"
+            echo
+            echo 'Local status: cat ~/.local/share/paseo-personal/status.json'
+            echo 'Local logs: journalctl --user -u paseo-personal-update.service -n 50'
+            echo
+            echo "Download manually: gh run download $RUN_ID --repo $REPOSITORY --name $ARTIFACT --dir ./paseo-daemon-bundle"
+          } >> "$GITHUB_STEP_SUMMARY"

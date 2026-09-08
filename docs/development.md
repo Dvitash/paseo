@@ -29,6 +29,43 @@ the titlebar row. Production builds leave the variable unset and show no label.
 
 `npm run dev` is only a shorthand for `npm run dev:server`. Keep `127.0.0.1:6767` for the packaged app and production-style `~/.paseo` state.
 
+## Personal fork builds and daemon updates
+
+In `Dvitash/paseo`, run **Actions → Personal Build → Run workflow** to download
+a daemon/web bundle and, optionally, an unsigned desktop build. Artifacts live
+on the workflow run for 30 days. The run summary includes `gh run download`
+commands. This does not publish npm packages or replace an installed app.
+
+For the Linux box running the user service `paseo.service`, install the local
+pull updater once, authenticated with `gh` as the fork owner:
+
+```bash
+node scripts/install-personal-daemon-updater.mjs --activate
+```
+
+The installer does not restart Paseo. It enables a separate user timer that
+checks GitHub every minute; it needs no inbound SSH connection or Actions runner.
+Only future successful **Update Personal Daemon** manual runs on `main` by the
+fork owner request an update. A normal push or **Personal Build** run does not.
+
+Run **Actions → Update Personal Daemon → Run workflow**, selecting `main`.
+Workflow success means the bundle is queued, not installed. The local updater
+checks its source commit and checksums, installs into a separate release
+directory, and waits for idle agents before switching the service. Pause new
+agent work while an update is pending: the idle checks are not a maintenance lock.
+The updater health-checks the new daemon and attempts to restore the previous
+release if activation fails. It leaves the original service unit, global CLI,
+and `~/.paseo` data in place.
+
+```bash
+cat ~/.local/share/paseo-personal/status.json
+journalctl --user -u paseo-personal-update.service -n 50
+systemctl --user disable --now paseo-personal-update.timer  # stop polling
+```
+
+The commit's `personal-daemon/<hostname>` status reports the local outcome.
+If an activation fails, inspect the log and trigger a new manual run to retry.
+
 ## Nix desktop package
 
 The flake exposes `packages.<system>.desktop` on Linux and macOS:

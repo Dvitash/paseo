@@ -1,0 +1,228 @@
+name: Personal Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop:
+        description: "Desktop platform to build (optional, unsigned)"
+        required: false
+        default: "none"
+        type: choice
+        options:
+          - "none"
+          - "linux-arm64"
+          - "linux-x64"
+          - "macos-arm64"
+          - "windows-x64"
+  workflow_call:
+    inputs:
+      desktop:
+        description: "Desktop platform to build (optional, unsigned)"
+        required: false
+        default: "none"
+        type: string
+    outputs:
+      daemon-artifact:
+        description: "Uploaded daemon bundle artifact name"
+        value: ${{ jobs.build-daemon.outputs.artifact-name }}
+
+concurrency:
+  group: personal-build-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  build-daemon:
+    name: build-daemon
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.package-daemon.outputs.artifact-name }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Run targeted script tests
+        run: node --test scripts/personal-artifacts.test.mjs scripts/personal-daemon-update.test.mjs scripts/install-personal-daemon-updater.test.mjs
+
+      - name: Build server stack
+        run: npm run build:server
+
+      - name: Build daemon web UI
+        run: npm run build:daemon-web-ui
+
+      - name: Package daemon artifacts
+        id: package-daemon
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          node scripts/personal-artifacts.mjs pack --commit "$COMMIT_SHA"
+          echo "artifact-name=paseo-daemon-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload daemon bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: paseo-daemon-${{ github.sha }}
+          path: personal-artifacts/daemon
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Generate daemon summary
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          cat << EOF >> "$GITHUB_STEP_SUMMARY"
+          ### Personal Daemon Artifact Bundle
+          - **Artifact Name:** \`paseo-daemon-${COMMIT_SHA}\`
+          - **Commit:** \`${COMMIT_SHA}\`
+          - **Retention:** 30 days
+
+          #### Download Command
+          \`\`\`bash
+          gh run download "${RUN_ID}" --repo "${GITHUB_REPO}" -n "paseo-daemon-${COMMIT_SHA}" -D /tmp/paseo-daemon-bundle
+          \`\`\`
+
+          #### Installation Guidance
+          Do not run \`npm install -g\` directly on a host running an active daemon service, as in-place replacement while processes are running may disrupt active sessions. Use the Update Daemon workflow or the managed update script (\`scripts/personal-daemon-update.mjs\`) for safe idle-gated transitions.
+          For isolated local testing:
+          \`\`\`bash
+          npm install --prefix /path/to/isolated-env /tmp/paseo-daemon-bundle/*.tgz
+          \`\`\`
+          EOF
+
+  build-desktop:
+    name: build-desktop (${{ inputs.desktop }})
+    if: ${{ inputs.desktop != 'none' && inputs.desktop != '' }}
+    runs-on: ${{ (inputs.desktop == 'macos-arm64' && 'macos-14') || (inputs.desktop == 'windows-x64' && 'windows-latest') || (inputs.desktop == 'linux-arm64' && 'ubuntu-24.04-arm') || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Build desktop application
+        shell: bash
+        env:
+          DESKTOP_TARGET: ${{ inputs.desktop }}
+          FORK_OWNER: ${{ github.repository_owner }}
+          FORK_REPO: ${{ github.event.repository.name || 'paseo' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          EP_GH_IGNORE_TIME: "true"
+        run: |
+          set -euo pipefail
+          build_args=(-- --publish never)
+          build_args+=("-c.publish.owner=${FORK_OWNER}")
+          build_args+=("-c.publish.repo=${FORK_REPO}")
+
+          if [[ "$DESKTOP_TARGET" == "macos-arm64" ]]; then
+            build_args+=(--mac --arm64)
+            build_args+=("-c.mac.identity=null")
+            build_args+=("-c.mac.notarize=false")
+          elif [[ "$DESKTOP_TARGET" == "linux-arm64" ]]; then
+            build_args+=(--linux tar.gz AppImage --arm64)
+          elif [[ "$DESKTOP_TARGET" == "linux-x64" ]]; then
+            build_args+=(--linux tar.gz AppImage --x64)
+          elif [[ "$DESKTOP_TARGET" == "windows-x64" ]]; then
+            build_args+=(--win --x64)
+          else
+            echo "::error::Unsupported desktop target: ${DESKTOP_TARGET}"
+            exit 1
+          fi
+
+          npm run build:desktop "${build_args[@]}"
+
+      - name: Stage installable desktop archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="personal-artifacts/desktop"
+          mkdir -p "$dest"
+          release_dir="packages/desktop/release"
+
+          if [[ ! -d "$release_dir" ]]; then
+            echo "::error::Desktop release directory not found at $release_dir"
+            exit 1
+          fi
+
+          found=0
+          for item in "$release_dir"/*; do
+            if [[ -f "$item" ]]; then
+              case "$item" in
+                *.dmg|*.zip|*.AppImage|*.deb|*.rpm|*.tar.gz|*.exe)
+                  echo "Staging archive: $(basename "$item")"
+                  cp "$item" "$dest/"
+                  found=$((found + 1))
+                  ;;
+                *)
+                  echo "Skipping non-archive file: $(basename "$item")"
+                  ;;
+              esac
+            fi
+          done
+
+          if [[ "$found" -eq 0 ]]; then
+            echo "::error::No installable archives found in $release_dir"
+            exit 1
+          fi
+
+      - name: Upload desktop archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: paseo-desktop-${{ inputs.desktop }}-${{ github.sha }}
+          path: personal-artifacts/desktop/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Generate desktop summary
+        shell: bash
+        env:
+          DESKTOP_TARGET: ${{ inputs.desktop }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          cat << EOF >> "$GITHUB_STEP_SUMMARY"
+          ### Personal Desktop Build: ${DESKTOP_TARGET}
+          - **Artifact Name:** \`paseo-desktop-${DESKTOP_TARGET}-${COMMIT_SHA}\`
+          - **Target Platform:** \`${DESKTOP_TARGET}\`
+          - **Commit:** \`${COMMIT_SHA}\`
+
+          > **Notice: Unsigned and Unnotarized Build**
+          > This build is strictly for personal development and testing and is not signed with vendor certificates.
+          > - **macOS:** Clear quarantine attribute if blocked: \`xattr -cr /Applications/Paseo.app\` or right-click and choose Open.
+          > - **Windows:** If SmartScreen prompts, select "More info" and then "Run anyway".
+          > - **Linux:** Ensure file execute permissions: \`chmod +x Paseo-*.AppImage\`.
+
+          #### Download Command
+          \`\`\`bash
+          gh run download "${RUN_ID}" --repo "${GITHUB_REPO}" -n "paseo-desktop-${DESKTOP_TARGET}-${COMMIT_SHA}" -D ./personal-desktop
+          \`\`\`
+          EOF
