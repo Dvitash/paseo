@@ -216,12 +216,16 @@ function Stop-PaseoForInstall {
         return
     }
 
+    # Let Electron's quit hook stop its detached local daemon before files change.
     foreach ($p in $targetProcs) {
-        try { $null = $p.CloseMainWindow() } catch {}
+        try { $null = $p.CloseMainWindow() } catch { if (-not $p.HasExited) { throw } }
     }
-    Start-Sleep -Seconds 3
+    $deadline = [DateTime]::UtcNow.AddSeconds(90)
     foreach ($p in $targetProcs) {
-        try { if (-not $p.HasExited) { $p.Kill() } } catch {}
+        $remaining = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if (-not $p.HasExited -and -not $p.WaitForExit($remaining)) {
+            throw "Paseo did not quit cleanly. Quit it from the app, then retry; installation has not started."
+        }
     }
 }
 

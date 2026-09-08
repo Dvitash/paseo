@@ -240,6 +240,25 @@ try {
     Assert-Equal $stopped.Count 1 "Stopped exactly one process matching target executable"
     Assert-Equal $stopped[0] $appExe "Ignored process in AppOther despite path prefix similarity"
 
+    $graceful = [PSCustomObject]@{ Path = $appExe; HasExited = $false; WaitBudget = 0 }
+    $graceful | Add-Member ScriptMethod CloseMainWindow { return $true }
+    $graceful | Add-Member ScriptMethod WaitForExit {
+        param($Milliseconds)
+        $this.WaitBudget = $Milliseconds
+        $this.HasExited = $true
+        return $true
+    }
+    Stop-PaseoForInstall -TargetDir $appDir -LocalAdapters @{ GetProcesses = { return @($graceful) } }
+    Assert-True $graceful.HasExited "Waits for graceful application shutdown"
+    Assert-True ($graceful.WaitBudget -gt 30000) "Allows detached daemon shutdown to finish"
+
+    $blockedQuit = [PSCustomObject]@{ Path = $appExe; HasExited = $false }
+    $blockedQuit | Add-Member ScriptMethod CloseMainWindow { return $false }
+    $blockedQuit | Add-Member ScriptMethod WaitForExit { param($Milliseconds) return $false }
+    Assert-Throws {
+        Stop-PaseoForInstall -TargetDir $appDir -LocalAdapters @{ GetProcesses = { return @($blockedQuit) } }
+    } "did not quit cleanly" "Refuses installation when graceful quit is blocked"
+
     # ---------------------------------------------------------------------------
     # Test Suite 4: End-to-End Orchestration & Status Ordering / URL Matching
     # ---------------------------------------------------------------------------
@@ -255,6 +274,7 @@ try {
     $mockAdapters = @{
         Guid = { return "test-fixed-uuid" }
         GetProcesses = { return @([PSCustomObject]@{ Path = $appExe }) }
+        StopProcesses = { param($Processes) }
         GetExes = { param($Dir) return @($appExe) }
         LaunchDesktop = { param($Path) $flowState.Launched = $Path }
         RunInstaller = {
@@ -318,6 +338,7 @@ try {
     $failingInstallAdapters = @{
         Guid = { return "test-fail-uuid" }
         GetProcesses = { return @([PSCustomObject]@{ Path = $appExe }) }
+        StopProcesses = { param($Processes) }
         GetExes = { param($Dir) return @($appExe) }
         RunInstaller = {
             param($Exe, $ArgStr)
