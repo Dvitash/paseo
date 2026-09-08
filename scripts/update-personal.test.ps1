@@ -305,10 +305,19 @@ try {
                         headSha = "sha-999"
                         url = "https://github.com/Dvitash/paseo/actions/runs/999"
                     }
+                    @{
+                        databaseId = 111
+                        displayTitle = "Update Personal Daemon"
+                        headSha = "old-sha"
+                        url = "https://github.com/Dvitash/paseo/actions/runs/111"
+                    }
                 )
-                return @{ ExitCode = 0; Stdout = ($runs | ConvertTo-Json) }
+                if ($flowState.SingleRun) { $runs = @($runs[0]) }
+                if ($flowState.InvalidRunId) { $runs[0].databaseId = "invalid-id" }
+                return @{ ExitCode = 0; Stdout = (ConvertTo-Json -InputObject $runs -Depth 5) }
             }
             if ($sub -eq "run" -and $CommandArgs[1] -eq "view") {
+                $flowState.ViewRunId = $CommandArgs[2]
                 $view = @{ status = "completed"; conclusion = "success" }
                 return @{ ExitCode = 0; Stdout = ($view | ConvertTo-Json) }
             }
@@ -333,6 +342,21 @@ try {
     Assert-True ($flowState.InstallerArg -match "/S /currentuser /D=") "Installer called with /S /currentuser /D="
     Assert-True $flowState.TargetExeVerified "Target executable presence verified"
     Assert-Equal $flowState.Launched $appExe "Relaunches GUI only after both updates succeed"
+    Assert-Equal $flowState.ViewRunId "999" "Selects a scalar run ID from a real multi-run JSON array"
+
+    $flowState.SingleRun = $true
+    $flowState.DispatchedArgs = $null
+    Invoke-PersonalUpdate -ExistingRequestId "test-fixed-uuid" -LocalAdapters $mockAdapters
+    Assert-True ($null -eq $flowState.DispatchedArgs) "Resume does not dispatch a duplicate update"
+    Assert-Equal $flowState.ViewRunId "999" "Resumes the same run from a single-element JSON array"
+
+    $flowState.InvalidRunId = $true
+    $flowState.ViewRunId = $null
+    Assert-Throws {
+        Invoke-PersonalUpdate -ExistingRequestId "test-fixed-uuid" -LocalAdapters $mockAdapters
+    } "convert" "Invalid run IDs terminate instead of continuing with an empty ID"
+    Assert-True ($null -eq $flowState.ViewRunId) "No build query is sent after an invalid ID"
+    $flowState.InvalidRunId = $false
 
     # Test partial failure if desktop installer fails after dispatch
     $failingInstallAdapters = @{
@@ -350,7 +374,7 @@ try {
             if ($sub -eq "api" -and $CommandArgs[1] -eq "user") { return @{ ExitCode = 0; Stdout = "Dvitash`n" } }
             if ($sub -eq "workflow" -and $CommandArgs[1] -eq "run") { return @{ ExitCode = 0; Stdout = "" } }
             if ($sub -eq "run" -and $CommandArgs[1] -eq "list") {
-                return @{ ExitCode = 0; Stdout = (@(@{ databaseId = 888; displayTitle = "Personal update test-fail-uuid"; headSha = "s8"; url = "u8" }) | ConvertTo-Json) }
+                return @{ ExitCode = 0; Stdout = (ConvertTo-Json -InputObject @(@{ databaseId = 888; displayTitle = "Personal update test-fail-uuid"; headSha = "s8"; url = "u8" })) }
             }
             if ($sub -eq "run" -and $CommandArgs[1] -eq "view") {
                 return @{ ExitCode = 0; Stdout = (@{ status = "completed"; conclusion = "success" } | ConvertTo-Json) }

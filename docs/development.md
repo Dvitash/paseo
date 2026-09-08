@@ -83,6 +83,13 @@ These updates are not atomic across machines. A desktop installation failure
 does not cancel the queued daemon update. The command reports partial failures
 and does not treat GitHub build success as proof of deployment.
 
+If the Windows command is interrupted after dispatch, resume using the request
+UUID it printed rather than creating another daemon update:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Dvitash/paseo/main/scripts/update-personal.ps1))) -RequestId '<printed-request-UUID>'
+```
+
 ## Nix desktop package
 
 The flake exposes `packages.<system>.desktop` on Linux and macOS:

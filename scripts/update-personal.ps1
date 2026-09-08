@@ -9,6 +9,9 @@ param(
     [string]$InstallDir,
 
     [Parameter()]
+    [string]$RequestId,
+
+    [Parameter()]
     [switch]$NoRun,
 
     [Parameter()]
@@ -232,8 +235,10 @@ function Stop-PaseoForInstall {
 function Invoke-PersonalUpdate {
     param(
         [string]$ChosenInstallDir,
+        [string]$ExistingRequestId,
         [hashtable]$LocalAdapters
     )
+    $ErrorActionPreference = "Stop"
 
     Assert-WindowsPlatform -LocalAdapters $LocalAdapters
 
@@ -252,31 +257,43 @@ function Invoke-PersonalUpdate {
     $targetScope = $installTarget.Scope
     Write-Host "Target install directory: $targetDir (scope: $targetScope)"
 
-    $requestId = if ($LocalAdapters -and $LocalAdapters.ContainsKey("Guid")) {
-        & $LocalAdapters["Guid"]
+    $requestId = $ExistingRequestId
+    if ([string]::IsNullOrWhiteSpace($requestId)) {
+        $requestId = if ($LocalAdapters -and $LocalAdapters.ContainsKey("Guid")) {
+            & $LocalAdapters["Guid"]
+        } else {
+            [System.Guid]::NewGuid().ToString("D")
+        }
+        Write-Host "Dispatching workflow $Workflow with request_id: $requestId..."
+        $dispatch = Invoke-Gh -CommandArgs @("workflow", "run", $Workflow, "--repo", $Repo, "--ref", "main", "-f", "desktop=windows-x64", "-f", "request_id=$requestId") -LocalAdapters $LocalAdapters
+        if ($dispatch.ExitCode -ne 0) { throw "Workflow dispatch failed: $($dispatch.Stdout)" }
     } else {
-        [System.Guid]::NewGuid().ToString("D")
+        Write-Host "Resuming existing request: $requestId (no new workflow dispatch)."
     }
-
-    Write-Host "Dispatching workflow $Workflow with request_id: $requestId..."
-    $dispatch = Invoke-Gh -CommandArgs @("workflow", "run", $Workflow, "--repo", $Repo, "--ref", "main", "-f", "desktop=windows-x64", "-f", "request_id=$requestId") -LocalAdapters $LocalAdapters
-    if ($dispatch.ExitCode -ne 0) { throw "Workflow dispatch failed: $($dispatch.Stdout)" }
 
     $expectedTitle = "Personal update $requestId"
     $run = $null
     for ($i = 0; $i -lt 30; $i++) {
         $list = Invoke-Gh -CommandArgs @("run", "list", "--repo", $Repo, "--workflow", $Workflow, "--json", "databaseId,displayTitle,headSha,url", "-L", "10") -LocalAdapters $LocalAdapters
         if ($list.ExitCode -eq 0) {
-            $runs = @(ConvertFrom-Json $list.Stdout)
+            # PS 5.1 preserves JSON arrays as one pipeline value; @() would nest it.
+            $runs = ConvertFrom-Json $list.Stdout
             foreach ($r in $runs) {
-                if ($r.displayTitle -eq $expectedTitle) { $run = $r; break }
+                if ($r.displayTitle -eq $expectedTitle) {
+                    if ($null -ne $run) { throw "Multiple runs match request '$requestId'; refusing ambiguous update." }
+                    $run = $r
+                }
             }
         }
         if ($run) { break }
         Start-Sleep -Seconds 2
     }
     if (-not $run) { throw "Timed out locating run '$expectedTitle'." }
+    if ($run -is [array] -or $run.databaseId -is [array]) {
+        throw "Expected exactly one workflow run."
+    }
     $runId = [long]$run.databaseId
+    if ($runId -le 0) { throw "Invalid workflow run ID." }
     $headSha = $run.headSha
 
     Write-Host "Waiting for build $runId ($($run.url))..."
@@ -296,7 +313,7 @@ function Invoke-PersonalUpdate {
     if (-not $completed) { throw "Workflow build timed out." }
 
     # Desktop install stage: wrap in try/catch to report clear partial failure after dispatch
-    $tempDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "paseo-update-$requestId")
+    $tempDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "paseo-update-$([System.Guid]::NewGuid().ToString('N'))")
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
     try {
         $artName = "paseo-desktop-windows-x64-$headSha"
@@ -414,5 +431,5 @@ Paseo personal update complete!
 }
 
 if (-not $NoRun) {
-    Invoke-PersonalUpdate -ChosenInstallDir $InstallDir -LocalAdapters $Adapters
+    Invoke-PersonalUpdate -ChosenInstallDir $InstallDir -ExistingRequestId $RequestId -LocalAdapters $Adapters
 }
