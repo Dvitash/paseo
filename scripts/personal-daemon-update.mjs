@@ -474,6 +474,14 @@ export function downloadArtifactBundle({
   runCommand = defaultRunCommand,
 }) {
   const artifactName = `paseo-daemon-${headSha}`;
+  if (fs.existsSync(targetDir)) {
+    try {
+      return verifyDaemonArtifacts(targetDir, { expectedCommit: headSha });
+    } catch {
+      // Retry incomplete downloads in a fresh directory; gh refuses existing files.
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+  }
   fs.mkdirSync(targetDir, { recursive: true });
 
   const downloadRes = runCommand(
@@ -577,7 +585,10 @@ export function stageRelease({
       ...tarballPaths,
     ];
 
-    const npmRes = runCommand(npmPath, npmArgs, { timeout: 20 * 60 * 1000 });
+    const npmRes = runCommand(npmPath, npmArgs, {
+      timeout: 20 * 60 * 1000,
+      env: { ...process.env, ONNXRUNTIME_NODE_INSTALL: "skip" },
+    });
     if (npmRes.status !== 0) {
       throw new Error(
         `npm install failed (exit ${npmRes.status}): ${npmRes.stderr || npmRes.stdout}`,

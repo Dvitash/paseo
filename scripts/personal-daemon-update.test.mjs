@@ -536,14 +536,13 @@ test("downloadArtifactBundle: rejects corrupted checksum before npm install", as
   await withTempDir("corrupt-test-", async (dir) => {
     const config = makeMockConfig(dir);
     const downloadDir = path.join(dir, "download");
-    createValidArtifactBundle(downloadDir, TEST_COMMIT, TEST_VERSION);
-
-    // Tamper with one tarball
-    const pkg = EXPECTED_PACKAGES[0].replace("@", "").replace("/", "-");
-    const tarball = path.join(downloadDir, `${pkg}-${TEST_VERSION}.tgz`);
-    fs.writeFileSync(tarball, Buffer.from("corrupted bytes"));
-
-    const mockRunCommand = () => ({ status: 0, stdout: "Downloaded", stderr: "" });
+    const mockRunCommand = () => {
+      createValidArtifactBundle(downloadDir, TEST_COMMIT, TEST_VERSION);
+      const pkg = EXPECTED_PACKAGES[0].replace("@", "").replace("/", "-");
+      const tarball = path.join(downloadDir, `${pkg}-${TEST_VERSION}.tgz`);
+      fs.writeFileSync(tarball, Buffer.from("corrupted bytes"));
+      return { status: 0, stdout: "Downloaded", stderr: "" };
+    };
 
     assert.throws(
       () =>
@@ -557,6 +556,32 @@ test("downloadArtifactBundle: rejects corrupted checksum before npm install", as
         }),
       /Checksum mismatch/,
     );
+  });
+});
+
+test("downloadArtifactBundle: repeated busy polls reuse verified files and repair partial downloads", async () => {
+  await withTempDir("artifact-cache-", (dir) => {
+    const targetDir = path.join(dir, "download");
+    let downloads = 0;
+    const options = {
+      ghPath: "/usr/bin/gh",
+      repository: "Dvitash/paseo",
+      runId: 101,
+      headSha: TEST_COMMIT,
+      targetDir,
+      runCommand: () => {
+        downloads += 1;
+        assert.equal(fs.readdirSync(targetDir).length, 0);
+        createValidArtifactBundle(targetDir);
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    };
+    assert.equal(downloadArtifactBundle(options).commit, TEST_COMMIT);
+    assert.equal(downloadArtifactBundle(options).commit, TEST_COMMIT);
+    assert.equal(downloads, 1);
+    fs.writeFileSync(path.join(targetDir, "manifest.json"), "{");
+    assert.equal(downloadArtifactBundle(options).commit, TEST_COMMIT);
+    assert.equal(downloads, 2);
   });
 });
 
@@ -678,12 +703,13 @@ test("stageRelease: installs packages, verifies CLI and web index, writes comple
     const artifactDir = path.join(dir, "artifacts");
     const manifest = createValidArtifactBundle(artifactDir, TEST_COMMIT, TEST_VERSION);
 
-    const mockRunCommand = (cmd, args) => {
+    const mockRunCommand = (cmd, args, options) => {
       if (cmd === config.npmPath) {
         assert.equal(args[0], "install");
         assert.ok(args.includes("--omit=dev"));
         assert.ok(args.includes("--no-audit"));
         assert.ok(args.includes("--no-fund"));
+        assert.equal(options.env.ONNXRUNTIME_NODE_INSTALL, "skip");
 
         const prefixIdx = args.indexOf("--prefix");
         const stageTarget = args[prefixIdx + 1];

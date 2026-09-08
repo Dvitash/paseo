@@ -26,7 +26,7 @@ export function buildUpdaterUnits(config, searchPath, flockPath) {
     path.join(config.root, "config.json"),
   ];
   return {
-    service: `[Unit]\nDescription=Apply manually requested personal Paseo daemon updates\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart=${args.map(quoteSystemd).join(" ")}\nEnvironment=${quoteSystemd(`HOME=${os.homedir()}`)}\nEnvironment=${quoteSystemd(`PATH=${searchPath}`)}\nWorkingDirectory=${quoteSystemd(os.homedir())}\nTimeoutStartSec=35min\nUMask=0077\nNoNewPrivileges=true\nNice=10\n`,
+    service: `[Unit]\nDescription=Apply manually requested personal Paseo daemon updates\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart=${args.map(quoteSystemd).join(" ")}\nEnvironment=${quoteSystemd(`HOME=${os.homedir()}`)}\nEnvironment=${quoteSystemd(`PATH=${searchPath}`)}\nTimeoutStartSec=35min\nUMask=0077\nNoNewPrivileges=true\nNice=10\n`,
     timer:
       "[Unit]\nDescription=Check for manual Paseo update requests\n\n[Timer]\nOnBootSec=2min\nOnUnitInactiveSec=60s\nAccuracySec=10s\nUnit=paseo-personal-update.service\n\n[Install]\nWantedBy=timers.target\n",
   };

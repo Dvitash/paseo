@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { load } from "js-yaml";
 import { buildUpdaterUnits, quoteSystemd } from "./install-personal-daemon-updater.mjs";
@@ -19,6 +22,36 @@ test("updater unit serializes polls and never invokes the live daemon directly",
   assert.match(units.timer, /OnUnitInactiveSec=60s/);
   assert.match(units.timer, /Unit=paseo-personal-update.service/);
 });
+
+test(
+  "generated units pass the native systemd parser",
+  { skip: process.platform !== "linux" },
+  (t) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "paseo units-"));
+    try {
+      const units = buildUpdaterUnits(
+        { root, nodePath: process.execPath },
+        "/usr/bin",
+        "/usr/bin/flock",
+      );
+      const serviceFile = path.join(root, "paseo-personal-update.service");
+      const timerFile = path.join(root, "paseo-personal-update.timer");
+      writeFileSync(serviceFile, units.service);
+      writeFileSync(timerFile, units.timer);
+      const result = spawnSync("systemd-analyze", ["verify", serviceFile, timerFile], {
+        encoding: "utf8",
+        timeout: 10000,
+      });
+      if (result.error?.code === "ENOENT") {
+        t.skip("systemd-analyze unavailable");
+        return;
+      }
+      assert.equal(result.status, 0, result.stderr || result.error?.message);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("systemd quoting preserves spaces and escapes specifiers", () => {
   assert.equal(quoteSystemd("/a path/%n/$HOME"), '"/a path/%%n/$$HOME"');
