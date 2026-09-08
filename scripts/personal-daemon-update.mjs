@@ -11,6 +11,7 @@ export const SERVER_WEB_INDEX_RELPATH =
 export const CLI_DIST_RELPATH = "node_modules/@getpaseo/cli/dist/index.js";
 export const RELEASE_COMPLETE_FILENAME = ".release-complete.json";
 export const DROPIN_FILENAME = "90-personal-release.conf";
+export const DEFAULT_RESTART_TIMEOUT_MS = 120000;
 
 export function defaultRunCommand(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -339,12 +340,14 @@ export function emitCommitStatus({
   headSha,
   state,
   description,
+  runId,
   runCommand = defaultRunCommand,
 }) {
   const hostname = os.hostname();
   const context = `personal-daemon/${hostname}`;
+  const targetUrl = `https://github.com/${repository}/actions/runs/${runId}`;
   try {
-    const result = runCommand(ghPath, [
+    const args = [
       "api",
       `repos/${repository}/statuses/${headSha}`,
       "--method",
@@ -355,7 +358,10 @@ export function emitCommitStatus({
       `context=${context}`,
       "-f",
       `description=${description.slice(0, 140)}`,
-    ]);
+      "-f",
+      `target_url=${targetUrl}`,
+    ];
+    const result = runCommand(ghPath, args);
     if (result.status !== 0) {
       throw new Error(result.stderr || result.stdout || `gh exited ${result.status}`);
     }
@@ -401,12 +407,7 @@ function trustedRunDetails(details, newest, config) {
   );
 }
 
-function alreadyHandledRequest(root, newest) {
-  try {
-    if (path.basename(fs.readlinkSync(path.join(root, "current"))) === newest.headSha) return true;
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
+export function alreadyHandledRequest(root, newest) {
   const ledger = readLedgerFile(root);
   if (ledger && Number(ledger.lastHandledRunId) >= newest.databaseId) return true;
   const status = readStatusFile(root);
@@ -675,7 +676,7 @@ export function swapCurrentSymlink(root, targetReleaseDir) {
   fs.renameSync(tmpSymlink, currentSymlink);
 }
 
-function probeDaemon(config, runCommand, cliPath, expectedVersion) {
+export function probeDaemon(config, runCommand, cliPath, expectedVersion) {
   const active = runCommand(config.systemctlPath, ["--user", "is-active", config.service], {
     timeout: 5000,
   });
@@ -696,7 +697,11 @@ function probeDaemon(config, runCommand, cliPath, expectedVersion) {
       status.localDaemon === "running" &&
       status.connectedDaemon === "reachable" &&
       (expectedVersion === undefined || status.daemonVersion === expectedVersion);
-    return { ready, reason: ready ? "active_and_reachable" : "active_but_unready" };
+    return {
+      ready,
+      reason: ready ? "active_and_reachable" : "active_but_unready",
+      version: status.daemonVersion,
+    };
   } catch {
     return { ready: false, reason: "active_but_status_unparseable" };
   }
@@ -743,12 +748,16 @@ function readIfPresent(file, reader) {
   }
 }
 
-function restartService(config, runCommand) {
+export function restartService(
+  config,
+  runCommand = defaultRunCommand,
+  timeoutMs = DEFAULT_RESTART_TIMEOUT_MS,
+) {
   const reload = runCommand(config.systemctlPath, ["--user", "daemon-reload"], { timeout: 15000 });
   if (reload.status !== 0)
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`);
   const restart = runCommand(config.systemctlPath, ["--user", "restart", config.service], {
-    timeout: 30000,
+    timeout: timeoutMs,
   });
   if (restart.status !== 0)
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`);
@@ -761,7 +770,11 @@ async function restoreRelease(config, previous, options) {
     else fs.rmSync(path.join(config.root, "current"), { force: true });
     if (previous.dropIn !== null) writeDropInAtomic(previous.dropInPath, previous.dropIn);
     else fs.rmSync(previous.dropInPath, { force: true });
-    restartService(config, options.runCommand);
+    restartService(
+      config,
+      options.runCommand,
+      options.restartTimeoutMs ?? DEFAULT_RESTART_TIMEOUT_MS,
+    );
     const restoredCli = path.join(config.root, "current", CLI_DIST_RELPATH);
     return awaitDaemon(config, {
       ...options,
@@ -780,6 +793,7 @@ export async function activateRelease({
   sleep = defaultSleep,
   maxWaitMs = 90000,
   pollIntervalMs = 1000,
+  restartTimeoutMs = DEFAULT_RESTART_TIMEOUT_MS,
 }) {
   const dropInPath = path.join(config.systemdUserDir, `${config.service}.d`, DROPIN_FILENAME);
   const previous = {
@@ -787,11 +801,11 @@ export async function activateRelease({
     dropIn: readIfPresent(dropInPath, fs.readFileSync),
     dropInPath,
   };
-  const options = { runCommand, sleep, maxWaitMs, pollIntervalMs };
+  const options = { runCommand, sleep, maxWaitMs, pollIntervalMs, restartTimeoutMs };
   try {
     swapCurrentSymlink(config.root, releaseDir);
     writeDropInAtomic(dropInPath, generateDropInContent(config));
-    restartService(config, runCommand);
+    restartService(config, runCommand, restartTimeoutMs);
     const readiness = await checkDaemonReadiness({ config, manifest, ...options });
     if (!readiness.ready) throw new Error(readiness.error);
     return { ok: true };
@@ -807,11 +821,75 @@ export async function activateRelease({
   }
 }
 
+function acknowledgeActiveRelease({ config, headSha, runId, runCommand }) {
+  const link = readIfPresent(path.join(config.root, "current"), fs.readlinkSync);
+  if (!link || path.basename(link) !== headSha) return null;
+  emitCommitStatus({
+    ghPath: config.ghPath,
+    repository: config.repository,
+    headSha,
+    runId,
+    state: "pending",
+    description: `Verifying active personal daemon health for run ${runId}`,
+    runCommand,
+  });
+  const cliPath = path.join(config.root, "current", CLI_DIST_RELPATH);
+  const markerPath = path.join(config.root, "current", RELEASE_COMPLETE_FILENAME);
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+  if (marker.commit !== headSha || typeof marker.version !== "string") {
+    throw new Error("Active release marker does not match the requested commit");
+  }
+  const health = probeDaemon(config, runCommand, cliPath, marker.version);
+  if (!health.ready) return null;
+  const version = health.version;
+  writeStatusFile(config.root, {
+    state: "success",
+    runId,
+    commit: headSha,
+    version,
+    message: `Personal daemon already active and verified healthy at ${headSha}`,
+    updatedAt: new Date().toISOString(),
+  });
+  writeLedgerFile(config.root, {
+    lastHandledRunId: runId,
+    lastHandledSha: headSha,
+    lastHandledState: "success",
+    version,
+    updatedAt: new Date().toISOString(),
+  });
+  emitCommitStatus({
+    ghPath: config.ghPath,
+    repository: config.repository,
+    headSha,
+    runId,
+    state: "success",
+    description: `Personal daemon is already active and healthy at ${headSha}`,
+    runCommand,
+  });
+  return { status: "success", runId, commit: headSha, version, alreadyActive: true };
+}
+
+function recordNoPendingRun(root) {
+  const prevStatus = readStatusFile(root);
+  const ledger = readLedgerFile(root);
+  const preserveError = ledger?.lastHandledState === "error" || prevStatus?.state === "error";
+  const state = preserveError ? "error" : prevStatus?.state || "waiting";
+  const message = "No eligible new workflow runs found";
+  writeStatusFile(root, {
+    ...prevStatus,
+    state,
+    message,
+    lastCheckedAt: new Date().toISOString(),
+  });
+  return { status: state, message };
+}
+
 export async function runDaemonUpdate({
   configPath,
   checkOnly = false,
   runCommand = defaultRunCommand,
   sleep = defaultSleep,
+  restartTimeoutMs = DEFAULT_RESTART_TIMEOUT_MS,
 }) {
   const config = loadConfig(configPath);
 
@@ -857,32 +935,18 @@ export async function runDaemonUpdate({
     };
   }
 
-  if (!eligibleRun) {
-    const prevStatus = readStatusFile(config.root);
-    const ledger = readLedgerFile(config.root);
-    const stateToKeep =
-      (ledger && ledger.lastHandledState === "error") || prevStatus?.state === "error"
-        ? "error"
-        : prevStatus?.state || "waiting";
-
-    writeStatusFile(config.root, {
-      ...prevStatus,
-      state: stateToKeep,
-      message: "No eligible new workflow runs found",
-      lastCheckedAt: new Date().toISOString(),
-    });
-    return {
-      status: stateToKeep,
-      message: "No eligible new workflow runs found",
-    };
-  }
+  if (!eligibleRun) return recordNoPendingRun(config.root);
 
   const { headSha, runId } = eligibleRun;
+
+  const activeResult = acknowledgeActiveRelease({ config, headSha, runId, runCommand });
+  if (activeResult) return activeResult;
 
   emitCommitStatus({
     ghPath: config.ghPath,
     repository: config.repository,
     headSha,
+    runId,
     state: "pending",
     description: "Starting personal daemon staging and validation",
     runCommand,
@@ -918,6 +982,7 @@ export async function runDaemonUpdate({
       ghPath: config.ghPath,
       repository: config.repository,
       headSha,
+      runId,
       state: "error",
       description: `Artifact download/verify failed: ${downloadErr.message}`,
       runCommand,
@@ -955,6 +1020,7 @@ export async function runDaemonUpdate({
       ghPath: config.ghPath,
       repository: config.repository,
       headSha,
+      runId,
       state: "error",
       description: `npm stage install failed: ${stageErr.message}`,
       runCommand,
@@ -979,6 +1045,15 @@ export async function runDaemonUpdate({
       message: `System is busy, leaving staged version untouched: ${doubleIdleCheck.reason}`,
       updatedAt: new Date().toISOString(),
     });
+    emitCommitStatus({
+      ghPath: config.ghPath,
+      repository: config.repository,
+      headSha,
+      runId,
+      state: "pending",
+      description: `System is busy, leaving staged version untouched: ${doubleIdleCheck.reason}`,
+      runCommand,
+    });
     return {
       status: "waiting",
       message: `System is busy, leaving staged version untouched: ${doubleIdleCheck.reason}`,
@@ -991,6 +1066,7 @@ export async function runDaemonUpdate({
     manifest,
     runCommand,
     sleep,
+    restartTimeoutMs,
   });
 
   if (!activation.ok) {
@@ -1015,6 +1091,7 @@ export async function runDaemonUpdate({
       ghPath: config.ghPath,
       repository: config.repository,
       headSha,
+      runId,
       state: "error",
       description: `Activation failed (${recoveryDesc}): ${activation.error}`.slice(0, 140),
       runCommand,
@@ -1047,6 +1124,7 @@ export async function runDaemonUpdate({
     ghPath: config.ghPath,
     repository: config.repository,
     headSha,
+    runId,
     state: "success",
     description: `Successfully activated personal daemon ${manifest.version}`,
     runCommand,

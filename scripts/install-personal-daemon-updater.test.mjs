@@ -67,11 +67,15 @@ test("daemon update requests are manual and owner/main restricted", () => {
     ),
   );
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  assert.equal(workflow.on.workflow_dispatch.inputs.desktop.default, "none");
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.desktop.options, ["none", "windows-x64"]);
+  assert.equal(typeof workflow.on.workflow_dispatch.inputs.request_id, "object");
+  assert.match(workflow["run-name"], /Personal update/);
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.match(workflow.jobs.build.if, /github\.repository == 'Dvitash\/paseo'/);
   assert.match(workflow.jobs.build.if, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow.jobs.build.if, /github\.actor == 'Dvitash'/);
   assert.equal(workflow.jobs.build.uses, "./.github/workflows/personal-build.yml");
-  assert.equal(workflow.jobs.build.with.desktop, "none");
+  assert.equal(workflow.jobs.build.with.desktop, "${{ inputs.desktop || 'none' }}");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
 });

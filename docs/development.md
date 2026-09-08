@@ -66,6 +66,23 @@ systemctl --user disable --now paseo-personal-update.timer  # stop polling
 The commit's `personal-daemon/<hostname>` status reports the local outcome.
 If an activation fails, inspect the log and trigger a new manual run to retry.
 
+### Windows desktop and personal daemon combined update
+
+Run this from standalone Windows PowerShell, with `gh` installed and authenticated
+as `Dvitash`. Do not use Paseo's embedded terminal: replacing the GUI can close it.
+
+```powershell
+irm https://raw.githubusercontent.com/Dvitash/paseo/main/scripts/update-personal.ps1 | iex
+```
+
+The command builds both apps from one `main` commit, replaces the existing Windows
+installation, and reopens the GUI after the box confirms its update. Save your
+work first and pause new agent work while the daemon update is pending.
+
+These updates are not atomic across machines. A desktop installation failure
+does not cancel the queued daemon update. The command reports partial failures
+and does not treat GitHub build success as proof of deployment.
+
 ## Nix desktop package
 
 The flake exposes `packages.<system>.desktop` on Linux and macOS:

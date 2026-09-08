@@ -8,19 +8,24 @@ import zlib from "node:zlib";
 import { EXPECTED_PACKAGES, EXPECTED_SERVER_WEB_ENTRY } from "./personal-artifacts.mjs";
 import {
   CLI_DIST_RELPATH,
+  DEFAULT_RESTART_TIMEOUT_MS,
   DROPIN_FILENAME,
   RELEASE_COMPLETE_FILENAME,
   SERVER_WEB_INDEX_RELPATH,
   activateRelease,
+  alreadyHandledRequest,
   checkAgentStatus,
   checkServiceEligibility,
   downloadArtifactBundle,
+  emitCommitStatus,
   fetchEligibleWorkflowRun,
   generateDropInContent,
   parseDaemonStatusOutput,
+  probeDaemon,
   quoteSystemdArg,
   readLedgerFile,
   readStatusFile,
+  restartService,
   runDaemonUpdate,
   stageRelease,
   validateConfig,
@@ -1031,4 +1036,493 @@ test("runDaemonUpdate: --check mode is nonmutating and reports eligibility", asy
     assert.equal(fs.existsSync(path.join(config.root, "current")), false);
     assert.equal(fs.existsSync(path.join(config.systemdUserDir, `${config.service}.d`)), false);
   });
+});
+
+// 9. Restart timeout, slow request simulation, and commit status target_url tests
+test("restartService: synchronous restart exceeds unit stop allowance (120s default) and omits --no-block", () => {
+  const commands = [];
+  const mockRunCommand = (cmd, args, options) => {
+    commands.push({ cmd, args, options });
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  const config = {
+    systemctlPath: "/bin/systemctl",
+    service: "paseo.service",
+  };
+
+  restartService(config, mockRunCommand);
+
+  assert.equal(commands.length, 2);
+  // reload
+  assert.equal(commands[0].args[1], "daemon-reload");
+  assert.equal(commands[0].options.timeout, 15000);
+  // restart
+  assert.equal(commands[1].args[1], "restart");
+  assert.equal(commands[1].args[2], "paseo.service");
+  // must NOT have --no-block to prevent false-ready window
+  assert.equal(commands[1].args.includes("--no-block"), false);
+  // comfortably exceeds 30s TimeoutStopSec
+  assert.equal(commands[1].options.timeout, DEFAULT_RESTART_TIMEOUT_MS);
+  assert.equal(commands[1].options.timeout, 120000);
+
+  // Custom timeout check
+  commands.length = 0;
+  restartService(config, mockRunCommand, 45000);
+  assert.equal(commands[1].options.timeout, 45000);
+});
+
+test("activateRelease: slow restart simulation exceeding 30s unit stop allowance succeeds with 120s timeout", async () => {
+  await withTempDir("slow-restart-test-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const releaseDir = path.join(config.root, "releases", TEST_COMMIT);
+    fs.mkdirSync(releaseDir, { recursive: true });
+
+    let restartObservedTimeout = null;
+    let restartCompleted = false;
+
+    const mockRunCommand = (cmd, args, options) => {
+      if (cmd === config.systemctlPath && args[1] === "restart") {
+        restartObservedTimeout = options?.timeout;
+        // Simulate a slow restart request that would fail under a 30s timeout
+        // but succeeds comfortably because timeout is 120000ms.
+        if (options && options.timeout >= 120000) {
+          restartCompleted = true;
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        return {
+          status: 124,
+          stdout: "",
+          stderr: "spawnSync /bin/systemctl ETIMEDOUT",
+          error: { code: "ETIMEDOUT" },
+        };
+      }
+      if (cmd === config.systemctlPath && args[1] === "is-active") {
+        return { status: 0, stdout: "active\n", stderr: "" };
+      }
+      if (args.includes("daemon") && args.includes("status")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            localDaemon: "running",
+            connectedDaemon: "reachable",
+            daemonVersion: TEST_VERSION,
+          }),
+          stderr: "",
+        };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+
+    const manifest = { commit: TEST_COMMIT, version: TEST_VERSION };
+    const result = await activateRelease({
+      config,
+      releaseDir,
+      manifest,
+      runCommand: mockRunCommand,
+      sleep: async () => {},
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(restartObservedTimeout, 120000);
+    assert.equal(restartCompleted, true);
+    assert.equal(fs.readlinkSync(path.join(config.root, "current")), releaseDir);
+  });
+});
+
+test("activateRelease: rollback preserves bounded 120s restart timeout on activation failure", async () => {
+  await withTempDir("rollback-timeout-test-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const oldRelease = path.join(
+      config.root,
+      "releases",
+      "0000000000000000000000000000000000000000",
+    );
+    const newRelease = path.join(config.root, "releases", TEST_COMMIT);
+    fs.mkdirSync(oldRelease, { recursive: true });
+    fs.mkdirSync(newRelease, { recursive: true });
+
+    // Seed prior release
+    fs.mkdirSync(config.root, { recursive: true });
+    fs.symlinkSync(oldRelease, path.join(config.root, "current"));
+
+    const restartTimeouts = [];
+    let isRollback = false;
+
+    const mockRunCommand = (cmd, args, options) => {
+      if (cmd === config.systemctlPath && args[1] === "restart") {
+        restartTimeouts.push(options?.timeout);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (cmd === config.systemctlPath && args[1] === "is-active") {
+        // First activation probe fails, triggering rollback
+        if (!isRollback) {
+          isRollback = true;
+          return { status: 1, stdout: "inactive\n", stderr: "" };
+        }
+        return { status: 0, stdout: "active\n", stderr: "" };
+      }
+      if (args.includes("daemon") && args.includes("status")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            localDaemon: "running",
+            connectedDaemon: "reachable",
+            daemonVersion: "0.7.0",
+          }),
+          stderr: "",
+        };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+
+    const manifest = { commit: TEST_COMMIT, version: TEST_VERSION };
+    const result = await activateRelease({
+      config,
+      releaseDir: newRelease,
+      manifest,
+      runCommand: mockRunCommand,
+      sleep: async () => {},
+      maxWaitMs: 50,
+      pollIntervalMs: 10,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.oldServiceReachable, true);
+    // Both initial restart and rollback restart must receive bounded 120s timeout
+    assert.equal(restartTimeouts.length, 2);
+    assert.equal(restartTimeouts[0], 120000);
+    assert.equal(restartTimeouts[1], 120000);
+  });
+});
+
+test("emitCommitStatus: correlates exact run and truncates description", () => {
+  const calls = [];
+  const mockRunCommand = (cmd, args) => {
+    calls.push({ cmd, args });
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  // With runId
+  emitCommitStatus({
+    ghPath: "/bin/gh",
+    repository: "Dvitash/paseo",
+    headSha: TEST_COMMIT,
+    runId: 34272303053,
+    state: "pending",
+    description: "Starting update",
+    runCommand: mockRunCommand,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args[0], "api");
+  assert.equal(calls[0].args[1], `repos/Dvitash/paseo/statuses/${TEST_COMMIT}`);
+  assert.ok(calls[0].args.includes("state=pending"));
+  assert.ok(calls[0].args.includes(`context=personal-daemon/${os.hostname()}`));
+  assert.ok(calls[0].args.includes("description=Starting update"));
+  assert.ok(
+    calls[0].args.includes("target_url=https://github.com/Dvitash/paseo/actions/runs/34272303053"),
+  );
+
+  calls.length = 0;
+  const longDesc = "X".repeat(200);
+  emitCommitStatus({
+    ghPath: "/bin/gh",
+    repository: "Dvitash/paseo",
+    headSha: TEST_COMMIT,
+    runId: 999,
+    state: "error",
+    description: longDesc,
+    runCommand: mockRunCommand,
+  });
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].args.includes(`context=personal-daemon/${os.hostname()}`));
+  assert.ok(calls[0].args.includes("target_url=https://github.com/Dvitash/paseo/actions/runs/999"));
+  assert.ok(calls[0].args.includes(`description=${"X".repeat(140)}`));
+});
+
+test("runDaemonUpdate: busy system emits pending commit status with target_url correlated to runId", async () => {
+  await withTempDir("busy-pending-status-test-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const configPath = path.join(dir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+    const RUN_ID = 88001;
+    const runsList = [
+      {
+        databaseId: RUN_ID,
+        headSha: TEST_COMMIT,
+        createdAt: "2026-09-08T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "workflow_dispatch",
+      },
+    ];
+
+    const statusCalls = [];
+    const downloadDir = path.join(config.root, "downloads", TEST_COMMIT);
+
+    const mockRunCommand = (cmd, args) => {
+      if (args[0] === "auth" && args[1] === "status")
+        return { status: 0, stdout: "ok", stderr: "" };
+      if (args[0] === "api" && args[1].includes("/actions/runs/88001")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify(
+            makeRealisticRunDetails({
+              id: RUN_ID,
+              headSha: TEST_COMMIT,
+              createdAt: "2026-09-08T12:00:00Z",
+            }),
+          ),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1].includes("/statuses/")) {
+        statusCalls.push(args);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[1] === "status" && args[2] === config.service)
+        return { status: 0, stdout: "active", stderr: "" };
+      if (cmd === config.systemctlPath && args[1] === "is-active")
+        return { status: 0, stdout: "active\n", stderr: "" };
+      // Agent is running (busy!)
+      if (args[0] === "ls")
+        return {
+          status: 0,
+          stdout: JSON.stringify([{ shortId: "ag-1", status: "running" }]),
+          stderr: "",
+        };
+      if (args[0] === "run" && args[1] === "list")
+        return { status: 0, stdout: JSON.stringify(runsList), stderr: "" };
+      if (args[0] === "run" && args[1] === "download") {
+        createValidArtifactBundle(downloadDir, TEST_COMMIT, TEST_VERSION);
+        return { status: 0, stdout: "downloaded", stderr: "" };
+      }
+      if (args[0] === "install") {
+        // npm install mock in staging
+        const stagingDir = args[2];
+        const cliDir = path.join(stagingDir, path.dirname(CLI_DIST_RELPATH));
+        fs.mkdirSync(cliDir, { recursive: true });
+        fs.writeFileSync(path.join(stagingDir, CLI_DIST_RELPATH), "#!/usr/bin/env node\n", "utf8");
+        const webDir = path.join(stagingDir, path.dirname(SERVER_WEB_INDEX_RELPATH));
+        fs.mkdirSync(webDir, { recursive: true });
+        fs.writeFileSync(path.join(stagingDir, SERVER_WEB_INDEX_RELPATH), "<html></html>", "utf8");
+        return { status: 0, stdout: "installed", stderr: "" };
+      }
+      if (args.includes("--version")) {
+        return { status: 0, stdout: `${TEST_VERSION}\n`, stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+
+    const result = await runDaemonUpdate({
+      configPath,
+      runCommand: mockRunCommand,
+      sleep: async () => {},
+    });
+
+    assert.equal(result.status, "waiting");
+    assert.match(result.message, /System is busy/);
+
+    // Verify status.json has state waiting
+    const statusFile = readStatusFile(config.root);
+    assert.equal(statusFile.state, "waiting");
+    assert.equal(statusFile.runId, RUN_ID);
+
+    // Verify commit status was emitted with pending and target_url matching the run
+    const pendingCalls = statusCalls.filter((c) => c.includes("state=pending"));
+    assert.ok(pendingCalls.length >= 2); // Initial staging pending + busy pending
+    const busyStatusCall = pendingCalls[pendingCalls.length - 1];
+    assert.ok(
+      busyStatusCall.some((arg) =>
+        arg.includes(`target_url=https://github.com/Dvitash/paseo/actions/runs/${RUN_ID}`),
+      ),
+    );
+    assert.ok(busyStatusCall.some((arg) => arg.includes("System is busy")));
+  });
+});
+
+test("runDaemonUpdate: fresh run for already-installed SHA verifies active health without restart and emits correlated success", async () => {
+  await withTempDir("already-installed-sha-test-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const configPath = path.join(dir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+    const PRIOR_RUN_ID = 9001;
+    const FRESH_RUN_ID = 9002;
+
+    // Seed releases directory and current symlink pointing to TEST_COMMIT
+    const releaseDir = path.join(config.root, "releases", TEST_COMMIT);
+    fs.mkdirSync(releaseDir, { recursive: true });
+    const cliPath = path.join(releaseDir, CLI_DIST_RELPATH);
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+    fs.writeFileSync(cliPath, "#!/usr/bin/env node\n", "utf8");
+    fs.writeFileSync(
+      path.join(releaseDir, RELEASE_COMPLETE_FILENAME),
+      JSON.stringify({ format: 1, commit: TEST_COMMIT, version: TEST_VERSION }),
+      "utf8",
+    );
+    fs.mkdirSync(config.root, { recursive: true });
+    fs.symlinkSync(releaseDir, path.join(config.root, "current"));
+
+    // Seed ledger with PRIOR_RUN_ID
+    writeLedgerFile(config.root, {
+      lastHandledRunId: PRIOR_RUN_ID,
+      lastHandledSha: TEST_COMMIT,
+      lastHandledState: "success",
+      version: TEST_VERSION,
+    });
+    writeStatusFile(config.root, {
+      state: "success",
+      runId: PRIOR_RUN_ID,
+      commit: TEST_COMMIT,
+      version: TEST_VERSION,
+    });
+
+    // Workflow list returns FRESH_RUN_ID for the same TEST_COMMIT
+    const runsList = [
+      {
+        databaseId: FRESH_RUN_ID,
+        headSha: TEST_COMMIT,
+        createdAt: "2026-09-08T15:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "workflow_dispatch",
+      },
+    ];
+
+    // Verify alreadyHandledRequest does NOT skip FRESH_RUN_ID
+    assert.equal(alreadyHandledRequest(config.root, runsList[0]), false);
+
+    const statusCalls = [];
+    let restartCalled = false;
+    let probeCalled = false;
+
+    const mockRunCommand = (cmd, args) => {
+      if (args[0] === "auth" && args[1] === "status")
+        return { status: 0, stdout: "ok", stderr: "" };
+      if (args[0] === "api" && args[1].includes(`/actions/runs/${FRESH_RUN_ID}`)) {
+        return {
+          status: 0,
+          stdout: JSON.stringify(
+            makeRealisticRunDetails({
+              id: FRESH_RUN_ID,
+              headSha: TEST_COMMIT,
+              createdAt: "2026-09-08T15:00:00Z",
+            }),
+          ),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1].includes("/statuses/")) {
+        statusCalls.push(args);
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[1] === "status" && args[2] === config.service)
+        return { status: 0, stdout: "active", stderr: "" };
+      if (args[0] === "ls")
+        return {
+          status: 0,
+          stdout: JSON.stringify([{ shortId: "ag-1", status: "idle" }]),
+          stderr: "",
+        };
+      if (cmd === config.systemctlPath && args[1] === "restart") {
+        restartCalled = true;
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (cmd === config.systemctlPath && args[1] === "is-active") {
+        return { status: 0, stdout: "active\n", stderr: "" };
+      }
+      if (args.includes("daemon") && args.includes("status")) {
+        probeCalled = true;
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            localDaemon: "running",
+            connectedDaemon: "reachable",
+            daemonVersion: TEST_VERSION,
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "run" && args[1] === "list")
+        return { status: 0, stdout: JSON.stringify(runsList), stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+
+    const result = await runDaemonUpdate({
+      configPath,
+      runCommand: mockRunCommand,
+      sleep: async () => {},
+    });
+
+    // Successfully verified healthy without restart!
+    assert.equal(result.status, "success");
+    assert.equal(result.runId, FRESH_RUN_ID);
+    assert.equal(result.alreadyActive, true);
+    assert.equal(restartCalled, false);
+    assert.equal(probeCalled, true);
+
+    // Ledger and status file updated with FRESH_RUN_ID
+    const updatedLedger = readLedgerFile(config.root);
+    assert.equal(updatedLedger.lastHandledRunId, FRESH_RUN_ID);
+    assert.equal(updatedLedger.lastHandledSha, TEST_COMMIT);
+
+    const updatedStatus = readStatusFile(config.root);
+    assert.equal(updatedStatus.runId, FRESH_RUN_ID);
+    assert.equal(updatedStatus.state, "success");
+
+    // Commit status calls included both pending acknowledgment and correlated success
+    assert.equal(statusCalls.length, 2);
+    // 1. Pending acknowledgment
+    assert.ok(statusCalls[0].includes("state=pending"));
+    assert.ok(
+      statusCalls[0].some((arg) =>
+        arg.includes(`target_url=https://github.com/Dvitash/paseo/actions/runs/${FRESH_RUN_ID}`),
+      ),
+    );
+    assert.ok(statusCalls[0].some((arg) => arg.includes(`run ${FRESH_RUN_ID}`)));
+
+    // 2. Correlated success
+    assert.ok(statusCalls[1].includes("state=success"));
+    assert.ok(
+      statusCalls[1].some((arg) =>
+        arg.includes(`target_url=https://github.com/Dvitash/paseo/actions/runs/${FRESH_RUN_ID}`),
+      ),
+    );
+    assert.ok(
+      statusCalls[1].some((arg) => arg.includes("Personal daemon is already active and healthy")),
+    );
+
+    // Replay suppression: now that FRESH_RUN_ID is handled, alreadyHandledRequest must return true
+    assert.equal(alreadyHandledRequest(config.root, runsList[0]), true);
+  });
+});
+
+test("probeDaemon: a healthy old version does not acknowledge the requested release", () => {
+  const result = probeDaemon(
+    {
+      systemctlPath: "/bin/systemctl",
+      service: "paseo.service",
+      nodePath: "/bin/node",
+      paseoHome: "/tmp/paseo",
+    },
+    (command) => ({
+      status: 0,
+      stdout:
+        command === "/bin/systemctl"
+          ? "active"
+          : JSON.stringify({
+              localDaemon: "running",
+              connectedDaemon: "reachable",
+              daemonVersion: "0.7.2",
+            }),
+      stderr: "",
+    }),
+    "/tmp/paseo/current/cli.js",
+    TEST_VERSION,
+  );
+  assert.equal(result.ready, false);
+  assert.equal(result.version, "0.7.2");
 });

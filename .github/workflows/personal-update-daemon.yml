@@ -1,7 +1,22 @@
 name: Update Personal Daemon
+run-name: ${{ inputs.request_id != '' && format('Personal update {0}', inputs.request_id) || 'Update Personal Daemon' }}
 
 on:
   workflow_dispatch:
+    inputs:
+      desktop:
+        description: "Desktop platform to build (optional, unsigned)"
+        required: false
+        default: "none"
+        type: choice
+        options:
+          - "none"
+          - "windows-x64"
+      request_id:
+        description: "Unique request identifier for tracking update run"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -15,7 +30,7 @@ jobs:
     if: github.repository == 'Dvitash/paseo' && github.ref == 'refs/heads/main' && github.actor == 'Dvitash'
     uses: ./.github/workflows/personal-build.yml
     with:
-      desktop: none
+      desktop: ${{ inputs.desktop || 'none' }}
 
   queued:
     needs: build
