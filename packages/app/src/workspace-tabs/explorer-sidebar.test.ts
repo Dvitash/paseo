@@ -77,6 +77,21 @@ describe("Explorer sidebar", () => {
     expect(paneId).not.toBeNull();
     expect(layout && collectAllTabs(layout.root).map((tab) => tab.target.kind)).toContain("files");
   });
+  it("opens the dedicated Side tab in the desktop Explorer sidebar", () => {
+    openExplorerSidebarView({
+      isCompact: false,
+      supportsPaneSplits: true,
+      workspaceKey: WORKSPACE_KEY,
+      checkout: CHECKOUT,
+      view: "side",
+    });
+
+    const state = useWorkspaceLayoutStore.getState();
+    const layout = state.layoutByWorkspace[WORKSPACE_KEY];
+    const paneId = selectExplorerSidebarPaneId(state, WORKSPACE_KEY);
+    expect(paneId).not.toBeNull();
+    expect(layout && collectAllTabs(layout.root).map((tab) => tab.target.kind)).toContain("side");
+  });
 
   it("toggles the desktop Explorer independently of ordinary panes", () => {
     const input = {

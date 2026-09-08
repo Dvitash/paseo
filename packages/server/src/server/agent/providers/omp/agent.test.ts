@@ -1,10 +1,12 @@
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
-
+import pino from "pino";
 import type { PaseoToolCatalog } from "../../tools/types.js";
-import type { OmpNoTurnScheduler, OmpProviderIdleScheduler } from "./agent.js";
+import { OmpAgentClient, type OmpNoTurnScheduler, type OmpProviderIdleScheduler } from "./agent.js";
 import type { OmpUsagePollScheduler } from "./usage-poller.js";
 import { resolveOmpProviderParams } from "./provider-config.js";
+import { FakeOmp } from "./test-utils/fake-omp.js";
 import { OmpHarness } from "./test-utils/omp-harness.js";
 
 test("OMP ready timeout defaults to 20 seconds and RPC timeout overrides both", () => {
@@ -843,5 +845,157 @@ describe("OMP agent client and session", () => {
     expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
       { type: "user_message", text: "hello OMP", messageId: "user-1" },
     ]);
+  });
+
+  test("enforces readOnly launch isolation, guard handshake, and denies mode changes widening tools", async () => {
+    const omp = new OmpHarness();
+    await omp.start({ readOnly: true });
+
+    const launch = omp.launchConfiguration();
+    expect(launch.argv).toEqual(
+      expect.arrayContaining([
+        "--mode",
+        "rpc-ui",
+        "--tools",
+        "read,grep,glob",
+        "--no-extensions",
+        "--no-skills",
+        "--no-rules",
+        "--no-lsp",
+      ]),
+    );
+
+    const configFlagIndex = launch.argv.indexOf("--config");
+    expect(configFlagIndex).toBeGreaterThan(-1);
+    const configPath = launch.argv[configFlagIndex + 1];
+    expect(existsSync(configPath)).toBe(true);
+    const configContent = readFileSync(configPath, "utf8");
+    expect(configContent).toContain("xdev: false");
+    expect(configContent).toContain("fetch:\n  enabled: false");
+    expect(configContent).toContain("enableProjectConfig: false");
+    expect(configContent).toContain("disabledProviders:");
+
+    const extensionFlagIndex = launch.argv.indexOf("--extension");
+    expect(extensionFlagIndex).toBeGreaterThan(-1);
+    const extensionPath = launch.argv[extensionFlagIndex + 1];
+    expect(existsSync(extensionPath)).toBe(true);
+    const extensionContent = readFileSync(extensionPath, "utf8");
+    expect(extensionContent).toContain("__paseo_readonly_guard__");
+    expect(extensionContent).toContain("ALLOWED_TOOLS");
+    expect(extensionContent).toContain("BLOCKED_SLASH_COMMANDS");
+    const persistence = omp.describePersistence();
+    expect(persistence?.metadata).toMatchObject({ readOnly: true });
+
+    const modeChange = await omp.setMode("ask");
+    expect(modeChange).toMatchObject({
+      type: "warning",
+      message: "Mode changes are prohibited in read-only sessions",
+    });
+
+    await omp.close();
+  });
+
+  test("fails closed if guard extension fails to load and sentinel command is missing", async () => {
+    const omp = new OmpHarness();
+    omp.queueCommands([]);
+
+    await expect(omp.start({ readOnly: true })).rejects.toThrow(/sentinel command not registered/);
+  });
+  test("fails closed if session state reports unexpected mutating tools", async () => {
+    const fakeRuntime = new FakeOmp();
+    const originalStart = fakeRuntime.startSession.bind(fakeRuntime);
+    fakeRuntime.startSession = async (input) => {
+      const session = await originalStart(input);
+      const origGetState = session.getState.bind(session);
+      session.getState = async () => {
+        const state = await origGetState();
+        return {
+          ...state,
+          dumpTools: [{ name: "read" }, { name: "bash" }],
+        };
+      };
+      return session;
+    };
+
+    const client = new OmpAgentClient({
+      logger: pino({ level: "silent" }),
+      runtime: fakeRuntime,
+    });
+
+    await expect(
+      client.createSession({ provider: "omp", cwd: "/tmp", readOnly: true }),
+    ).rejects.toThrow(/unexpected tools present \(bash\)/);
+  });
+
+  test("preserves and locks readOnly on resume, preventing widening via overrides", async () => {
+    const fakeRuntime = new FakeOmp();
+    const client = new OmpAgentClient({
+      logger: pino({ level: "silent" }),
+      runtime: fakeRuntime,
+    });
+    const handle = {
+      provider: "omp" as const,
+      sessionId: "s1",
+      nativeHandle: "/tmp/session.jsonl",
+      metadata: {
+        cwd: "/tmp",
+        readOnly: true,
+      },
+    };
+
+    const session = await client.resumeSession(handle, {
+      readOnly: false,
+    });
+
+    expect(session.describePersistence()?.metadata).toMatchObject({ readOnly: true });
+    const latestLaunch = fakeRuntime.recordedLaunches.at(-1);
+    expect(latestLaunch?.readOnly).toBe(true);
+    expect(latestLaunch?.argv).toEqual(
+      expect.arrayContaining(["--tools", "read,grep,glob", "--no-extensions"]),
+    );
+
+    const modeChange = await session.setMode("ask");
+    expect(modeChange).toMatchObject({
+      type: "warning",
+      message: "Mode changes are prohibited in read-only sessions",
+    });
+    await session.close();
+  });
+
+  test("keeps default non-readOnly behavior unchanged", async () => {
+    const omp = new OmpHarness();
+    await omp.start({ modeId: "write" });
+
+    const launch = omp.launchConfiguration();
+    expect(launch.argv).toEqual(["omp", "--mode", "rpc-ui", "--approval-mode", "write"]);
+    expect(launch.argv).not.toContain("--no-extensions");
+    expect(launch.argv).not.toContain("--tools");
+    expect(omp.describePersistence()?.metadata).not.toHaveProperty("readOnly");
+    await omp.close();
+  });
+
+  test("preserves session persistence for internal readOnly sessions (does not set --no-session)", async () => {
+    const omp = new OmpHarness();
+    await omp.start({ internal: true, readOnly: true });
+
+    const launch = omp.launchConfiguration();
+    expect(launch.argv).not.toContain("--no-session");
+    await omp.close();
+  });
+
+  test("prohibits reconfiguration slash commands in read-only startTurn", async () => {
+    const omp = new OmpHarness();
+    await omp.start({ readOnly: true });
+
+    await expect(omp.startTurn("/plugin install evil")).rejects.toThrow(
+      "Reconfiguration command /plugin is prohibited in read-only sessions",
+    );
+    await expect(omp.startTurn("/mcp add evil-server")).rejects.toThrow(
+      "Reconfiguration command /mcp is prohibited in read-only sessions",
+    );
+    await expect(omp.startTurn("/mode plan")).rejects.toThrow(
+      "Reconfiguration command /mode is prohibited in read-only sessions",
+    );
+    await omp.close();
   });
 });

@@ -40,6 +40,8 @@ import {
 } from "@/components/sidebar-resize-handle-layout";
 import { resolveExplorerSidebarWidth } from "@/components/explorer-sidebar-layout";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import { SidePanel } from "@/panels/side-panel";
+import { PaneProvider, type PaneContextValue } from "@/panels/pane-context";
 
 function logExplorerSidebar(_event: string, _details: Record<string, unknown>): void {}
 
@@ -330,6 +332,7 @@ function ExplorerSidebarContent({
   const availableTabs = useMemo<ExplorerTab[]>(() => {
     const tabs: ExplorerTab[] = isGit ? ["changes", "files"] : ["files"];
     if (isGit && showPrTab) tabs.push("pr");
+    tabs.push("side");
     return tabs;
   }, [isGit, showPrTab]);
   const { mountedTabIds } = useMountedTabSet({
@@ -382,6 +385,13 @@ function ExplorerSidebarContent({
               />
             </ExplorerTabButton>
           )}
+          <ExplorerTabButton
+            tab="side"
+            active={resolvedTab === "side"}
+            label={t("panels.side.label", { defaultValue: "Side" })}
+            onTabPress={onTabPress}
+            testID="explorer-tab-side"
+          />
         </View>
         <View style={styles.headerRightSection}>
           <Pressable
@@ -437,8 +447,38 @@ function ExplorerSidebarContent({
             />
           </RetainedPanel>
         ) : null}
+        {mountedTabIds.has("side") ? (
+          <RetainedPanel active={resolvedTab === "side"}>
+            <SidePane serverId={serverId} workspaceId={workspaceId} />
+          </RetainedPanel>
+        ) : null}
       </View>
     </View>
+  );
+}
+function SidePane({ serverId, workspaceId }: { serverId: string; workspaceId?: string | null }) {
+  const dummyPaneContext: PaneContextValue = useMemo(
+    () => ({
+      serverId,
+      workspaceId: workspaceId ?? "",
+      host: "explorer",
+      tabId: "compact-side-tab",
+      target: { kind: "side" },
+      openTab: () => {},
+      openPreferredTarget: () => {},
+      closeCurrentTab: () => {},
+      retargetCurrentTab: () => {},
+      setCurrentTabState: () => {},
+      openFileInWorkspace: () => {},
+      openImportSheet: () => {},
+    }),
+    [serverId, workspaceId],
+  );
+
+  return (
+    <PaneProvider value={dummyPaneContext}>
+      <SidePanel />
+    </PaneProvider>
   );
 }
 

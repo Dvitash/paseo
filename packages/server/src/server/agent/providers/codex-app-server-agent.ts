@@ -3341,6 +3341,7 @@ export class CodexAppServerAgentSession implements AgentSession {
   private nextTerminalInteractionOrdinal = 0;
   private emittedTerminalInteractionKeys = new Set<string>();
   private emittedExecCommandStartedCallIds = new Set<string>();
+  private resolvedNativeMcpServers: string[] = [];
   private emittedExecCommandCompletedCallIds = new Set<string>();
   private emittedItemStartedIds = new Set<string>();
   private emittedItemCompletedIds = new Set<string>();
@@ -3516,8 +3517,21 @@ export class CodexAppServerAgentSession implements AgentSession {
         await this.client.request("config/read", { cwd: this.config.cwd ?? null }),
       );
       const config = toObjectRecord(response?.config);
+      if (this.config.readOnly && !config) {
+        throw new Error(
+          "Failed to read native Codex configuration for read-only isolation: response missing valid config object",
+        );
+      }
       this.resolvedWorkspaceWrite = readSandboxWorkspaceWrite(config?.sandbox_workspace_write);
+      const nativeMcp = toObjectRecord(config?.mcp_servers);
+      this.resolvedNativeMcpServers = nativeMcp ? Object.keys(nativeMcp) : [];
     } catch (error) {
+      if (this.config.readOnly) {
+        throw new Error(
+          `Failed to read native Codex configuration for read-only isolation: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
       this.logger.debug({ error }, "Failed to read resolved Codex workspace-write config");
     }
   }
@@ -4052,6 +4066,11 @@ export class CodexAppServerAgentSession implements AgentSession {
     params: Record<string, unknown>,
     preset: CodexModePreset,
   ): { approvalPolicy?: string; sandboxPolicyType?: string } {
+    if (this.config.readOnly) {
+      params.approvalPolicy = "never";
+      params.sandboxPolicy = { type: "readOnly" };
+      return { approvalPolicy: "never", sandboxPolicyType: "read-only" };
+    }
     const approvalPolicy = this.hasWorkflowModeOverride ? preset.approvalPolicy : undefined;
     const sandboxPolicyType =
       this.providerOptions.sandbox_mode ??
@@ -4418,6 +4437,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   async setMode(modeId: string): Promise<void | AgentProviderNotice> {
+    if (this.config.readOnly) {
+      throw new Error("Cannot change mode of read-only Codex agent session");
+    }
     validateCodexMode(modeId);
     this.currentMode = modeId;
     this.hasWorkflowModeOverride = true;
@@ -4476,6 +4498,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       throw new Error(`No pending Codex app-server permission request with id '${requestId}'`);
     }
     const pendingRequest = this.pendingPermissions.get(requestId) ?? null;
+    if (this.config.readOnly && response.behavior === "allow") {
+      throw new Error("Cannot grant mutating permissions in read-only Codex agent session");
+    }
 
     if (pending.kind === "plan") {
       return this.handlePlanPermissionResponse({ requestId, response, pending, pendingRequest });
@@ -4496,22 +4521,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       resolution: response,
     });
 
-    if (pending.kind === "command") {
-      pending.resolve({ decision: resolvePermissionDecision(response) });
-      return;
-    }
-
-    if (pending.kind === "file") {
-      pending.resolve({ decision: resolvePermissionDecision(response) });
-      return;
-    }
-
-    if (pending.kind === "mcp_elicitation") {
-      pending.resolve({
-        action: resolvePermissionDecision(response),
-        content: response.behavior === "allow" ? {} : null,
-        _meta: null,
-      });
+    if (this.resolvePendingDirectPermission(pending, response)) {
       return;
     }
 
@@ -4562,6 +4572,24 @@ export class CodexAppServerAgentSession implements AgentSession {
       }),
     });
     pending.resolve({ answers: {} });
+  }
+  private resolvePendingDirectPermission(
+    pending: CodexPendingPermissionHandler,
+    response: AgentPermissionResponse,
+  ): boolean {
+    if (pending.kind === "command" || pending.kind === "file") {
+      pending.resolve({ decision: resolvePermissionDecision(response) });
+      return true;
+    }
+    if (pending.kind === "mcp_elicitation") {
+      pending.resolve({
+        action: resolvePermissionDecision(response),
+        content: response.behavior === "allow" ? {} : null,
+        _meta: null,
+      });
+      return true;
+    }
+    return false;
   }
 
   private handlePlanPermissionResponse(params: {
@@ -4699,7 +4727,8 @@ export class CodexAppServerAgentSession implements AgentSession {
         providerOptions: this.config.providerOptions,
         toolPolicy: this.config.toolPolicy,
         systemPrompt: this.config.systemPrompt,
-        mcpServers: this.config.mcpServers,
+        mcpServers: this.config.readOnly ? {} : this.config.mcpServers,
+        readOnly: this.config.readOnly,
       },
     };
   }
@@ -5088,6 +5117,10 @@ export class CodexAppServerAgentSession implements AgentSession {
       ...(innerConfig ? { config: innerConfig } : {}),
       ...(this.ephemeral ? { ephemeral: true } : {}),
     };
+    if (this.config.readOnly) {
+      params.approvalPolicy = "never";
+      params.sandbox = "read-only";
+    }
     if (this.hasWorkflowModeOverride) {
       applyApprovalsReviewerParam(params, preset);
     }
@@ -5095,6 +5128,22 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private buildCodexInnerConfig(): Record<string, unknown> | null {
+    if (this.config.readOnly) {
+      const disabledMcpServers: Record<string, unknown> = {};
+      for (const serverName of this.resolvedNativeMcpServers) {
+        disabledMcpServers[serverName] = { enabled: false, enabled_tools: [] };
+      }
+      return {
+        sandbox_mode: "read-only",
+        approval_policy: "never",
+        mcp_servers: disabledMcpServers,
+        web_search: "disabled",
+        features: {
+          apps: false,
+          multi_agent_v2: false,
+        },
+      };
+    }
     const innerConfig: Record<string, unknown> = {};
     Object.assign(innerConfig, this.providerOptions);
     if (this.deps.customCodexConfig) {
@@ -6670,6 +6719,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private handleCommandApprovalRequest(params: unknown): Promise<unknown> {
+    if (this.config.readOnly) {
+      return Promise.resolve({ decision: "deny" });
+    }
     const parsed = z
       .object({
         itemId: z.string(),
@@ -6721,6 +6773,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private handleFileChangeApprovalRequest(params: unknown): Promise<unknown> {
+    if (this.config.readOnly) {
+      return Promise.resolve({ decision: "deny" });
+    }
     const parsed = z
       .object({
         itemId: z.string(),
@@ -6809,6 +6864,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private handleMcpElicitationRequest(params: unknown, serverRequestId: number): Promise<unknown> {
+    if (this.config.readOnly) {
+      return Promise.resolve({ action: "decline", content: null, _meta: null });
+    }
     const parsed = z
       .object({
         threadId: z.string(),
@@ -6999,9 +7057,11 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: AgentResumeSessionOptions,
   ): Promise<AgentSession> {
     const storedConfig = (handle.metadata ?? {}) as Partial<AgentSessionConfig>;
+    const isReadOnly = storedConfig.readOnly === true || overrides?.readOnly === true;
     const merged: AgentSessionConfig = {
       ...storedConfig,
       ...overrides,
+      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
     };

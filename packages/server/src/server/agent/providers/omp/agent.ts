@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { setImmediate as waitForImmediate, setTimeout as delay } from "node:timers/promises";
 import type { Logger } from "pino";
 import stripAnsi from "strip-ansi";
@@ -170,6 +171,7 @@ interface OmpPersistenceMetadata {
   thinkingOptionId?: string;
   modeId?: string;
   systemPrompt?: string;
+  readOnly?: boolean;
 }
 
 interface StartTurnResult {
@@ -193,6 +195,7 @@ interface OmpAgentSessionOptions {
    * timeline items.
    */
   live?: boolean;
+  cleanup?: () => void;
 }
 
 function createOmpProviderIdleScheduler(): OmpProviderIdleScheduler {
@@ -387,10 +390,19 @@ function parseModelReference(modelId: string | null): OmpModelReference | null {
   return { id: modelId };
 }
 
+export const PASEO_OMP_READONLY_GUARD_COMMAND = "__paseo_readonly_guard__";
+export const PASEO_SIDE_READ_ONLY_LABEL = "paseo.side.read_only";
+
 function parsePersistenceMetadata(metadata: AgentMetadata | undefined): OmpPersistenceMetadata {
   if (!metadata) {
     return {};
   }
+  const isReadOnly =
+    metadata.readOnly === true ||
+    metadata.readOnly === "true" ||
+    (typeof metadata.labels === "object" &&
+      metadata.labels !== null &&
+      (metadata.labels as Record<string, unknown>)[PASEO_SIDE_READ_ONLY_LABEL] === "true");
   return {
     ...(typeof metadata.cwd === "string" ? { cwd: metadata.cwd } : {}),
     ...(typeof metadata.model === "string" ? { model: metadata.model } : {}),
@@ -399,6 +411,7 @@ function parsePersistenceMetadata(metadata: AgentMetadata | undefined): OmpPersi
       : {}),
     ...(typeof metadata.modeId === "string" ? { modeId: metadata.modeId } : {}),
     ...(typeof metadata.systemPrompt === "string" ? { systemPrompt: metadata.systemPrompt } : {}),
+    ...(isReadOnly ? { readOnly: true } : {}),
   };
 }
 
@@ -412,6 +425,7 @@ function buildResumeConfig(
   const model = overrideConfig.model ?? metadata.model;
   const thinkingOptionId = overrideConfig.thinkingOptionId ?? metadata.thinkingOptionId;
   const modeId = overrideConfig.modeId ?? metadata.modeId;
+  const isReadOnly = metadata.readOnly === true || overrideConfig.readOnly === true;
   return {
     cwd,
     model,
@@ -425,6 +439,7 @@ function buildResumeConfig(
       thinkingOptionId,
       modeId,
       systemPrompt: overrideConfig.systemPrompt ?? metadata.systemPrompt,
+      ...(isReadOnly ? { readOnly: true } : {}),
     },
   };
 }
@@ -434,6 +449,8 @@ function buildResumeStartInput(input: {
   sessionFile: string;
   launchContext: AgentLaunchContext | undefined;
   launchMode: { modeId: string | null; extraArgs?: string[] };
+  configFilePath?: string;
+  extensionPaths?: string[];
 }): OmpStartSessionInput {
   return {
     cwd: input.resumeConfig.cwd,
@@ -448,7 +465,190 @@ function buildResumeStartInput(input: {
       input.resumeConfig.config.systemPrompt,
       input.resumeConfig.config.daemonAppendSystemPrompt,
     ),
+    readOnly: input.resumeConfig.config.readOnly,
+    configFilePath: input.configFilePath,
+    extensionPaths: input.extensionPaths,
   };
+}
+interface OmpTempFile {
+  path: string;
+  cleanup: () => void;
+}
+
+function createOmpReadOnlyConfigFile(): OmpTempFile {
+  const dir = mkdtempSync(join(tmpdir(), "paseo-omp-config-"));
+  const filePath = join(dir, "readonly-config.yaml");
+  const yaml = [
+    "tools:",
+    "  xdev: false",
+    "fetch:",
+    "  enabled: false",
+    "generate_image:",
+    "  enabled: false",
+    "speechgen:",
+    "  enabled: false",
+    "autolearn:",
+    "  enabled: false",
+    "plan:",
+    "  enabled: false",
+    "goal:",
+    "  enabled: false",
+    "memory:",
+    '  backend: "off"',
+    "mcp:",
+    "  enableProjectConfig: false",
+    "disabledProviders:",
+    "  - native",
+    "  - claude",
+    "  - claude-plugins",
+    "  - agent-plugins",
+    "  - agents",
+    "  - agents-md",
+    "  - cline",
+    "  - codex",
+    "  - cursor",
+    "  - gemini",
+    "  - github",
+    "  - mcp-json",
+    "  - omp-plugins",
+    "  - opencode",
+    "  - ssh-json",
+    "  - vscode",
+    "  - windsurf",
+    "  - managed-skills",
+  ].join("\n");
+  writeFileSync(filePath, `${yaml}\n`, "utf8");
+  return {
+    path: filePath,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+function createOmpReadOnlyGuardExtensionFile(options?: { hostToolNames?: string[] }): OmpTempFile {
+  const dir = mkdtempSync(join(tmpdir(), "paseo-omp-guard-"));
+  const filePath = join(dir, "readonly-guard.mjs");
+  const allowedTools = JSON.stringify(["read", "grep", "glob", ...(options?.hostToolNames ?? [])]);
+  const content = `
+const ALLOWED_TOOLS = new Set(${allowedTools});
+const BLOCKED_SLASH_COMMANDS = new Set([
+  "plugin",
+  "plugins",
+  "extension",
+  "extensions",
+  "skill",
+  "skills",
+  "mcp",
+  "reload",
+  "mode",
+  "config",
+  "settings",
+  "install",
+  "uninstall",
+  "tools",
+]);
+
+function isBlockedTarget(target) {
+  if (typeof target !== "string") return false;
+  const parts = target.split(";");
+  for (let i = 0; i < parts.length; i += 1) {
+    const trimmed = parts[i].trim();
+    if (!trimmed) continue;
+    if (/^[a-zA-Z]:[\\\\/]/.test(trimmed)) continue;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return true;
+  }
+  return false;
+}
+
+export default function paseoReadOnlyGuard(api) {
+  const enforceTools = async () => {
+    if (typeof api.setActiveTools === "function") {
+      await api.setActiveTools([...ALLOWED_TOOLS]);
+    }
+  };
+
+  api.on("session_start", enforceTools);
+  api.on("before_agent_start", enforceTools);
+  api.on("tool_call", (event) => {
+    const toolName = event.toolName;
+    if (!ALLOWED_TOOLS.has(toolName)) {
+      return {
+        block: true,
+        reason: "Tool '" + toolName + "' is prohibited in read-only mode",
+      };
+    }
+    if (toolName === "read" || toolName === "grep" || toolName === "glob") {
+      const input = event.input;
+      const target = input?.path || input?.target || input?.pattern;
+      if (isBlockedTarget(target)) {
+        return {
+          block: true,
+          reason: "External URL, remote, and network schemes are prohibited in read-only mode",
+        };
+      }
+    }
+  });
+
+  api.on("input", (event) => {
+    if (typeof event.text === "string") {
+      const trimmed = event.text.trim();
+      if (trimmed.startsWith("/")) {
+        const commandName = trimmed.slice(1).split(/\\s+/)[0]?.toLowerCase();
+        if (commandName && BLOCKED_SLASH_COMMANDS.has(commandName)) {
+          return { handled: true };
+        }
+      }
+    }
+  });
+
+  // Register sentinel command last to prove all hooks installed without error
+  api.registerCommand("${PASEO_OMP_READONLY_GUARD_COMMAND}", {
+    description: "Paseo ReadOnly Guard Sentinel",
+    handler: async () => {
+      await enforceTools();
+    },
+  });
+}
+`.trimStart();
+  writeFileSync(filePath, content, "utf8");
+  return {
+    path: filePath,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+function extractToolName(tool: unknown): string | null {
+  if (tool && typeof tool === "object" && "name" in tool && typeof tool.name === "string") {
+    return tool.name;
+  }
+  return null;
+}
+
+const PROHIBITED_READONLY_SLASH_COMMANDS: Record<string, true> = {
+  plugin: true,
+  plugins: true,
+  extension: true,
+  extensions: true,
+  skill: true,
+  skills: true,
+  mcp: true,
+  reload: true,
+  mode: true,
+  config: true,
+  settings: true,
+  install: true,
+  uninstall: true,
+  tools: true,
+};
+
+function assertNoReadOnlySlashCommand(text: string): void {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("/")) {
+    const commandName = trimmed.slice(1).split(/\s+/)[0]?.toLowerCase();
+    if (commandName && PROHIBITED_READONLY_SLASH_COMMANDS[commandName]) {
+      throw new Error(
+        `Reconfiguration command /${commandName} is prohibited in read-only sessions`,
+      );
+    }
+  }
 }
 
 function readNativeMessageId(
@@ -878,6 +1078,7 @@ export class OmpAgentSession implements AgentSession {
   private closed = false;
   private live: boolean;
   private readonly emittedUserMessageIds = new Set<string>();
+  private readonly cleanup?: () => void;
 
   constructor(options: OmpAgentSessionOptions) {
     this.runtimeSession = options.runtimeSession;
@@ -887,6 +1088,7 @@ export class OmpAgentSession implements AgentSession {
     this.logger = options.logger;
     this.paseoTools = options.paseoTools;
     this.live = options.live ?? true;
+    this.cleanup = options.cleanup;
     this.providerIdleScheduler = options.providerIdleScheduler ?? createOmpProviderIdleScheduler();
     this.noTurnScheduler = options.noTurnScheduler ?? createOmpNoTurnScheduler();
     this.usagePoller = new OmpUsagePoller({
@@ -957,6 +1159,9 @@ export class OmpAgentSession implements AgentSession {
     }
 
     const payload = convertPromptInput(prompt, { model: this.state.model });
+    if (this.config.readOnly) {
+      assertNoReadOnlySlashCommand(payload.text);
+    }
     const turnId = randomUUID();
     this.live = true;
     this.activeTurnId = turnId;
@@ -1067,6 +1272,12 @@ export class OmpAgentSession implements AgentSession {
   }
 
   async setMode(modeId: string): Promise<void | AgentProviderNotice> {
+    if (this.config.readOnly) {
+      return {
+        type: "warning",
+        message: "Mode changes are prohibited in read-only sessions",
+      };
+    }
     if (!OMP_MODES.some((mode) => mode.id === modeId)) {
       throw new Error(`Invalid OMP mode '${modeId}'`);
     }
@@ -1117,6 +1328,7 @@ export class OmpAgentSession implements AgentSession {
         ...(this.config.model ? { model: this.config.model } : {}),
         ...(this.config.thinkingOptionId ? { thinkingOptionId: this.config.thinkingOptionId } : {}),
         ...(this.currentModeId ? { modeId: this.currentModeId } : {}),
+        ...(this.config.readOnly ? { readOnly: true } : {}),
       },
     };
   }
@@ -1167,9 +1379,9 @@ export class OmpAgentSession implements AgentSession {
       await this.runtimeSession.close();
     } finally {
       this.clearOmpSessionState();
+      this.cleanup?.();
     }
   }
-
   private clearOmpSessionState(): void {
     this.subagentIndex.clear(this.runtimeSession);
     this.clearOmpTurnState();
@@ -1230,6 +1442,9 @@ export class OmpAgentSession implements AgentSession {
       if (!message) {
         return null;
       }
+      if (this.config.readOnly) {
+        assertNoReadOnlySlashCommand(message);
+      }
       return {
         run: async () => {
           if (commandName === "steer") {
@@ -1256,9 +1471,8 @@ export class OmpAgentSession implements AgentSession {
       return;
     }
     if (!parsedReference.provider) {
-      throw new Error(`OMP model id must include a provider: ${modelId}`);
+      throw new Error(`OMP setModel requires provider:model or provider/model: '${modelId}'`);
     }
-
     const model = await this.runtimeSession.setModel(parsedReference.provider, parsedReference.id);
     this.state = {
       ...this.state,
@@ -2235,18 +2449,72 @@ export class OmpAgentClient implements AgentClient {
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     const launchMode = this.resolveLaunchMode(config.modeId);
-    const runtimeSession = await this.runtime.startSession({
-      cwd: config.cwd,
-      protocolMode: "rpc-ui",
-      model: config.model,
-      thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
-      noSession: config.internal === true,
-      modeId: launchMode.modeId,
-      extraArgs: launchMode.extraArgs,
-      systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
-      env: launchContext?.env,
-    });
+    const isReadOnly = config.readOnly === true;
+    const hostToolNames = launchContext?.paseoTools
+      ? [...launchContext.paseoTools.tools.keys()]
+      : [];
+
+    let readOnlyConfig: OmpTempFile | null = null;
+    let readOnlyGuard: OmpTempFile | null = null;
+    if (isReadOnly) {
+      readOnlyConfig = createOmpReadOnlyConfigFile();
+      readOnlyGuard = createOmpReadOnlyGuardExtensionFile({ hostToolNames });
+    }
+
+    let runtimeSession: OmpRuntimeSession;
     try {
+      runtimeSession = await this.runtime.startSession({
+        cwd: config.cwd,
+        protocolMode: "rpc-ui",
+        model: config.model,
+        thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
+        noSession: config.internal === true && !isReadOnly,
+        modeId: launchMode.modeId,
+        extraArgs: launchMode.extraArgs,
+        systemPrompt: composeSystemPromptParts(
+          config.systemPrompt,
+          config.daemonAppendSystemPrompt,
+        ),
+        env: launchContext?.env,
+        readOnly: isReadOnly,
+        configFilePath: readOnlyConfig?.path,
+        extensionPaths: readOnlyGuard ? [readOnlyGuard.path] : undefined,
+      });
+    } catch (error) {
+      readOnlyConfig?.cleanup();
+      readOnlyGuard?.cleanup();
+      throw error;
+    }
+
+    const cleanupFiles = () => {
+      readOnlyConfig?.cleanup();
+      readOnlyGuard?.cleanup();
+    };
+
+    try {
+      if (isReadOnly) {
+        const commands = await runtimeSession.getCommands();
+        const guardLoaded = commands.some((cmd) => cmd.name === PASEO_OMP_READONLY_GUARD_COMMAND);
+        if (!guardLoaded) {
+          throw new Error(
+            "OMP read-only guard extension failed to load: sentinel command not registered",
+          );
+        }
+        const state = await runtimeSession.getState();
+        const rawDumpTools = (state as Record<string, unknown>).dumpTools;
+        if (Array.isArray(rawDumpTools)) {
+          const allowed = new Set(["read", "grep", "glob", ...hostToolNames]);
+          const disallowed = rawDumpTools
+            .map(extractToolName)
+            .filter((name): name is string => typeof name === "string" && !allowed.has(name));
+          if (disallowed.length > 0) {
+            throw new Error(
+              `OMP read-only tool confinement verification failed: unexpected tools present (${disallowed.join(", ")})`,
+            );
+          }
+        }
+      }
+
       await this.configureNativePaseoTools(runtimeSession, launchContext?.paseoTools);
       return new OmpAgentSession({
         runtimeSession,
@@ -2259,9 +2527,11 @@ export class OmpAgentClient implements AgentClient {
         noTurnScheduler: this.noTurnScheduler,
         usagePollScheduler: this.usagePollScheduler,
         paseoTools: launchContext?.paseoTools,
+        cleanup: cleanupFiles,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
+      cleanupFiles();
       throw error;
     }
   }
@@ -2278,17 +2548,66 @@ export class OmpAgentClient implements AgentClient {
 
     const persistenceMetadata = parsePersistenceMetadata(handle.metadata);
     const resumeConfig = buildResumeConfig(persistenceMetadata, overrides, this.provider);
+    const isReadOnly = resumeConfig.config.readOnly === true;
+    const hostToolNames = launchContext?.paseoTools
+      ? [...launchContext.paseoTools.tools.keys()]
+      : [];
+
+    let readOnlyConfig: OmpTempFile | null = null;
+    let readOnlyGuard: OmpTempFile | null = null;
+    if (isReadOnly) {
+      readOnlyConfig = createOmpReadOnlyConfigFile();
+      readOnlyGuard = createOmpReadOnlyGuardExtensionFile({ hostToolNames });
+    }
 
     const launchMode = this.resolveLaunchMode(resumeConfig.modeId);
-    const runtimeSession = await this.runtime.startSession(
-      buildResumeStartInput({
-        resumeConfig,
-        sessionFile,
-        launchContext,
-        launchMode,
-      }),
-    );
+    let runtimeSession: OmpRuntimeSession;
     try {
+      runtimeSession = await this.runtime.startSession(
+        buildResumeStartInput({
+          resumeConfig,
+          sessionFile,
+          launchContext,
+          launchMode,
+          configFilePath: readOnlyConfig?.path,
+          extensionPaths: readOnlyGuard ? [readOnlyGuard.path] : undefined,
+        }),
+      );
+    } catch (error) {
+      readOnlyConfig?.cleanup();
+      readOnlyGuard?.cleanup();
+      throw error;
+    }
+
+    const cleanupFiles = () => {
+      readOnlyConfig?.cleanup();
+      readOnlyGuard?.cleanup();
+    };
+
+    try {
+      if (isReadOnly) {
+        const commands = await runtimeSession.getCommands();
+        const guardLoaded = commands.some((cmd) => cmd.name === PASEO_OMP_READONLY_GUARD_COMMAND);
+        if (!guardLoaded) {
+          throw new Error(
+            "OMP read-only guard extension failed to load: sentinel command not registered",
+          );
+        }
+        const state = await runtimeSession.getState();
+        const rawDumpTools = (state as Record<string, unknown>).dumpTools;
+        if (Array.isArray(rawDumpTools)) {
+          const allowed = new Set(["read", "grep", "glob", ...hostToolNames]);
+          const disallowed = rawDumpTools
+            .map(extractToolName)
+            .filter((name): name is string => typeof name === "string" && !allowed.has(name));
+          if (disallowed.length > 0) {
+            throw new Error(
+              `OMP read-only tool confinement verification failed: unexpected tools present (${disallowed.join(", ")})`,
+            );
+          }
+        }
+      }
+
       await this.configureNativePaseoTools(runtimeSession, launchContext?.paseoTools);
       return new OmpAgentSession({
         runtimeSession,
@@ -2302,9 +2621,11 @@ export class OmpAgentClient implements AgentClient {
         usagePollScheduler: this.usagePollScheduler,
         paseoTools: launchContext?.paseoTools,
         live: false,
+        cleanup: cleanupFiles,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
+      cleanupFiles();
       throw error;
     }
   }

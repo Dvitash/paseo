@@ -16,6 +16,7 @@ describe("getBuiltInLaunchOrder", () => {
 
   it("leads with companion tools in a supporting pane", () => {
     expect(getBuiltInLaunchOrder("supporting")).toEqual([
+      "side",
       "changes",
       "diff",
       "files",

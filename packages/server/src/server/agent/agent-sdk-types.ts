@@ -623,6 +623,11 @@ export interface AgentSessionConfig {
    * They are used for ephemeral system tasks like commit/PR generation.
    */
   internal?: boolean;
+  /**
+   * When true, the agent is strictly read-only and immutable.
+   * Central create/resume, modes, and tool configurations cannot widen this permission.
+   */
+  readOnly?: boolean;
 }
 
 export interface AgentLaunchContext {

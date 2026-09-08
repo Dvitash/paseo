@@ -338,6 +338,9 @@ function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentC
   if (config.mcpServers) {
     serializable.mcpServers = config.mcpServers;
   }
+  if (config.readOnly !== undefined) {
+    serializable.readOnly = config.readOnly;
+  }
   return Object.keys(serializable).length ? serializable : null;
 }
 

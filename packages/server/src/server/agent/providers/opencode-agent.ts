@@ -1453,8 +1453,21 @@ export class OpenCodeAgentClient implements AgentClient {
       // Creating the first session for a directory is part of OpenCode coming up, so it
       // shares the server startup budget instead of a shorter one that fails agent
       // creation on contended cold starts.
+      const readOnlyPermission = openCodeConfig.readOnly
+        ? [
+            { permission: "*", pattern: "*", action: "deny" as const },
+            { permission: "read", pattern: "*", action: "allow" as const },
+            { permission: "glob", pattern: "*", action: "allow" as const },
+            { permission: "grep", pattern: "*", action: "allow" as const },
+            { permission: "list", pattern: "*", action: "allow" as const },
+          ]
+        : undefined;
+
       const response = await withTimeout(
-        client.session.create({ directory: openCodeConfig.cwd }),
+        client.session.create({
+          directory: openCodeConfig.cwd,
+          ...(readOnlyPermission ? { permission: readOnlyPermission } : {}),
+        }),
         OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
         `OpenCode session.create timed out after ${Math.round(
           OPENCODE_SERVER_STARTUP_TIMEOUT_MS / 1000,
@@ -1471,7 +1484,9 @@ export class OpenCodeAgentClient implements AgentClient {
       }
 
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
-      const unbindBridge = this.bindBridgeSession(session.id, launchContext);
+      const unbindBridge = openCodeConfig.readOnly
+        ? undefined
+        : this.bindBridgeSession(session.id, launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,
@@ -1504,9 +1519,11 @@ export class OpenCodeAgentClient implements AgentClient {
       throw new Error("OpenCode resume requires the original working directory");
     }
 
+    const isReadOnly = metadata.readOnly === true || overrides?.readOnly === true;
     const config: AgentSessionConfig = {
       ...metadata,
       ...overrides,
+      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
       provider: "opencode",
       cwd,
     };
@@ -1525,7 +1542,28 @@ export class OpenCodeAgentClient implements AgentClient {
 
     try {
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
-      const unbindBridge = this.bindBridgeSession(handle.sessionId, launchContext);
+      if (openCodeConfig.readOnly) {
+        const readOnlyPermission = [
+          { permission: "*", pattern: "*", action: "deny" as const },
+          { permission: "read", pattern: "*", action: "allow" as const },
+          { permission: "glob", pattern: "*", action: "allow" as const },
+          { permission: "grep", pattern: "*", action: "allow" as const },
+          { permission: "list", pattern: "*", action: "allow" as const },
+        ];
+        const updateResponse = await client.session.update({
+          sessionID: handle.sessionId,
+          directory: openCodeConfig.cwd,
+          permission: readOnlyPermission,
+        });
+        if (updateResponse.error) {
+          throw new Error(
+            `Failed to enforce read-only permissions on OpenCode session resume: ${JSON.stringify(updateResponse.error)}`,
+          );
+        }
+      }
+      const unbindBridge = openCodeConfig.readOnly
+        ? undefined
+        : this.bindBridgeSession(handle.sessionId, launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,
@@ -4794,6 +4832,9 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   async setMode(modeId: string): Promise<void> {
+    if (this.config.readOnly) {
+      throw new Error("Cannot change mode of read-only OpenCode agent session");
+    }
     const normalizedModeId = normalizeOpenCodeModeId(modeId);
     if (normalizedModeId === OPENCODE_LEGACY_FULL_ACCESS_MODE_ID) {
       this.currentMode = OPENCODE_BUILD_MODE_ID;
@@ -4806,6 +4847,9 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    if (this.config.readOnly && featureId === OPENCODE_AUTO_ACCEPT_FEATURE_ID && value === true) {
+      throw new Error("Cannot enable auto-accept in read-only OpenCode agent session");
+    }
     if (featureId !== OPENCODE_AUTO_ACCEPT_FEATURE_ID) {
       throw new Error(`Unsupported OpenCode feature '${featureId}'`);
     }
@@ -4828,6 +4872,9 @@ class OpenCodeAgentSession implements AgentSession {
       throw new Error(`No pending permission request with id '${requestId}'`);
     }
 
+    if (this.config.readOnly && response.behavior === "allow" && pending.kind !== "question") {
+      throw new Error("Cannot grant tool permissions in read-only OpenCode agent session");
+    }
     const directory = this.pendingPermissionDirectories.get(requestId) ?? this.config.cwd;
     if (pending.kind === "question") {
       if (response.behavior === "deny") {
@@ -4883,6 +4930,7 @@ class OpenCodeAgentSession implements AgentSession {
         cwd: this.config.cwd,
         ...(this.config.modeId ? { modeId: this.config.modeId } : {}),
         ...(this.config.model ? { model: this.config.model } : {}),
+        ...(this.config.readOnly ? { readOnly: true } : {}),
       },
     };
   }
@@ -5293,7 +5341,7 @@ class OpenCodeAgentSession implements AgentSession {
     request: AgentPermissionRequest,
     directory: string,
   ): Promise<boolean> {
-    if (!this.autoAcceptEnabled || request.kind !== "tool") {
+    if (this.config.readOnly || !this.autoAcceptEnabled || request.kind !== "tool") {
       return false;
     }
 

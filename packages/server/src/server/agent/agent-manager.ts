@@ -181,6 +181,9 @@ function buildStoredAgentConfig(record: StoredAgentRecord): AgentSessionConfig {
     config.systemPrompt = record.config.systemPrompt;
   }
   if (record.config.mcpServers != null) config.mcpServers = record.config.mcpServers;
+  if (record.config.readOnly != null) config.readOnly = record.config.readOnly;
+  if (record.internal != null) config.internal = record.internal;
+  if (config.readOnly) config.mcpServers = {};
   return stripInternalPaseoMcpServer(config);
 }
 
@@ -1298,6 +1301,10 @@ export class AgentManager {
       ...overrides,
       provider: handle.provider,
     } as AgentSessionConfig;
+    if (metadata.readOnly === true || overrides?.readOnly === true) {
+      mergedConfig.readOnly = true;
+      mergedConfig.mcpServers = {};
+    }
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       mergedConfig,
       resolvedAgentId,
@@ -1435,6 +1442,16 @@ export class AgentManager {
       ),
     );
   }
+  private resolveReloadRefreshConfig(
+    existingConfig: AgentSessionConfig,
+    overrides: Partial<AgentSessionConfig> | undefined,
+    provider: AgentProvider,
+  ): AgentSessionConfig {
+    if (existingConfig.readOnly) {
+      return { ...existingConfig, ...overrides, provider, readOnly: true, mcpServers: {} };
+    }
+    return { ...existingConfig, ...overrides, provider };
+  }
 
   private async reloadAgentSessionInternal(
     agentId: string,
@@ -1455,11 +1472,7 @@ export class AgentManager {
     const handle = existing.persistence;
     const provider = handle?.provider ?? existing.provider;
     const client = this.requireClient(provider);
-    const refreshConfig = {
-      ...existing.config,
-      ...overrides,
-      provider,
-    } as AgentSessionConfig;
+    const refreshConfig = this.resolveReloadRefreshConfig(existing.config, overrides, provider);
     const { storedConfig, launchConfig, paseoToolPolicy } = await this.prepareSessionConfig(
       refreshConfig,
       agentId,
@@ -1846,6 +1859,9 @@ export class AgentManager {
 
   async setAgentMode(agentId: string, modeId: string): Promise<AgentProviderNotice | null> {
     const agent = this.requireSessionAgent(agentId);
+    if (agent.config.readOnly) {
+      throw new Error(`Cannot change mode of read-only agent '${agentId}'`);
+    }
     const notice = (await agent.session.setMode(modeId)) ?? null;
     await this.drainSessionEvents(agentId);
     const currentMode = (await agent.session.getCurrentMode()) ?? modeId;
@@ -3718,8 +3734,8 @@ export class AgentManager {
     if (!this.registry) {
       return;
     }
-    // Don't persist internal agents - they're ephemeral system tasks
-    if (agent.internal) {
+    // Don't persist internal agents unless they are durable read-only auxiliary agents (e.g. Side chat)
+    if (agent.internal && !agent.config.readOnly) {
       return;
     }
     await this.registry.applySnapshot(agent, options);
@@ -4958,15 +4974,20 @@ export class AgentManager {
     env?: Record<string, string>,
   ): Promise<PreparedSessionConfig> {
     const storedConfig = await this.normalizeConfig(stripInternalPaseoMcpServer(config), { env });
-    const paseoToolPolicy = this.paseoToolsEnabled
-      ? this.resolvePaseoToolPolicy(storedConfig.provider)
-      : { enabled: false };
+    const isReadOnly = Boolean(storedConfig.readOnly);
+    if (isReadOnly) {
+      storedConfig.mcpServers = {};
+    }
+    const paseoToolPolicy =
+      this.paseoToolsEnabled && !isReadOnly
+        ? this.resolvePaseoToolPolicy(storedConfig.provider)
+        : { enabled: false };
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
-        config: storedConfig,
+        config: isReadOnly ? { ...storedConfig, mcpServers: {} } : storedConfig,
         agentId,
         mcpBaseUrl:
-          this.paseoToolsEnabled && isPaseoToolPolicyEnabled(paseoToolPolicy)
+          this.paseoToolsEnabled && !isReadOnly && isPaseoToolPolicyEnabled(paseoToolPolicy)
             ? this.mcpBaseUrl
             : null,
         mcpAuthToken: this.mcpAuthToken,

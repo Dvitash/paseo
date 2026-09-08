@@ -70,7 +70,8 @@ export class FakeOmp implements OmpRuntime {
     });
     this.recordedLaunches.push(launch);
     const session = new FakeOmpSession(launch);
-    session.commands = this.queuedCommands.shift() ?? [];
+    session.commands =
+      this.queuedCommands.shift() ?? (input.readOnly ? [{ name: "__paseo_readonly_guard__" }] : []);
     for (const [level, error] of this.queuedSubagentSubscriptionErrors) {
       session.subagentSubscriptionErrors.set(level, error);
     }

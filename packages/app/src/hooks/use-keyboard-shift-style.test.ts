@@ -95,5 +95,8 @@ describe("shouldUseCompactExplorerKeyboardPadding", () => {
     expect(shouldUseCompactExplorerKeyboardPadding({ isGit: false, explorerTab: "changes" })).toBe(
       true,
     );
+    expect(shouldUseCompactExplorerKeyboardPadding({ isGit: true, explorerTab: "side" })).toBe(
+      true,
+    );
   });
 });

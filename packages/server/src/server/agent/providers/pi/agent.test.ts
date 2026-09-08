@@ -2745,3 +2745,210 @@ describe("transformPiModels", () => {
     ]);
   });
 });
+
+describe("Pi read-only session confinement", () => {
+  test("enforces readOnly launch isolation, guard extension, and disables MCP", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        readOnly: true,
+        mcpServers: {
+          test: { type: "stdio", command: "test-server" },
+        },
+      }),
+    );
+
+    const latestLaunch = pi.recordedLaunches.at(-1)!;
+    expect(latestLaunch.readOnly).toBe(true);
+    expect(latestLaunch.argv).toEqual(
+      expect.arrayContaining([
+        "--tools",
+        "read,grep,find,ls",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-context-files",
+      ]),
+    );
+    expect(latestLaunch.argv).not.toContain("--mcp-config");
+    expect(session.capabilities.supportsMcpServers).toBe(false);
+
+    const extensionPath = latestLaunch.extensionPaths?.[0];
+    expect(extensionPath).toBeDefined();
+    expect(existsSync(extensionPath!)).toBe(true);
+
+    const listeners = await loadPaseoExtensionListeners(extensionPath!);
+    const toolCallListener = listeners.get("tool_call");
+    expect(toolCallListener).toBeDefined();
+
+    expect(toolCallListener!({ toolName: "bash", input: { command: "rm -rf /" } })).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("prohibited in read-only mode"),
+    });
+    expect(toolCallListener!({ toolName: "write", input: { path: "file.txt" } })).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("prohibited in read-only mode"),
+    });
+    expect(toolCallListener!({ toolName: "edit", input: { path: "file.txt" } })).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("prohibited in read-only mode"),
+    });
+    expect(toolCallListener!({ toolName: "powershell", input: { command: "dir" } })).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("prohibited in read-only mode"),
+    });
+
+    expect(
+      toolCallListener!({ toolName: "read", input: { path: "https://example.com" } }),
+    ).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("External URL, remote, and network schemes are prohibited"),
+    });
+    expect(
+      toolCallListener!({ toolName: "read", input: { path: "ssh://user@host/file" } }),
+    ).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("External URL, remote, and network schemes are prohibited"),
+    });
+    expect(
+      toolCallListener!({ toolName: "grep", input: { path: "src;http://remote" } }),
+    ).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("External URL, remote, and network schemes are prohibited"),
+    });
+    expect(
+      toolCallListener!({ toolName: "read", input: { path: "mcp://server/resource" } }),
+    ).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("External URL, remote, and network schemes are prohibited"),
+    });
+    expect(
+      toolCallListener!({ toolName: "read", input: { path: "agent://subagent/data" } }),
+    ).toMatchObject({
+      block: true,
+      reason: expect.stringContaining("External URL, remote, and network schemes are prohibited"),
+    });
+
+    expect(toolCallListener!({ toolName: "read", input: { path: "src/safe.ts" } })).toBeUndefined();
+    expect(
+      toolCallListener!({ toolName: "read", input: { path: "C:\\safe\\file.ts" } }),
+    ).toBeUndefined();
+
+    const inputListener = listeners.get("input");
+    expect(inputListener).toBeDefined();
+    expect(inputListener!({ text: "/plugin install evil-plugin" })).toEqual({
+      action: "handled",
+    });
+    expect(inputListener!({ text: "/mcp add evil-server" })).toEqual({
+      action: "handled",
+    });
+    expect(inputListener!({ text: "normal message /not-a-command" })).toBeUndefined();
+
+    await expect(session.setMode("any-mode")).rejects.toThrow(
+      "Mode changes are prohibited in read-only sessions",
+    );
+
+    const persistence = session.describePersistence();
+    expect(persistence?.metadata).toMatchObject({ readOnly: true });
+
+    await session.close();
+  });
+
+  test("fails closed if Pi guard extension fails to load and sentinel command is missing", async () => {
+    const pi = new FakePi();
+    pi.queueCommands([]);
+
+    const client = createClient(pi);
+    await expect(client.createSession(createConfig({ readOnly: true }))).rejects.toThrow(
+      /sentinel command not registered/,
+    );
+  });
+
+  test("preserves and locks readOnly on resume, preventing widening via overrides", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+
+    const handle = {
+      provider: "pi" as const,
+      sessionId: "pi-session-1",
+      nativeHandle: "/tmp/pi-session.jsonl",
+      metadata: {
+        cwd: "/tmp/paseo-pi-rpc-test",
+        readOnly: true,
+      },
+    };
+
+    const session = await client.resumeSession(handle, {
+      readOnly: false,
+    });
+
+    const latestLaunch = pi.recordedLaunches.at(-1)!;
+    expect(latestLaunch.readOnly).toBe(true);
+    expect(latestLaunch.argv).toEqual(
+      expect.arrayContaining(["--tools", "read,grep,find,ls", "--no-extensions"]),
+    );
+    expect(session.describePersistence()?.metadata).toMatchObject({ readOnly: true });
+
+    await expect(session.setMode("another-mode")).rejects.toThrow(
+      "Mode changes are prohibited in read-only sessions",
+    );
+    await session.close();
+  });
+
+  test("keeps default non-readOnly behavior unchanged", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        mcpServers: {
+          test: { type: "stdio", command: "test-server" },
+        },
+      }),
+    );
+
+    const latestLaunch = pi.recordedLaunches.at(-1)!;
+    expect(latestLaunch.readOnly).toBe(false);
+    expect(latestLaunch.argv).not.toContain("--no-extensions");
+    expect(latestLaunch.argv).not.toContain("--tools");
+    expect(session.describePersistence()?.metadata).not.toHaveProperty("readOnly");
+    await session.close();
+  });
+
+  test("preserves session persistence for internal readOnly sessions (does not set --no-session)", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        internal: true,
+        readOnly: true,
+      }),
+    );
+
+    const latestLaunch = pi.recordedLaunches.at(-1)!;
+    expect(latestLaunch.argv).not.toContain("--no-session");
+    await session.close();
+  });
+
+  test("prohibits reconfiguration slash commands in read-only startTurn and steer", async () => {
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        readOnly: true,
+      }),
+    );
+
+    await expect(session.startTurn("/plugin install evil")).rejects.toThrow(
+      "Reconfiguration command /plugin is prohibited in read-only sessions",
+    );
+    await expect(session.startTurn("/mcp add evil-server")).rejects.toThrow(
+      "Reconfiguration command /mcp is prohibited in read-only sessions",
+    );
+    await expect(session.startTurn("/mode plan")).rejects.toThrow(
+      "Reconfiguration command /mode is prohibited in read-only sessions",
+    );
+    await session.close();
+  });
+});

@@ -63,17 +63,21 @@ export function attachAgentStoragePersistence(
 }
 
 export function buildConfigOverrides(record: StoredAgentRecord): Partial<AgentSessionConfig> {
+  const cfg = record.config;
+  const isReadOnly = cfg?.readOnly === true;
   return stripInternalPaseoMcpServer({
     provider: record.provider,
     cwd: record.cwd,
-    modeId: record.config?.modeId ?? undefined,
-    model: record.config?.model ?? undefined,
-    thinkingOptionId: record.config?.thinkingOptionId ?? undefined,
-    featureValues: record.config?.featureValues ?? undefined,
-    providerOptions: record.config?.providerOptions ?? undefined,
-    toolPolicy: record.config?.toolPolicy ?? undefined,
-    systemPrompt: record.config?.systemPrompt ?? undefined,
-    mcpServers: record.config?.mcpServers ?? undefined,
+    modeId: cfg?.modeId ?? undefined,
+    model: cfg?.model ?? undefined,
+    thinkingOptionId: cfg?.thinkingOptionId ?? undefined,
+    featureValues: cfg?.featureValues ?? undefined,
+    providerOptions: cfg?.providerOptions ?? undefined,
+    toolPolicy: cfg?.toolPolicy ?? undefined,
+    systemPrompt: cfg?.systemPrompt ?? undefined,
+    mcpServers: isReadOnly ? {} : (cfg?.mcpServers ?? undefined),
+    readOnly: isReadOnly ? true : undefined,
+    internal: record.internal,
   });
 }
 
@@ -85,6 +89,7 @@ export function buildSessionConfig(
     return null;
   }
   const overrides = buildConfigOverrides(record);
+  const isReadOnly = overrides.readOnly === true;
   return stripInternalPaseoMcpServer({
     provider: record.provider,
     cwd: record.cwd,
@@ -95,7 +100,9 @@ export function buildSessionConfig(
     providerOptions: overrides.providerOptions,
     toolPolicy: overrides.toolPolicy,
     systemPrompt: overrides.systemPrompt,
-    mcpServers: overrides.mcpServers,
+    mcpServers: isReadOnly ? {} : overrides.mcpServers,
+    readOnly: isReadOnly ? true : undefined,
+    internal: overrides.internal,
   });
 }
 

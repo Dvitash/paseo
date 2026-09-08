@@ -399,6 +399,9 @@ function getFallbackTabOptionDescription(
   if (tab.target.kind === "plugin") {
     return tab.target.panelId;
   }
+  if (tab.target.kind === "side") {
+    return "Side";
+  }
   return tab.target.path;
 }
 

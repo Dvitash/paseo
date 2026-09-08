@@ -26,6 +26,9 @@ export interface OmpRuntimeLaunch {
   noSession?: boolean;
   systemPrompt?: string;
   extraArgs?: string[];
+  readOnly?: boolean;
+  configFilePath?: string;
+  extensionPaths?: string[];
 }
 
 export interface OmpStartSessionInput {
@@ -40,6 +43,9 @@ export interface OmpStartSessionInput {
   noSession?: boolean;
   systemPrompt?: string;
   extraArgs?: string[];
+  readOnly?: boolean;
+  configFilePath?: string;
+  extensionPaths?: string[];
 }
 
 export interface OmpRuntimeSession {
@@ -92,7 +98,11 @@ export function buildOmpLaunch(input: {
     input.runtimeSettings?.command?.mode === "replace" && input.runtimeSettings.command.argv[0]
       ? input.runtimeSettings.command.argv
       : input.command;
-  const argv = [...command];
+  const binary = command[0];
+  const commandArgs = input.session.readOnly
+    ? sanitizeOmpReadOnlyExtraArgs(command.slice(1))
+    : command.slice(1);
+  const argv = [binary, ...commandArgs];
 
   const protocolMode = input.session.protocolMode ?? "rpc";
   const systemPrompt = input.session.systemPrompt?.trim();
@@ -116,6 +126,9 @@ export function buildOmpLaunch(input: {
     noSession: input.session.noSession,
     systemPrompt,
     extraArgs: input.session.extraArgs,
+    readOnly: input.session.readOnly,
+    configFilePath: input.session.configFilePath,
+    extensionPaths: input.session.extensionPaths,
   };
 }
 
@@ -128,7 +141,22 @@ function appendOmpLaunchArgs(
   if (!hasModeFlag(argv)) {
     argv.push("--mode", protocolMode);
   }
-  if (session.extraArgs?.length) {
+  if (session.readOnly) {
+    argv.push("--tools", "read,grep,glob");
+    argv.push("--no-extensions");
+    argv.push("--no-skills");
+    argv.push("--no-rules");
+    argv.push("--no-lsp");
+    if (session.configFilePath) {
+      argv.push("--config", session.configFilePath);
+    }
+    for (const extensionPath of session.extensionPaths ?? []) {
+      argv.push("--extension", extensionPath);
+    }
+    if (session.extraArgs?.length) {
+      argv.push(...sanitizeOmpReadOnlyExtraArgs(session.extraArgs));
+    }
+  } else if (session.extraArgs?.length) {
     argv.push(...session.extraArgs);
   }
   if (session.model) {
@@ -157,4 +185,57 @@ function hasModeFlag(argv: string[]): boolean {
     }
   }
   return false;
+}
+
+const OMP_READONLY_DENIED_FLAGS: Record<string, true> = {
+  "--tools": true,
+  "--no-tools": true,
+  "--extension": true,
+  "-e": true,
+  "--trusted-extension": true,
+  "--hook": true,
+  "--skills": true,
+  "--no-skills": true,
+  "--rules": true,
+  "--no-rules": true,
+  "--lsp": true,
+  "--no-lsp": true,
+  "--config": true,
+  "--plugin-dir": true,
+  "--mode": true,
+  "--auto-approve": true,
+  "--yolo": true,
+  "--plan-yolo": true,
+  "--prewalk": true,
+  "--no-prewalk": true,
+  "--advisor": true,
+};
+
+const OMP_READONLY_VALUE_FLAGS: Record<string, true> = {
+  "--tools": true,
+  "--extension": true,
+  "-e": true,
+  "--trusted-extension": true,
+  "--hook": true,
+  "--skills": true,
+  "--config": true,
+  "--plugin-dir": true,
+  "--mode": true,
+};
+export function sanitizeOmpReadOnlyExtraArgs(args: readonly string[]): string[] {
+  const sanitized: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) continue;
+    const equalsIndex = arg.indexOf("=");
+    const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+    if (OMP_READONLY_DENIED_FLAGS[flag]) {
+      if (equalsIndex === -1 && OMP_READONLY_VALUE_FLAGS[flag]) {
+        i += 1;
+      }
+      continue;
+    }
+    sanitized.push(arg);
+  }
+  return sanitized;
 }

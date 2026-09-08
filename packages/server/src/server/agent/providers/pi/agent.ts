@@ -143,6 +143,9 @@ function mapPiSlashCommands(
     handledCommands.map((command) => [command.name, { ...command }]),
   );
   for (const command of commands) {
+    if (command.name.startsWith("__paseo_") || command.name.startsWith("paseo_")) {
+      continue;
+    }
     const knownCommand = mappedCommands.get(command.name);
     mappedCommands.set(command.name, {
       name: command.name,
@@ -206,7 +209,11 @@ interface PiPersistenceMetadata {
   thinkingOptionId?: string;
   modeId?: string;
   systemPrompt?: string;
+  readOnly?: boolean;
 }
+
+export const PASEO_PI_READONLY_GUARD_COMMAND = "__paseo_readonly_guard__";
+export const PASEO_SIDE_READ_ONLY_LABEL = "paseo.side.read_only";
 
 function capabilitiesForClient(): AgentCapabilityFlags {
   return withPiCapabilities(false);
@@ -472,6 +479,12 @@ function parsePersistenceMetadata(metadata: AgentMetadata | undefined): PiPersis
   if (!metadata) {
     return {};
   }
+  const isReadOnly =
+    metadata.readOnly === true ||
+    metadata.readOnly === "true" ||
+    (typeof metadata.labels === "object" &&
+      metadata.labels !== null &&
+      (metadata.labels as Record<string, unknown>)[PASEO_SIDE_READ_ONLY_LABEL] === "true");
   return {
     ...(typeof metadata.cwd === "string" ? { cwd: metadata.cwd } : {}),
     ...(typeof metadata.model === "string" ? { model: metadata.model } : {}),
@@ -480,6 +493,7 @@ function parsePersistenceMetadata(metadata: AgentMetadata | undefined): PiPersis
       : {}),
     ...(typeof metadata.modeId === "string" ? { modeId: metadata.modeId } : {}),
     ...(typeof metadata.systemPrompt === "string" ? { systemPrompt: metadata.systemPrompt } : {}),
+    ...(isReadOnly ? { readOnly: true } : {}),
   };
 }
 
@@ -493,6 +507,7 @@ function buildResumeConfig(
   const model = overrideConfig.model ?? metadata.model;
   const thinkingOptionId = overrideConfig.thinkingOptionId ?? metadata.thinkingOptionId;
   const modeId = overrideConfig.modeId ?? metadata.modeId;
+  const isReadOnly = metadata.readOnly === true || overrideConfig.readOnly === true;
   return {
     cwd,
     model,
@@ -506,6 +521,7 @@ function buildResumeConfig(
       thinkingOptionId,
       modeId,
       systemPrompt: overrideConfig.systemPrompt ?? metadata.systemPrompt,
+      ...(isReadOnly ? { readOnly: true } : {}),
     },
   };
 }
@@ -516,6 +532,7 @@ function buildResumeStartInput(input: {
   launchContext: AgentLaunchContext | undefined;
   mcpConfig: PiMcpConfigFile | null;
   paseoExtension: PiTempFile | null;
+  tools?: string[];
 }): PiStartSessionInput {
   return {
     cwd: input.resumeConfig.cwd,
@@ -525,9 +542,10 @@ function buildResumeStartInput(input: {
     thinkingOptionId: normalizePiThinkingOption(input.resumeConfig.thinkingOptionId) ?? undefined,
     mcpConfigPath: input.mcpConfig?.path,
     extensionPaths: input.paseoExtension ? [input.paseoExtension.path] : undefined,
+    readOnly: input.resumeConfig.config.readOnly,
+    tools: input.tools,
   };
 }
-
 function toPiMcpConfig(config: McpServerConfig): PiMcpServerConfig {
   if (config.type === "stdio") {
     return {
@@ -613,8 +631,23 @@ function createPiMcpConfigFile(
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
+interface PiPaseoExtensionOptions {
+  systemPrompt?: string;
+  readOnly?: boolean;
+  hostToolNames?: string[];
+}
 
-function createPiPaseoExtensionFile(systemPrompt?: string): PiTempFile {
+function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions): PiTempFile {
+  const opts = typeof options === "string" ? { systemPrompt: options } : (options ?? {});
+  const systemPrompt = opts.systemPrompt;
+  const isReadOnly = opts.readOnly === true;
+  const allowedTools = JSON.stringify([
+    "read",
+    "grep",
+    "find",
+    "ls",
+    ...(opts.hostToolNames ?? []),
+  ]);
   const dir = mkdtempSync(join(tmpdir(), "paseo-pi-extension-"));
   const filePath = join(dir, "paseo-integration.mjs");
   writeFileSync(
@@ -744,14 +777,125 @@ function createPiPaseoExtensionFile(systemPrompt?: string): PiTempFile {
 	      }
 	    },
 	  });
+	  ${
+      isReadOnly
+        ? `
+	  const ALLOWED_TOOLS = new Set(${allowedTools});
+	  const BLOCKED_SLASH_COMMANDS = new Set([
+	    "plugin",
+	    "plugins",
+	    "extension",
+	    "extensions",
+	    "skill",
+	    "skills",
+	    "mcp",
+	    "reload",
+	    "mode",
+	    "config",
+	    "settings",
+	    "install",
+	    "uninstall",
+	    "tools",
+	  ]);
+
+	  function isBlockedTarget(target) {
+	    if (typeof target !== "string") return false;
+	    const parts = target.split(";");
+	    for (let i = 0; i < parts.length; i += 1) {
+	      const trimmed = parts[i].trim();
+	      if (!trimmed) continue;
+	      if (/^[a-zA-Z]:[\\\\/]/.test(trimmed)) continue;
+	      if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return true;
+	    }
+	    return false;
+	  }
+	  const enforceTools = async () => {
+	    if (typeof pi.setActiveTools === "function") {
+	      await pi.setActiveTools([...ALLOWED_TOOLS]);
+	    }
+	  };
+
+	  pi.on("session_start", enforceTools);
+	  pi.on("before_agent_start", enforceTools);
+
+	  pi.on("tool_call", (event) => {
+	    const toolName = event.toolName;
+	    if (!ALLOWED_TOOLS.has(toolName)) {
+	      return {
+	        block: true,
+	        reason: "Tool '" + toolName + "' is prohibited in read-only mode",
+	      };
+	    }
+	    if (toolName === "read" || toolName === "grep" || toolName === "find" || toolName === "ls") {
+	      const input = event.input;
+	      const target = input?.path || input?.target || input?.pattern;
+	      if (isBlockedTarget(target)) {
+	        return {
+	          block: true,
+	          reason: "External URL, remote, and network schemes are prohibited in read-only mode",
+	        };
+	      }
+	    }
+	  });
+
+	  pi.on("input", (event) => {
+	    if (typeof event.text === "string") {
+	      const trimmed = event.text.trim();
+	      if (trimmed.startsWith("/")) {
+	        const commandName = trimmed.slice(1).split(/\\s+/)[0]?.toLowerCase();
+	        if (commandName && BLOCKED_SLASH_COMMANDS.has(commandName)) {
+	          return { action: "handled" };
+	        }
+	      }
+	    }
+	  });
+
+	  // Register sentinel command last to prove all hooks installed without error
+	  pi.registerCommand("${PASEO_PI_READONLY_GUARD_COMMAND}", {
+	    description: "Paseo ReadOnly Guard Sentinel",
+	    handler: async () => {
+	      await enforceTools();
+	    },
+	  });`
+        : ""
+    }
 	}
 `.trimStart(),
     "utf8",
   );
+
   return {
     path: filePath,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
+}
+const PROHIBITED_READONLY_SLASH_COMMANDS: Record<string, true> = {
+  plugin: true,
+  plugins: true,
+  extension: true,
+  extensions: true,
+  skill: true,
+  skills: true,
+  mcp: true,
+  reload: true,
+  mode: true,
+  config: true,
+  settings: true,
+  install: true,
+  uninstall: true,
+  tools: true,
+};
+
+function assertNoReadOnlySlashCommand(text: string): void {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("/")) {
+    const commandName = trimmed.slice(1).split(/\s+/)[0]?.toLowerCase();
+    if (commandName && PROHIBITED_READONLY_SLASH_COMMANDS[commandName]) {
+      throw new Error(
+        `Reconfiguration command /${commandName} is prohibited in read-only sessions`,
+      );
+    }
+  }
 }
 
 function combineCleanup(cleanups: Array<(() => void) | undefined>): (() => void) | undefined {
@@ -1324,6 +1468,9 @@ export class PiRpcAgentSession implements AgentSession {
     }
 
     const payload = convertPromptInput(prompt, { model: this.state.model });
+    if (this.config.readOnly) {
+      assertNoReadOnlySlashCommand(payload.text);
+    }
     const turnId = randomUUID();
     this.activeTurnId = turnId;
     this.usagePoller.startTurn();
@@ -1398,6 +1545,9 @@ export class PiRpcAgentSession implements AgentSession {
       return { status: "unavailable" };
     }
     const payload = convertPromptInput(prompt, { model: this.state.model });
+    if (this.config.readOnly) {
+      assertNoReadOnlySlashCommand(payload.text);
+    }
     // Pi rejects steer RPCs that are extension commands, so slash inputs keep the
     // interrupt-and-replace fallback where they can run directly.
     if (this.parseSlashCommandInput(payload.text)) {
@@ -1486,6 +1636,9 @@ export class PiRpcAgentSession implements AgentSession {
   }
 
   async setMode(_modeId: string): Promise<void | AgentProviderNotice> {
+    if (this.config.readOnly) {
+      throw new Error("Mode changes are prohibited in read-only sessions");
+    }
     throw new Error("Pi does not expose selectable modes");
   }
 
@@ -1529,6 +1682,7 @@ export class PiRpcAgentSession implements AgentSession {
         ...(this.config.model ? { model: this.config.model } : {}),
         ...(this.config.thinkingOptionId ? { thinkingOptionId: this.config.thinkingOptionId } : {}),
         ...(this.currentModeId ? { modeId: this.currentModeId } : {}),
+        ...(this.config.readOnly ? { readOnly: true } : {}),
       },
     };
   }
@@ -2525,18 +2679,51 @@ export class PiRpcAgentClient implements AgentClient {
     this.usagePollScheduler = options.usagePollScheduler;
   }
 
+  private resolveHostToolNames(launchContext?: AgentLaunchContext): string[] {
+    const tools = launchContext?.paseoTools?.tools;
+    return tools ? [...tools.keys()] : [];
+  }
+
+  private async prepareSessionMcpConfig(
+    cwd: string,
+    mcpServers: Record<string, McpServerConfig> | undefined,
+    isReadOnly: boolean,
+    env?: Record<string, string>,
+  ): Promise<PiMcpConfigFile | null> {
+    if (isReadOnly) {
+      return null;
+    }
+    const combinedEnv = { ...this.runtimeSettings?.env, ...env };
+    return await this.prepareMcpConfig(cwd, mcpServers, combinedEnv);
+  }
+
+  private async verifyReadOnlySentinel(runtimeSession: PiRuntimeSession): Promise<void> {
+    const commands = await runtimeSession.getCommands();
+    const guardLoaded = commands.some((cmd) => cmd.name === PASEO_PI_READONLY_GUARD_COMMAND);
+    if (!guardLoaded) {
+      throw new Error(
+        "Pi read-only guard extension failed to load: sentinel command not registered",
+      );
+    }
+  }
+
   async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
-    const mcpEnv = {
-      ...this.runtimeSettings?.env,
-      ...launchContext?.env,
-    };
-    const mcpConfig = await this.prepareMcpConfig(config.cwd, config.mcpServers, mcpEnv);
-    const paseoExtension = createPiPaseoExtensionFile(
-      composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
+    const isReadOnly = config.readOnly === true;
+    const hostToolNames = this.resolveHostToolNames(launchContext);
+    const mcpConfig = await this.prepareSessionMcpConfig(
+      config.cwd,
+      config.mcpServers,
+      isReadOnly,
+      launchContext?.env,
     );
+    const paseoExtension = createPiPaseoExtensionFile({
+      systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
+      readOnly: isReadOnly,
+      hostToolNames,
+    });
     let runtimeSession: PiRuntimeSession;
     try {
       runtimeSession = await this.runtime.startSession({
@@ -2544,10 +2731,12 @@ export class PiRpcAgentClient implements AgentClient {
         model: config.model,
         thinkingOptionId:
           normalizePiThinkingOption(config.thinkingOptionId) ?? DEFAULT_PI_THINKING_LEVEL,
-        noSession: config.internal === true,
+        noSession: config.internal === true && !isReadOnly,
         env: launchContext?.env,
         mcpConfigPath: mcpConfig?.path,
         extensionPaths: paseoExtension ? [paseoExtension.path] : undefined,
+        readOnly: isReadOnly,
+        tools: isReadOnly ? ["read", "grep", "find", "ls", ...hostToolNames] : undefined,
       });
     } catch (error) {
       mcpConfig?.cleanup();
@@ -2555,11 +2744,14 @@ export class PiRpcAgentClient implements AgentClient {
       throw error;
     }
     try {
+      if (isReadOnly) {
+        await this.verifyReadOnlySentinel(runtimeSession);
+      }
       return new PiRpcAgentSession({
         runtimeSession,
         config,
         initialState: await runtimeSession.getState(),
-        capabilities: capabilitiesForSession(mcpConfig !== null),
+        capabilities: capabilitiesForSession(mcpConfig !== null && !isReadOnly),
         cleanup: combineCleanup([mcpConfig?.cleanup, paseoExtension?.cleanup]),
         extensionTimeoutMs: this.providerParams.extensionTimeoutMs,
         logger: this.logger,
@@ -2585,22 +2777,22 @@ export class PiRpcAgentClient implements AgentClient {
 
     const persistenceMetadata = parsePersistenceMetadata(handle.metadata);
     const resumeConfig = buildResumeConfig(persistenceMetadata, overrides, this.provider);
-
-    const mcpEnv = {
-      ...this.runtimeSettings?.env,
-      ...launchContext?.env,
-    };
-    const mcpConfig = await this.prepareMcpConfig(
+    const isReadOnly = resumeConfig.config.readOnly === true;
+    const hostToolNames = this.resolveHostToolNames(launchContext);
+    const mcpConfig = await this.prepareSessionMcpConfig(
       resumeConfig.cwd,
       resumeConfig.config.mcpServers,
-      mcpEnv,
+      isReadOnly,
+      launchContext?.env,
     );
-    const paseoExtension = createPiPaseoExtensionFile(
-      composeSystemPromptParts(
+    const paseoExtension = createPiPaseoExtensionFile({
+      systemPrompt: composeSystemPromptParts(
         resumeConfig.config.systemPrompt,
         resumeConfig.config.daemonAppendSystemPrompt,
       ),
-    );
+      readOnly: isReadOnly,
+      hostToolNames,
+    });
     let runtimeSession: PiRuntimeSession;
     try {
       runtimeSession = await this.runtime.startSession(
@@ -2610,6 +2802,7 @@ export class PiRpcAgentClient implements AgentClient {
           launchContext,
           mcpConfig,
           paseoExtension,
+          tools: isReadOnly ? ["read", "grep", "find", "ls", ...hostToolNames] : undefined,
         }),
       );
     } catch (error) {
@@ -2618,11 +2811,14 @@ export class PiRpcAgentClient implements AgentClient {
       throw error;
     }
     try {
+      if (isReadOnly) {
+        await this.verifyReadOnlySentinel(runtimeSession);
+      }
       return new PiRpcAgentSession({
         runtimeSession,
         config: resumeConfig.config,
         initialState: await runtimeSession.getState(),
-        capabilities: capabilitiesForSession(mcpConfig !== null),
+        capabilities: capabilitiesForSession(mcpConfig !== null && !isReadOnly),
         cleanup: combineCleanup([mcpConfig?.cleanup, paseoExtension?.cleanup]),
         extensionTimeoutMs: this.providerParams.extensionTimeoutMs,
         logger: this.logger,
@@ -2635,7 +2831,6 @@ export class PiRpcAgentClient implements AgentClient {
       throw error;
     }
   }
-
   async fetchCatalog(
     options: FetchCatalogOptions,
     context?: ProviderRefreshContext,

@@ -985,6 +985,9 @@ function coerceSessionMetadata(metadata: AgentMetadata | undefined): Partial<Age
   if (isMcpServersRecord(metadata.mcpServers)) {
     result.mcpServers = metadata.mcpServers;
   }
+  if (typeof metadata.readOnly === "boolean") {
+    result.readOnly = metadata.readOnly;
+  }
 
   return result;
 }
@@ -1541,7 +1544,12 @@ export class ClaudeAgentClient implements AgentClient {
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     const metadata = coerceSessionMetadata(handle.metadata);
-    const merged: Partial<AgentSessionConfig> = { ...metadata, ...overrides };
+    const isReadOnly = metadata.readOnly === true || overrides?.readOnly === true;
+    const merged: Partial<AgentSessionConfig> = {
+      ...metadata,
+      ...overrides,
+      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
+    };
     if (!merged.cwd) {
       throw new Error("Claude resume requires the original working directory in metadata");
     }
@@ -2399,6 +2407,9 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   async setMode(modeId: string): Promise<void> {
+    if (this.config.readOnly) {
+      throw new Error("Cannot change mode of read-only Claude agent session");
+    }
     // Validate mode
     if (!VALID_CLAUDE_MODES.has(modeId)) {
       const validModesList = Array.from(VALID_CLAUDE_MODES).join(", ");
@@ -2600,6 +2611,9 @@ class ClaudeAgentSession implements AgentSession {
 
     if (response.behavior === "allow") {
       if (pending.request.kind === "plan") {
+        if (this.config.readOnly) {
+          throw new Error("Cannot approve plan implementation in read-only Claude agent session");
+        }
         const selectedActionId = response.selectedActionId;
         const shouldResumePriorMode =
           selectedActionId === "implement_resume" && this.planResumeMode === "bypassPermissions";
@@ -3267,70 +3281,131 @@ class ClaudeAgentSession implements AgentSession {
       },
       "Resolved Claude executable",
     );
-    const sessionBinding: Pick<ClaudeOptions, "resume" | "sessionId"> = {};
-    if (this.pendingFreshSessionId) {
-      sessionBinding.sessionId = this.pendingFreshSessionId;
-    } else if (this.claudeSessionId) {
-      sessionBinding.resume = this.claudeSessionId;
-    }
+    const sessionBinding = this.resolveSessionBinding();
+    const integrationOptions = this.resolveIntegrationOptions(providerOptions, settingsOptions);
 
     const base: ClaudeOptions = {
       cwd: this.config.cwd,
       includePartialMessages: true,
       permissionMode: this.currentMode,
-      // Dynamic mode switching can recreate the underlying Claude query. Keep the
-      // bypass launch capability available so later setPermissionMode("bypassPermissions")
-      // calls do not fail after a model/thinking/rewind-driven restart.
-      allowDangerouslySkipPermissions: true,
-      agents: this.defaults?.agents,
       canUseTool: this.handlePermissionRequest,
       pathToClaudeCodeExecutable: claudeBinary,
-      // Use Claude Code preset system prompt and load CLAUDE.md files
-      // Append provider-agnostic system prompts for agents.
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
         append: appendedSystemPrompt,
       },
-      settingSources: CLAUDE_SETTING_SOURCES,
       stderr: (data: string) => {
         this.captureStderr(data);
         this.logger.error({ stderr: data.trim() }, "Claude Agent SDK stderr");
       },
-      // Required for provider-level /rewind support.
       enableFileCheckpointing: true,
-      // If we have a session ID from a previous query (e.g., after interrupt),
-      // resume that session to continue the conversation history.
       ...sessionBinding,
       ...(thinking ? { thinking } : {}),
       ...(effort ? { effort } : {}),
-      ...providerOptions,
-      ...settingsOptions,
-      // Provider subagent panes render the child's nested transcript.
+      ...integrationOptions,
       forwardSubagentText: true,
       hooks: this.buildSubagentEffortHooks(),
-      ...(this.persistSession === undefined ? {} : { persistSession: this.persistSession }),
+      ...(this.persistSession !== undefined ? { persistSession: this.persistSession } : {}),
       env: sdkEnv,
     };
-
-    if (this.config.mcpServers) {
-      base.mcpServers = this.normalizeMcpServers(this.config.mcpServers);
-    }
 
     if (this.config.model) {
       base.model = this.config.model;
     }
     this.lastOptionsModel = base.model ?? null;
-    if (this.claudeSessionId && !this.pendingFreshSessionId) {
-      base.resume = this.claudeSessionId;
-    }
     if (this.runtimeSettings?.disallowedTools?.length) {
       base.disallowedTools = [
         ...(base.disallowedTools ?? []),
         ...this.runtimeSettings.disallowedTools,
       ];
     }
+    if (this.config.readOnly) {
+      return this.applyReadOnlyOverrides(base);
+    }
     return base;
+  }
+
+  private resolveSessionBinding(): Pick<ClaudeOptions, "resume" | "sessionId"> {
+    if (this.pendingFreshSessionId) {
+      return { sessionId: this.pendingFreshSessionId };
+    }
+    if (this.claudeSessionId) {
+      return { resume: this.claudeSessionId };
+    }
+    return {};
+  }
+
+  private resolveIntegrationOptions(
+    providerOptions: ClaudeProviderOptions,
+    settingsOptions: Pick<ClaudeOptions, "settings"> | Record<string, never>,
+  ): Record<string, unknown> {
+    if (this.config.readOnly) {
+      return {
+        allowDangerouslySkipPermissions: false,
+        agents: undefined,
+        settingSources: [],
+        mcpServers: {},
+      };
+    }
+    return {
+      allowDangerouslySkipPermissions: true,
+      agents: this.defaults?.agents,
+      settingSources: CLAUDE_SETTING_SOURCES,
+      ...(this.config.mcpServers
+        ? { mcpServers: this.normalizeMcpServers(this.config.mcpServers) }
+        : {}),
+      ...providerOptions,
+      ...settingsOptions,
+    };
+  }
+
+  private applyReadOnlyOverrides(base: ClaudeOptions): ClaudeOptions {
+    const baseSettings =
+      typeof base.settings === "object" && base.settings !== null ? base.settings : {};
+    return {
+      ...base,
+      permissionMode: "plan",
+      allowDangerouslySkipPermissions: false,
+      strictMcpConfig: true,
+      mcpServers: {},
+      settingSources: [],
+      tools: ["Read", "Grep", "Glob"],
+      disallowedTools: [
+        ...(base.disallowedTools ?? []),
+        "Write",
+        "Edit",
+        "Bash",
+        "NotebookEdit",
+        "KillProcess",
+        "Task",
+        "Agent",
+      ],
+      skills: [],
+      plugins: [],
+      agents: undefined,
+      settings: {
+        ...baseSettings,
+        disableAllHooks: true,
+        permissions: {
+          deny: ["Write", "Edit", "Bash", "NotebookEdit", "KillProcess", "Task", "Agent"],
+        },
+        sandbox: {
+          enabled: true,
+          filesystem: {
+            allowWrite: [],
+            denyWrite: ["*"],
+          },
+        },
+      },
+      sandbox: {
+        enabled: true,
+        filesystem: {
+          allowWrite: [],
+          denyWrite: ["*"],
+        },
+      },
+    };
   }
 
   private buildSettingsOptions(
@@ -4615,6 +4690,22 @@ class ClaudeAgentSession implements AgentSession {
     input,
     options,
   ): Promise<PermissionResult> => {
+    if (this.config.readOnly) {
+      if (
+        toolName === "Write" ||
+        toolName === "Edit" ||
+        toolName === "Bash" ||
+        toolName === "NotebookEdit" ||
+        toolName === "KillProcess" ||
+        toolName === "Task" ||
+        toolName === "Agent"
+      ) {
+        return {
+          behavior: "deny",
+          message: `Tool '${toolName}' is forbidden in read-only Claude agent session`,
+        };
+      }
+    }
     const requestId = `permission-${randomUUID()}`;
     const kind = resolvePermissionKind(toolName, input);
     const requestInput = normalizeClaudeAskUserQuestionRequestInput(toolName, input);

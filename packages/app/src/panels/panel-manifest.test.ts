@@ -11,6 +11,8 @@ describe("panel manifest", () => {
     expect(panelSupportsHost("files", "explorer")).toBe(true);
     expect(panelSupportsHost("files", "main")).toBe(false);
     expect(panelSupportsHost("setup", "explorer")).toBe(false);
+    expect(panelSupportsHost("side", "explorer")).toBe(true);
+    expect(panelSupportsHost("side", "main")).toBe(false);
   });
 
   it("keeps durable resource identity separate from transient target input", () => {
@@ -20,5 +22,6 @@ describe("panel manifest", () => {
     expect(panelResourceKey({ kind: "file", path: "src/a.ts" })).not.toBe(
       panelResourceKey({ kind: "file", path: "src/b.ts" }),
     );
+    expect(panelResourceKey({ kind: "side" })).toBe("side:side");
   });
 });

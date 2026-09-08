@@ -40,6 +40,9 @@ export function mapOmpSlashCommands(commands: readonly OmpAvailableCommand[]): A
     OMP_HANDLED_BUILTIN_SLASH_COMMANDS.map((command) => [command.name, { ...command }]),
   );
   for (const command of commands) {
+    if (command.name.startsWith("__paseo_") || command.name.startsWith("paseo_")) {
+      continue;
+    }
     const knownCommand = mappedCommands.get(command.name);
     mappedCommands.set(command.name, {
       name: command.name,

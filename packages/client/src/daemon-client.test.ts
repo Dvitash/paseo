@@ -6225,3 +6225,81 @@ test("wire snapshot callers own expansion and receive hash references unchanged"
   );
   expect(await request).toEqual(body);
 });
+
+test.each(["get", "send", "stop"] as const)(
+  "Side %s correlates its response and returns persisted conversation state",
+  async (operation) => {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "side-chat",
+      reconnect: { enabled: false },
+      transportFactory: () => transport.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    transport.triggerOpen();
+    await connected;
+
+    const actions = {
+      get: () => client.getSideChat("main-1"),
+      send: () =>
+        client.sendSideChat("main-1", "What changed?", { provider: "codex", model: "astra" }),
+      stop: () => client.stopSideChat("main-1"),
+    };
+    const pending = actions[operation]();
+    const request = parseSentFrame(transport.sent.at(-1));
+    expect(request).toEqual({
+      type: `agent.side.${operation}.request`,
+      requestId: expect.any(String),
+      mainAgentId: "main-1",
+      ...(operation === "send" ? { text: "What changed?", provider: "codex", model: "astra" } : {}),
+    });
+    const chat = {
+      mainAgentId: "main-1",
+      sideAgentId: "side-1",
+      status: "idle",
+      error: null,
+      messages: [{ id: "reply-1", role: "assistant", text: "The parser changed." }],
+      steeringProposal: "Please test the parser.",
+    };
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: `agent.side.${operation}.response`,
+        payload: { requestId: request.requestId, chat, error: null },
+      }),
+    );
+    await expect(pending).resolves.toEqual(chat);
+  },
+);
+
+test("Side exposes host errors without losing their request identity", async () => {
+  const transport = createMockTransport();
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "side-error",
+    reconnect: { enabled: false },
+    transportFactory: () => transport.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  transport.triggerOpen();
+  await connected;
+  const pending = client.sendSideChat("main-1", "Explain the change");
+  const request = parseSentFrame(transport.sent.at(-1));
+  transport.triggerMessage(
+    wrapSessionMessage({
+      type: "agent.side.send.response",
+      payload: {
+        requestId: request.requestId,
+        chat: null,
+        error: "Provider unavailable",
+      },
+    }),
+  );
+  await expect(pending).rejects.toMatchObject({
+    name: "DaemonRpcError",
+    requestId: request.requestId,
+    message: "Provider unavailable",
+  });
+});

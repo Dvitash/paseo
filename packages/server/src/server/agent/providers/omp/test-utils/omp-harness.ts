@@ -446,6 +446,9 @@ export class OmpHarness {
   async setMode(modeId: string) {
     return await this.requireSession().setMode(modeId);
   }
+  describePersistence(): AgentPersistenceHandle | null {
+    return this.requireSession().describePersistence();
+  }
 
   async rewind(messageId: string, restoredPrompt: string): Promise<void> {
     this.omp.latestSession().branchResponse = { text: restoredPrompt };
@@ -465,6 +468,9 @@ export class OmpHarness {
     const promptStarted = this.omp.latestSession().nextPrompt();
     await this.requireSession().startTurn(message, options);
     await promptStarted;
+  }
+  async startTurn(message: string): Promise<unknown> {
+    return await this.requireSession().startTurn(message);
   }
 
   async interrupt(): Promise<void> {

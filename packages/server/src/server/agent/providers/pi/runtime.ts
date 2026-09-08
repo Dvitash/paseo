@@ -22,6 +22,8 @@ export interface PiRuntimeLaunch {
   mcpConfigPath?: string;
   extensionPaths?: string[];
   extraArgs?: string[];
+  readOnly?: boolean;
+  tools?: string[];
 }
 
 export interface PiStartSessionInput {
@@ -37,6 +39,8 @@ export interface PiStartSessionInput {
   mcpConfigPath?: string;
   extensionPaths?: string[];
   extraArgs?: string[];
+  readOnly?: boolean;
+  tools?: string[];
 }
 
 export interface PiRuntimeSession {
@@ -86,7 +90,11 @@ export function buildPiLaunch(input: {
     input.runtimeSettings?.command?.mode === "replace" && input.runtimeSettings.command.argv[0]
       ? input.runtimeSettings.command.argv
       : input.command;
-  const argv = [...command];
+  const binary = command[0];
+  const commandArgs = input.session.readOnly
+    ? sanitizePiReadOnlyExtraArgs(command.slice(1))
+    : command.slice(1);
+  const argv = [binary, ...commandArgs];
 
   const protocolMode = input.session.protocolMode ?? "rpc";
   appendPiLaunchArgs(argv, input.session, protocolMode);
@@ -110,6 +118,8 @@ export function buildPiLaunch(input: {
     mcpConfigPath: input.session.mcpConfigPath,
     extensionPaths: input.session.extensionPaths,
     extraArgs: input.session.extraArgs,
+    readOnly: input.session.readOnly,
+    tools: input.session.tools,
   };
 }
 
@@ -121,9 +131,48 @@ function appendPiLaunchArgs(
   if (!hasModeFlag(argv)) {
     argv.push("--mode", protocolMode);
   }
+  if (session.readOnly) {
+    appendPiReadOnlyLaunchArgs(argv, session);
+  } else {
+    appendPiNormalLaunchArgs(argv, session);
+  }
+}
+
+function appendPiReadOnlyLaunchArgs(argv: string[], session: PiStartSessionInput): void {
+  const defaultReadOnlyTools = ["read", "grep", "find", "ls"];
+  const tools =
+    session.tools && session.tools.length > 0
+      ? session.tools.filter((t) => !PI_MUTATING_TOOLS[t])
+      : defaultReadOnlyTools;
+  argv.push("--tools", tools.join(","));
+  argv.push("--no-extensions");
+  argv.push("--no-skills");
+  argv.push("--no-prompt-templates");
+  argv.push("--no-themes");
+  argv.push("--no-context-files");
+  for (const extensionPath of session.extensionPaths ?? []) {
+    argv.push("--extension", extensionPath);
+  }
+  if (session.extraArgs?.length) {
+    argv.push(...sanitizePiReadOnlyExtraArgs(session.extraArgs));
+  }
+  appendPiModelAndSessionArgs(argv, session);
+}
+
+function appendPiNormalLaunchArgs(argv: string[], session: PiStartSessionInput): void {
   if (session.extraArgs?.length) {
     argv.push(...session.extraArgs);
   }
+  appendPiModelAndSessionArgs(argv, session);
+  if (session.mcpConfigPath) {
+    argv.push("--mcp-config", session.mcpConfigPath);
+  }
+  for (const extensionPath of session.extensionPaths ?? []) {
+    argv.push("--extension", extensionPath);
+  }
+}
+
+function appendPiModelAndSessionArgs(argv: string[], session: PiStartSessionInput): void {
   if (session.model) {
     argv.push("--model", session.model);
   }
@@ -134,12 +183,6 @@ function appendPiLaunchArgs(
     argv.push("--no-session");
   } else if (session.session) {
     argv.push("--session", session.session);
-  }
-  if (session.mcpConfigPath) {
-    argv.push("--mcp-config", session.mcpConfigPath);
-  }
-  for (const extensionPath of session.extensionPaths ?? []) {
-    argv.push("--extension", extensionPath);
   }
 }
 
@@ -153,4 +196,70 @@ function hasModeFlag(argv: string[]): boolean {
     }
   }
   return false;
+}
+
+const PI_MUTATING_TOOLS: Record<string, true> = {
+  bash: true,
+  powershell: true,
+  edit: true,
+  write: true,
+};
+
+const PI_READONLY_DENIED_FLAGS: Record<string, true> = {
+  "--tools": true,
+  "-t": true,
+  "--exclude-tools": true,
+  "-xt": true,
+  "--no-builtin-tools": true,
+  "-nbt": true,
+  "--extension": true,
+  "-e": true,
+  "--no-extensions": true,
+  "-ne": true,
+  "--skill": true,
+  "--no-skills": true,
+  "-ns": true,
+  "--prompt-template": true,
+  "--no-prompt-templates": true,
+  "-np": true,
+  "--mcp-config": true,
+  "--mode": true,
+  "--theme": true,
+  "--use-theme": true,
+  "--no-themes": true,
+  "--no-context-files": true,
+  "-nc": true,
+};
+
+const PI_READONLY_VALUE_FLAGS: Record<string, true> = {
+  "--tools": true,
+  "-t": true,
+  "--exclude-tools": true,
+  "-xt": true,
+  "--extension": true,
+  "-e": true,
+  "--skill": true,
+  "--prompt-template": true,
+  "--mcp-config": true,
+  "--mode": true,
+  "--theme": true,
+  "--use-theme": true,
+};
+
+export function sanitizePiReadOnlyExtraArgs(args: readonly string[]): string[] {
+  const sanitized: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) continue;
+    const equalsIndex = arg.indexOf("=");
+    const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+    if (PI_READONLY_DENIED_FLAGS[flag]) {
+      if (equalsIndex === -1 && PI_READONLY_VALUE_FLAGS[flag]) {
+        i += 1;
+      }
+      continue;
+    }
+    sanitized.push(arg);
+  }
+  return sanitized;
 }

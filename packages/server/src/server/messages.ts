@@ -5,6 +5,7 @@ import type { AgentSnapshotPayload, AgentStreamEventPayload } from "@getpaseo/pr
 import { AgentStreamEventPayloadSchema as AgentStreamEventPayloadRuntimeSchema } from "@getpaseo/protocol/messages";
 
 export * from "@getpaseo/protocol/messages";
+export * from "@getpaseo/protocol/side";
 
 function validateStreamEventPayload(payload: unknown): AgentStreamEventPayload | null {
   const parsed = AgentStreamEventPayloadRuntimeSchema.safeParse(payload);

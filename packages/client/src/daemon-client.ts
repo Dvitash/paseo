@@ -1,5 +1,6 @@
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
+import type { SideChatSendOptions, SideChatSnapshot } from "@getpaseo/protocol/side";
 import {
   ConnectionSubscriptions,
   DEFAULT_CLIENT_CAPABILITIES,
@@ -908,6 +909,21 @@ class DaemonProtocolError extends Error {
     this.requestId = identity.requestId;
     this.responseType = identity.responseType;
   }
+}
+
+function unwrapSideChatResponse(
+  payload: CorrelatedResponsePayload<"agent.side.get.response">,
+): SideChatSnapshot {
+  if (payload.error !== null) {
+    throw new DaemonRpcError({ requestId: payload.requestId, error: payload.error });
+  }
+  if (payload.chat === null) {
+    throw new DaemonProtocolError({
+      requestId: payload.requestId,
+      responseType: "agent.side.get.response",
+    });
+  }
+  return payload.chat;
 }
 
 class PingTimeoutError extends Error {
@@ -3166,6 +3182,31 @@ export class DaemonClient {
     }
 
     return payload;
+  }
+
+  async getSideChat(mainAgentId: string): Promise<SideChatSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.side.get.response">({
+      message: { type: "agent.side.get.request", mainAgentId },
+    });
+    return unwrapSideChatResponse(payload);
+  }
+
+  async sendSideChat(
+    mainAgentId: string,
+    text: string,
+    options: SideChatSendOptions = {},
+  ): Promise<SideChatSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.side.send.response">({
+      message: { ...options, type: "agent.side.send.request", mainAgentId, text },
+    });
+    return unwrapSideChatResponse(payload);
+  }
+
+  async stopSideChat(mainAgentId: string): Promise<SideChatSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.side.stop.response">({
+      message: { type: "agent.side.stop.request", mainAgentId },
+    });
+    return unwrapSideChatResponse(payload);
   }
 
   // ============================================================================

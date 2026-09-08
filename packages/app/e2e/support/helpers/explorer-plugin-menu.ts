@@ -105,6 +105,7 @@ export async function openWorkspacePanelFromExplorerMenu(
   });
   await expect(menu.getByRole("menuitem")).toHaveText([
     "New tab",
+    "Side",
     "Changes",
     "Files",
     "Other review",

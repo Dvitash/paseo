@@ -305,6 +305,30 @@ describe("buildWorkspaceTabMenuEntries", () => {
       expect.objectContaining({ kind: "item", key: "copy-file-path" }),
     );
   });
+  it("uses a dedicated close id for the side tab", () => {
+    const actions = buildWorkspaceDesktopTabActions({
+      tab: {
+        key: "side",
+        tabId: "side",
+        kind: "side",
+        target: { kind: "side" },
+      },
+      index: 0,
+      tabCount: 1,
+      onCopyResumeCommand: vi.fn(),
+      onCopyAgentId: vi.fn(),
+      onCopyTerminalId: vi.fn(),
+      onCopyFilePath: vi.fn(),
+      onReloadAgent: vi.fn(),
+      onRenameTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onCloseTabsToLeft: vi.fn(),
+      onCloseTabsToRight: vi.fn(),
+      onCloseOtherTabs: vi.fn(),
+    });
+
+    expect(actions.closeButtonTestId).toBe("workspace-side-close");
+  });
 
   it("uses the same rename entry shape for agent and terminal tabs", () => {
     const terminalTab: WorkspaceTabDescriptor = {

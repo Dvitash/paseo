@@ -69,7 +69,8 @@ export class FakePi implements PiRuntime {
     });
     this.recordedLaunches.push(launch);
     const session = new FakePiSession(launch);
-    session.commands = this.queuedCommands.shift() ?? [];
+    session.commands =
+      this.queuedCommands.shift() ?? (input.readOnly ? [{ name: "__paseo_readonly_guard__" }] : []);
     this.queuedSessionSetups.shift()?.(session);
     this.sessions.push(session);
     return session;

@@ -134,6 +134,7 @@ import {
 } from "./agent/agent-sdk-types.js";
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
+import { getSideChatService, type SideChatService } from "./side/side-chat-service.js";
 import {
   ImportSessionsRequestError,
   importProviderSession,
@@ -755,6 +756,7 @@ export class Session {
   private readonly workspaceScripts: WorkspaceScriptsService;
   private readonly agentRequests: Pick<AgentRequests, "create" | "send">;
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
+  private readonly sideChatService: SideChatService;
 
   constructor(options: SessionOptions) {
     const {
@@ -1124,6 +1126,12 @@ export class Session {
       dictation,
     });
 
+    this.sideChatService = getSideChatService(
+      agentManager,
+      this.agentStorage,
+      paseoHome,
+      this.sessionLogger,
+    );
     this.subscribeToAgentEvents();
     this.subscribeToRegistryMutations();
 
@@ -2012,6 +2020,7 @@ export class Session {
       this.dispatchPluginMessage(msg) ??
       this.dispatchTerminalMessage(msg) ??
       this.dispatchScheduleMessage(msg) ??
+      this.dispatchSideChatMessage(msg) ??
       this.dispatchMiscMessage(msg);
     if (promise) await promise;
   }
@@ -2023,6 +2032,71 @@ export class Session {
       this.dispatchWorkspaceSetupMessage(msg) ??
       this.dispatchWorkspaceAndProjectMessage(msg)
     );
+  }
+  private dispatchSideChatMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    switch (msg.type) {
+      case "agent.side.get.request":
+        return this.sideChatService
+          .get(msg.mainAgentId)
+          .then((chat) => {
+            return this.emit({
+              type: "agent.side.get.response",
+              payload: { requestId: msg.requestId, chat, error: null },
+            });
+          })
+          .catch((error) => {
+            this.emit({
+              type: "agent.side.get.response",
+              payload: {
+                requestId: msg.requestId,
+                chat: null,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          });
+      case "agent.side.send.request": {
+        const sendOptions = { provider: msg.provider, model: msg.model };
+        return this.sideChatService
+          .send(msg.mainAgentId, msg.text, sendOptions)
+          .then((chat) => {
+            return this.emit({
+              type: "agent.side.send.response",
+              payload: { requestId: msg.requestId, chat, error: null },
+            });
+          })
+          .catch((error) => {
+            this.emit({
+              type: "agent.side.send.response",
+              payload: {
+                requestId: msg.requestId,
+                chat: null,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          });
+      }
+      case "agent.side.stop.request":
+        return this.sideChatService
+          .stop(msg.mainAgentId)
+          .then((chat) => {
+            return this.emit({
+              type: "agent.side.stop.response",
+              payload: { requestId: msg.requestId, chat, error: null },
+            });
+          })
+          .catch((error) => {
+            this.emit({
+              type: "agent.side.stop.response",
+              payload: {
+                requestId: msg.requestId,
+                chat: null,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          });
+      default:
+        return undefined;
+    }
   }
 
   private dispatchOrchestrationSkillsMessage(
