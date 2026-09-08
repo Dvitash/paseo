@@ -321,13 +321,11 @@ function Invoke-PersonalUpdate {
         $dl = Invoke-Gh -CommandArgs @("run", "download", "$runId", "--repo", $Repo, "--name", $artName, "--dir", $tempDir) -TimeoutSeconds 600 -LocalAdapters $LocalAdapters
         if ($dl.ExitCode -ne 0) { throw "Failed downloading artifact: $($dl.Stdout)" }
 
-        $exes = @(if ($LocalAdapters -and $LocalAdapters.ContainsKey("GetExes")) {
-            & $LocalAdapters["GetExes"] $tempDir
-        } else {
-            Get-ChildItem -Path $tempDir -Filter "*.exe" -File
-        })
-        if ($exes.Count -ne 1) { throw "Expected 1 installer executable in artifact, found $($exes.Count)." }
-        $installer = if ($exes[0] -is [string]) { $exes[0] } else { $exes[0].FullName }
+        # electron-builder may include ARM64 and combined NSIS installers as well.
+        # Match win.artifactName for the requested architecture, never an arbitrary exe.
+        $exes = @(Get-ChildItem -LiteralPath $tempDir -Filter "Paseo-Setup-*-x64.exe" -File)
+        if ($exes.Count -ne 1) { throw "Expected 1 x64 NSIS installer (Paseo-Setup-*-x64.exe) in artifact, found $($exes.Count)." }
+        $installer = $exes[0].FullName
 
         Stop-PaseoForInstall -TargetDir $targetDir -LocalAdapters $LocalAdapters
 

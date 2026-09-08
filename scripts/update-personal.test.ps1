@@ -264,6 +264,16 @@ try {
     # ---------------------------------------------------------------------------
     Write-Host "`n--- Test Suite 4: End-to-End Flow & Status Matching ---"
 
+    # Actual artifact layout from personal update run 34281333436.
+    $installerName = "Paseo-Setup-0.8.0-beta.1-x64.exe"
+    $artifactFiles = @(
+        "Paseo-Setup-0.8.0-beta.1-arm64.exe",
+        "Paseo-Setup-0.8.0-beta.1-arm64.zip",
+        $installerName,
+        "Paseo-Setup-0.8.0-beta.1-x64.zip",
+        "Paseo-Setup-0.8.0-beta.1.exe"
+    )
+
     $flowState = @{
         DispatchedArgs = $null
         InstallerArg = $null
@@ -274,11 +284,11 @@ try {
     $mockAdapters = @{
         Guid = { return "test-fixed-uuid" }
         GetProcesses = { return @([PSCustomObject]@{ Path = $appExe }) }
-        StopProcesses = { param($Processes) }
-        GetExes = { param($Dir) return @($appExe) }
+        StopProcesses = { param($Processes) $flowState.Stopped = $true }
         LaunchDesktop = { param($Path) $flowState.Launched = $Path }
         RunInstaller = {
             param($Exe, $ArgStr)
+            $flowState.InstallerExe = $Exe
             $flowState.InstallerArg = $ArgStr
             return 0
         }
@@ -322,6 +332,9 @@ try {
                 return @{ ExitCode = 0; Stdout = ($view | ConvertTo-Json) }
             }
             if ($sub -eq "run" -and $CommandArgs[1] -eq "download") {
+                foreach ($name in $artifactFiles) {
+                    New-Item -ItemType File -Path (Join-Path $CommandArgs[-1] $name) -Force | Out-Null
+                }
                 return @{ ExitCode = 0; Stdout = "" }
             }
             if ($sub -eq "api" -and $CommandArgs[1] -match "statuses") {
@@ -340,6 +353,7 @@ try {
     Assert-True ($flowState.DispatchedArgs -contains "desktop=windows-x64") "Dispatched with desktop=windows-x64"
     Assert-True ($flowState.DispatchedArgs -contains "request_id=test-fixed-uuid") "Dispatched with request_id"
     Assert-True ($flowState.InstallerArg -match "/S /currentuser /D=") "Installer called with /S /currentuser /D="
+    Assert-Equal ([System.IO.Path]::GetFileName($flowState.InstallerExe)) $installerName "Selects the x64 installer from the actual multi-architecture artifact layout"
     Assert-True $flowState.TargetExeVerified "Target executable presence verified"
     Assert-Equal $flowState.Launched $appExe "Relaunches GUI only after both updates succeed"
     Assert-Equal $flowState.ViewRunId "999" "Selects a scalar run ID from a real multi-run JSON array"
@@ -358,12 +372,27 @@ try {
     Assert-True ($null -eq $flowState.ViewRunId) "No build query is sent after an invalid ID"
     $flowState.InvalidRunId = $false
 
+    $completeArtifactFiles = $artifactFiles
+    $artifactFiles = @($completeArtifactFiles | Where-Object { $_ -ne $installerName })
+    $flowState.Stopped = $false
+    $flowState.InstallerExe = $null
+    Assert-Throws {
+        Invoke-PersonalUpdate -ExistingRequestId "test-fixed-uuid" -LocalAdapters $mockAdapters
+    } "Expected 1 x64 NSIS installer.*found 0" "Rejects artifacts containing only ARM64 and combined installers"
+    Assert-True (-not $flowState.Stopped -and $null -eq $flowState.InstallerExe) "Missing x64 installer leaves the desktop untouched"
+
+    $artifactFiles = @($completeArtifactFiles) + @("Paseo-Setup-0.8.0-beta.2-x64.exe")
+    Assert-Throws {
+        Invoke-PersonalUpdate -ExistingRequestId "test-fixed-uuid" -LocalAdapters $mockAdapters
+    } "Expected 1 x64 NSIS installer.*found 2" "Rejects ambiguous x64 installers instead of choosing the first"
+    Assert-True (-not $flowState.Stopped -and $null -eq $flowState.InstallerExe) "Ambiguous installers leave the desktop untouched"
+    $artifactFiles = $completeArtifactFiles
+
     # Test partial failure if desktop installer fails after dispatch
     $failingInstallAdapters = @{
         Guid = { return "test-fail-uuid" }
         GetProcesses = { return @([PSCustomObject]@{ Path = $appExe }) }
         StopProcesses = { param($Processes) }
-        GetExes = { param($Dir) return @($appExe) }
         RunInstaller = {
             param($Exe, $ArgStr)
             return 1 # Installer failed!
@@ -379,7 +408,10 @@ try {
             if ($sub -eq "run" -and $CommandArgs[1] -eq "view") {
                 return @{ ExitCode = 0; Stdout = (@{ status = "completed"; conclusion = "success" } | ConvertTo-Json) }
             }
-            if ($sub -eq "run" -and $CommandArgs[1] -eq "download") { return @{ ExitCode = 0; Stdout = "" } }
+            if ($sub -eq "run" -and $CommandArgs[1] -eq "download") {
+                New-Item -ItemType File -Path (Join-Path $CommandArgs[-1] $installerName) -Force | Out-Null
+                return @{ ExitCode = 0; Stdout = "" }
+            }
             return @{ ExitCode = 0; Stdout = "" }
         }
     }
