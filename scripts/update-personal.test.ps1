@@ -65,10 +65,14 @@ $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) "paseo-ps-tests-$([Sy
 New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
 
 $appDir = Join-Path $fixtureRoot "App"
-    # Platform check test (on Linux, non-Windows without adapters throws)
+if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    Assert-WindowsPlatform -LocalAdapters @{}
+    Assert-True $true "Native Windows platform accepted"
+} else {
     Assert-Throws {
         Assert-WindowsPlatform -LocalAdapters @{}
-    } "designed for Windows" "Assert-WindowsPlatform fails closed on non-Windows without adapters"
+    } "designed for Windows" "Rejects non-Windows without adapters"
+}
 
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 $appExe = Join-Path $appDir "Paseo.exe"
@@ -152,6 +156,22 @@ try {
         }
     }
     Assert-Equal $hkcuRes.Scope "currentuser" "Preserves currentuser scope from HKCU install"
+
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        $savedGuid = $NsisGuid
+        $NsisGuid = [System.Guid]::NewGuid().ToString("D")
+        $testKey = "HKCU:\Software\$NsisGuid"
+        try {
+            New-Item -Path $testKey -ErrorAction Stop | Out-Null
+            New-ItemProperty -LiteralPath $testKey -Name InstallLocation -Value $appDir -PropertyType String -ErrorAction Stop | Out-Null
+            $nativeTarget = Find-ExistingInstallDir -LocalAdapters @{ GetProcesses = { return @() } }
+            Assert-Equal $nativeTarget.Path $appDir "Reads real NSIS InstallLocation registry key"
+            Assert-Equal $nativeTarget.Scope "currentuser" "Reads native per-user installation scope"
+        } finally {
+            Remove-Item -LiteralPath $testKey -Recurse -Force -ErrorAction SilentlyContinue
+            $NsisGuid = $savedGuid
+        }
+    }
 
     # Regression: running custom-path HKLM install (not Program Files) preserves allusers scope
     $customMachDir = Join-Path $fixtureRoot "CustomMachineApp"

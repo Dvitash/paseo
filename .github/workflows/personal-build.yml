@@ -119,15 +119,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - name: Install dependencies
-        run: node scripts/npm-retry.mjs ci
-
       - name: Test Windows update command
         if: ${{ inputs.desktop == 'windows-x64' }}
         shell: powershell
@@ -136,6 +127,15 @@ jobs:
           $probe = Invoke-Gh -CommandArgs @("--version")
           if ($probe.ExitCode -ne 0) { throw "Native gh invocation failed" }
           ./scripts/update-personal.test.ps1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: node scripts/npm-retry.mjs ci
 
       - name: Build desktop application
         shell: bash

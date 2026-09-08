@@ -78,16 +78,21 @@ function Invoke-Gh {
     return @{ ExitCode = $proc.ExitCode; Stdout = $stdout }
 }
 
+function Get-NsisRegistryLocations {
+    # InstallLocation is stored separately from Windows' uninstall metadata.
+    return @(
+        @{ Key = "HKLM:\Software\$NsisGuid"; Scope = "allusers" },
+        @{ Key = "HKLM:\Software\WOW6432Node\$NsisGuid"; Scope = "allusers" },
+        @{ Key = "HKCU:\Software\$NsisGuid"; Scope = "currentuser" }
+    )
+}
+
 function Get-RegistryScopeForDir {
     param(
         [string]$Dir,
         [hashtable]$LocalAdapters
     )
-    $regPaths = @(
-        @{ Key = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$NsisGuid"; Scope = "allusers" },
-        @{ Key = "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$NsisGuid"; Scope = "allusers" },
-        @{ Key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$NsisGuid"; Scope = "currentuser" }
-    )
+    $regPaths = Get-NsisRegistryLocations
     foreach ($entry in $regPaths) {
         $loc = if ($LocalAdapters -and $LocalAdapters.ContainsKey("GetRegLoc")) {
             & $LocalAdapters["GetRegLoc"] $entry.Key
@@ -119,11 +124,7 @@ function Find-ExistingInstallDir {
     $candidates = New-Object System.Collections.Generic.List[hashtable]
 
     # 1. Inspect electron-builder derived NSIS GUID in registry (authoritative)
-    $regPaths = @(
-        @{ Key = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$NsisGuid"; Scope = "allusers" },
-        @{ Key = "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$NsisGuid"; Scope = "allusers" },
-        @{ Key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$NsisGuid"; Scope = "currentuser" }
-    )
+    $regPaths = Get-NsisRegistryLocations
     foreach ($entry in $regPaths) {
         $loc = if ($LocalAdapters -and $LocalAdapters.ContainsKey("GetRegLoc")) {
             & $LocalAdapters["GetRegLoc"] $entry.Key
