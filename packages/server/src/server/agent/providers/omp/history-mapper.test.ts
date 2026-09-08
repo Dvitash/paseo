@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -193,6 +193,94 @@ describe("OMP history mapper", () => {
       },
     ]);
   });
+  test("renders replayed OMP incoming IRC messages as synthetic tool-call blocks", async () => {
+    await expect(
+      collectHistory([
+        {
+          role: "custom",
+          content: [
+            {
+              type: "text",
+              text: [
+                "<irc>",
+                "Incoming IRC message from agent `LaptopTrace` (reply to msg-0):",
+                "",
+                "Preliminary status for daniel-laptop: SSH reachable.",
+                "",
+                "Sent while waiting/working. Active interruptible wait stopped early for immediate reading.",
+                "",
+                'If response expected, reply via `hub` (`op: "send"`, `to: "LaptopTrace"`); may finish current step first. No one replies on your behalf.',
+                "</irc>",
+              ].join("\n"),
+            },
+          ],
+          customType: "irc:incoming",
+          id: "irc-entry-1",
+          display: true,
+          details: {
+            id: "1577717e086b65fc",
+            from: "LaptopTrace",
+            message: "Preliminary status for daniel-laptop: SSH reachable.",
+            replyTo: "msg-0",
+          },
+        },
+      ]),
+    ).resolves.toEqual([
+      {
+        type: "timeline",
+        provider: "omp",
+        item: {
+          type: "tool_call",
+          callId: "omp-irc:1577717e086b65fc",
+          name: "irc",
+          status: "completed",
+          detail: {
+            type: "plain_text",
+            label: "From LaptopTrace · reply to msg-0",
+            text: "Preliminary status for daniel-laptop: SSH reachable.",
+            icon: "bot",
+          },
+          metadata: {
+            synthetic: true,
+            source: "omp_irc",
+            from: "LaptopTrace",
+            replyTo: "msg-0",
+            kind: "incoming",
+          },
+          error: null,
+        },
+      },
+    ]);
+  });
+
+  test("preserves replayed user messages containing irc tags as normal user messages", async () => {
+    await expect(
+      collectHistory(
+        [
+          {
+            role: "user",
+            content: "What does <irc>Incoming IRC message from agent</irc> mean in OMP?",
+          },
+        ],
+        [
+          {
+            id: "user-irc-tag",
+            text: "What does <irc>Incoming IRC message from agent</irc> mean in OMP?",
+          },
+        ],
+      ),
+    ).resolves.toEqual([
+      {
+        type: "timeline",
+        provider: "omp",
+        item: {
+          type: "user_message",
+          text: "What does <irc>Incoming IRC message from agent</irc> mean in OMP?",
+          messageId: "user-irc-tag",
+        },
+      },
+    ]);
+  });
 
   test("omits replayed custom messages only when display is false", async () => {
     await expect(
@@ -366,6 +454,76 @@ describe("OMP history mapper", () => {
         },
       },
     });
+  });
+
+  test("replays native IRC entries with distinct stable identities and honors hidden deliveries", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omp-irc-history-"));
+    const sessionFile = join(dir, "session.jsonl");
+    const content = "<irc>\nIncoming IRC message from agent `Worker`:\n\nDone.\n</irc>";
+    const entries = [
+      { type: "session", id: "root", parentId: null },
+      {
+        type: "custom_message",
+        customType: "irc:incoming",
+        id: "irc-one",
+        parentId: "root",
+        content,
+      },
+      {
+        type: "custom_message",
+        customType: "irc:incoming",
+        id: "irc-two",
+        parentId: "irc-one",
+        content,
+      },
+      {
+        type: "custom_message",
+        customType: "irc:incoming",
+        id: "irc-hidden",
+        parentId: "irc-two",
+        content,
+        display: false,
+      },
+      {
+        type: "message",
+        id: "irc-nested",
+        parentId: "irc-hidden",
+        message: { role: "custom", customType: "irc:incoming", content },
+      },
+      {
+        type: "custom_message",
+        customType: "irc:incoming",
+        id: "irc-structured",
+        parentId: "irc-nested",
+        content,
+        details: { id: "delivery-id", from: "Worker", message: "Done." },
+      },
+    ];
+    try {
+      writeFileSync(sessionFile, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+      const events: AgentStreamEvent[] = [];
+      for await (const event of streamOmpHistory({ sessionFile, provider: "omp" })) {
+        events.push(event);
+      }
+      expect(events).toMatchObject(
+        ["irc-one", "irc-two", "irc-nested", "delivery-id"].map((id) => ({
+          type: "timeline",
+          provider: "omp",
+          item: {
+            type: "tool_call",
+            callId: `omp-irc:${id}`,
+            detail: { type: "plain_text", label: "From Worker", text: "Done." },
+          },
+        })),
+      );
+      const replayed: AgentStreamEvent[] = [];
+      for await (const event of streamOmpHistory({ sessionFile, provider: "omp" })) {
+        replayed.push(event);
+      }
+      expect(replayed).toEqual(events);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("maps only the active JSONL chain with native user ids and visible unknown roles", async () => {

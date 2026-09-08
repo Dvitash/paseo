@@ -187,6 +187,66 @@ describe("OMP agent client and session", () => {
     expect(omp.completedTurnCount()).toBe(1);
   });
 
+  test.each([undefined, "late-response-id"])(
+    "keeps early assistant text in one message when message_start arrives late (responseId=%s)",
+    async (responseId) => {
+      const omp = new OmpHarness();
+      await omp.start();
+      await omp.requireStartTurn("update the block counter");
+      const runtime = omp.runtime();
+      runtime.beginTurn();
+      runtime.emit({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: { type: "text_delta", delta: "I" },
+      });
+      const [firstChunk] = omp.timeline();
+      expect(firstChunk).toEqual({
+        type: "assistant_message",
+        text: "I",
+        messageId: expect.any(String),
+      });
+      if (firstChunk?.type !== "assistant_message") {
+        throw new Error("Expected the initial assistant chunk");
+      }
+
+      runtime.emit({
+        type: "message_start",
+        message: { role: "assistant", content: [], responseId },
+      });
+      runtime.emit({
+        type: "message_update",
+        message: { role: "assistant", content: [], responseId },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "'ll tie the block counter to debris.",
+        },
+      });
+      runtime.emit({
+        type: "message_end",
+        message: { role: "assistant", content: [], responseId },
+      });
+      runtime.streamAssistantText("A separate response.", "next-response-id");
+
+      expect(omp.timeline()).toEqual([
+        firstChunk,
+        {
+          type: "assistant_message",
+          text: "'ll tie the block counter to debris.",
+          messageId: firstChunk.messageId,
+        },
+        {
+          type: "assistant_message",
+          text: "A separate response.",
+          messageId: "next-response-id",
+        },
+      ]);
+      runtime.finishTurn();
+      await waitForImmediate();
+      await omp.close();
+    },
+  );
+
   test("streams OMP advisor messages as distinct tool-call blocks", async () => {
     const omp = new OmpHarness();
     await omp.start();
@@ -229,6 +289,61 @@ describe("OMP agent client and session", () => {
       },
       { type: "assistant_message", text: "fixed", messageId: "omp-assistant-1" },
     ]);
+  });
+
+  test("renders incoming IRC as an agent-message card without exposing its harness envelope", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    const content = [
+      "<irc>",
+      "Incoming IRC message from agent `WireGenerationCosts`:",
+      "",
+      "Fixed the cost calculation.\n\n- Kept the typed inputs.",
+      "",
+      "Sent while waiting/working. Active interruptible wait stopped early for immediate reading.",
+      "",
+      'If response expected, reply via `hub` (`op: "send"`, `to: "WireGenerationCosts"`); may finish current step first. No one replies on your behalf.',
+      "</irc>",
+    ].join("\n");
+    await omp.runPromptWithCustomMessage(
+      "review costs",
+      {
+        role: "custom",
+        customType: "irc:incoming",
+        id: "irc-live",
+        content,
+        display: true,
+      },
+      "Reviewed.",
+    );
+    omp.runtime().emit({
+      type: "message_end",
+      message: { role: "custom", customType: "irc:incoming", content, display: false },
+    });
+    expect(omp.timeline()).toEqual([
+      { type: "user_message", text: "review costs", messageId: "user-1" },
+      {
+        type: "tool_call",
+        callId: "omp-irc:irc-live",
+        name: "irc",
+        status: "completed",
+        detail: {
+          type: "plain_text",
+          label: "From WireGenerationCosts",
+          text: "Fixed the cost calculation.\n\n- Kept the typed inputs.",
+          icon: "bot",
+        },
+        metadata: {
+          synthetic: true,
+          source: "omp_irc",
+          from: "WireGenerationCosts",
+          kind: "incoming",
+        },
+        error: null,
+      },
+      { type: "assistant_message", text: "Reviewed.", messageId: "omp-assistant-1" },
+    ]);
+    await omp.close();
   });
 
   test("completes a streamed assistant turn when agent_end omits messages", async () => {
@@ -349,6 +464,75 @@ describe("OMP agent client and session", () => {
       omp.runPromptAfterExtensionNotice("hello OMP", "model turn completed"),
     ).resolves.toMatchObject({ finalText: expect.stringContaining("model turn completed") });
     expect(omp.completedTurnCount()).toBe(1);
+  });
+
+  test.each([true, false])(
+    "preserves prompt correlation when a custom notice arrives before the user echo (display=%s)",
+    async (display) => {
+      const omp = new OmpHarness();
+      await omp.start();
+      await omp.requireStartTurn("list all the skills you can access here", {
+        clientMessageId: "submitted-skills",
+      });
+
+      const runtime = omp.runtime();
+      runtime.emit({
+        type: "message_end",
+        message: {
+          role: "custom",
+          customType: "xdev-mount-notice",
+          content: "Tool inventory changed",
+          display,
+        },
+      });
+      expect(omp.completedTurnCount()).toBe(0);
+
+      runtime.beginTurn();
+      runtime.branchMessages = [
+        { entryId: "native-skills", text: "list all the skills you can access here" },
+      ];
+      runtime.emit({
+        type: "message_end",
+        message: { role: "user", content: "list all the skills you can access here" },
+      });
+      await waitForImmediate();
+      expect(omp.timeline().filter((item) => item.type === "user_message")).toEqual([
+        {
+          type: "user_message",
+          text: "list all the skills you can access here",
+          messageId: "native-skills",
+          clientMessageId: "submitted-skills",
+        },
+      ]);
+
+      runtime.streamAssistantText("Here are the skills.");
+      runtime.finishTurn();
+      await waitForImmediate();
+      expect(omp.completedTurnCount()).toBe(1);
+      await omp.close();
+    },
+  );
+
+  test("settles a local-only custom response through the prompt acknowledgement", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    const runtime = omp.runtime();
+    runtime.promptAck = { agentInvoked: false };
+    await omp.requireStartTurn("/extension-status", { clientMessageId: "submitted-status" });
+    runtime.acceptCustomMessage("Extension is ready");
+    expect(omp.completedTurnCount()).toBe(0);
+
+    await waitForImmediate();
+    expect(omp.completedTurnCount()).toBe(1);
+    expect(omp.timeline()).toEqual([
+      { type: "assistant_message", text: "Extension is ready" },
+      {
+        type: "user_message",
+        text: "/extension-status",
+        clientMessageId: "submitted-status",
+      },
+    ]);
+    await omp.close();
   });
 
   test("omits live custom messages when display is false", async () => {

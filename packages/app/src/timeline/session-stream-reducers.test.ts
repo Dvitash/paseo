@@ -18,6 +18,12 @@ import {
   type AgentStreamReducerEvent,
   type TimelineCursor,
 } from "./session-stream-reducers";
+import { layoutStream } from "@/agent-stream/layout";
+import {
+  orderHeadForStreamRenderStrategy,
+  orderTailForStreamRenderStrategy,
+} from "@/agent-stream/strategy";
+import { resolveStreamRenderStrategy } from "@/agent-stream/strategy-resolver";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -3944,6 +3950,134 @@ describe("processAgentStreamEvents", () => {
       text: "Hello",
       messageId: "assistant-one",
     });
+  });
+
+  it.each([
+    { platform: "web", isMobileBreakpoint: false, name: "web wide" },
+    { platform: "android", isMobileBreakpoint: true, name: "native compact" },
+  ] as const)(
+    "keeps same-id assistant chunks unified across sequential leading and trailing flush batches on $name",
+    ({ platform, isMobileBreakpoint }) => {
+      const strategy = resolveStreamRenderStrategy({ platform, isMobileBreakpoint });
+      const layout = (items: { tail: StreamItem[]; head: StreamItem[] }, isTurnActive: boolean) =>
+        layoutStream({
+          strategy,
+          isTurnActive,
+          history: orderTailForStreamRenderStrategy({ strategy, streamItems: items.tail }),
+          liveHead: orderHeadForStreamRenderStrategy({ strategy, streamHead: items.head }),
+          timingByAssistantId: new Map(),
+        });
+
+      const leadingBatch = processAgentStreamEvents({
+        events: [makeStreamReducerEvent(makeAssistantTimelineEvent("I", "resp-1"), 1)],
+        currentTail: [],
+        currentHead: [],
+        currentCursor: undefined,
+      });
+      expect(leadingBatch.tail).toEqual([]);
+      expect(leadingBatch.head).toMatchObject([{ text: "I", messageId: "resp-1" }]);
+
+      const trailingBatch = processAgentStreamEvents({
+        events: [
+          makeStreamReducerEvent(
+            makeAssistantTimelineEvent("’ll tie the block counter", "resp-1"),
+            2,
+          ),
+        ],
+        currentTail: leadingBatch.tail,
+        currentHead: leadingBatch.head,
+        currentCursor: leadingBatch.cursor ?? undefined,
+      });
+      expect(trailingBatch.tail).toEqual([]);
+      expect(trailingBatch.head).toMatchObject([
+        { text: "I’ll tie the block counter", messageId: "resp-1" },
+      ]);
+
+      const streamingAssistantRows = [
+        ...layout(trailingBatch, true).history,
+        ...layout(trailingBatch, true).liveHead,
+      ].filter((row) => row.item.kind === "assistant_message");
+      expect(streamingAssistantRows).toHaveLength(1);
+      expect(streamingAssistantRows[0]?.item).toMatchObject({ text: "I’ll tie the block counter" });
+
+      const completedTurn = processAgentStreamEvent({
+        ...baseStreamInput,
+        event: { type: "turn_completed", provider: "claude" } as AgentStreamEventPayload,
+        currentTail: trailingBatch.tail,
+        currentHead: trailingBatch.head,
+        currentCursor: trailingBatch.cursor ?? undefined,
+      });
+      expect(getAssistantTexts(completedTurn.tail)).toEqual(["I’ll tie the block counter"]);
+      expect(completedTurn.head).toEqual([]);
+
+      const completedAssistantRows = layout(completedTurn, false).history.filter(
+        (row) => row.item.kind === "assistant_message",
+      );
+      expect(completedAssistantRows).toHaveLength(1);
+      expect(completedAssistantRows[0]?.item).toMatchObject({ text: "I’ll tie the block counter" });
+    },
+  );
+
+  it("splits assistant chunks into separate layout messages when message id changes between flushes", () => {
+    const strategy = resolveStreamRenderStrategy({ platform: "web", isMobileBreakpoint: false });
+    const layout = (items: { tail: StreamItem[]; head: StreamItem[] }, isTurnActive: boolean) =>
+      layoutStream({
+        strategy,
+        isTurnActive,
+        history: orderTailForStreamRenderStrategy({ strategy, streamItems: items.tail }),
+        liveHead: orderHeadForStreamRenderStrategy({ strategy, streamHead: items.head }),
+        timingByAssistantId: new Map(),
+      });
+
+    const leadingBatch = processAgentStreamEvents({
+      events: [makeStreamReducerEvent(makeAssistantTimelineEvent("I", "uuid-initial"), 1)],
+      currentTail: [],
+      currentHead: [],
+      currentCursor: undefined,
+    });
+    expect(leadingBatch.head).toMatchObject([{ text: "I", messageId: "uuid-initial" }]);
+
+    const trailingBatch = processAgentStreamEvents({
+      events: [
+        makeStreamReducerEvent(
+          makeAssistantTimelineEvent("’ll tie the block counter", "resp-canonical"),
+          2,
+        ),
+      ],
+      currentTail: leadingBatch.tail,
+      currentHead: leadingBatch.head,
+      currentCursor: leadingBatch.cursor ?? undefined,
+    });
+    expect(getAssistantTexts(trailingBatch.tail)).toEqual(["I"]);
+    expect(getAssistantTexts(trailingBatch.head)).toEqual(["’ll tie the block counter"]);
+
+    const streamingAssistantRows = [
+      ...layout(trailingBatch, true).history,
+      ...layout(trailingBatch, true).liveHead,
+    ].filter((row) => row.item.kind === "assistant_message");
+    expect(streamingAssistantRows).toHaveLength(2);
+    expect(streamingAssistantRows.map((row) => row.item)).toMatchObject([
+      { text: "I" },
+      { text: "’ll tie the block counter" },
+    ]);
+
+    const completedTurn = processAgentStreamEvent({
+      ...baseStreamInput,
+      event: { type: "turn_completed", provider: "claude" } as AgentStreamEventPayload,
+      currentTail: trailingBatch.tail,
+      currentHead: trailingBatch.head,
+      currentCursor: trailingBatch.cursor ?? undefined,
+    });
+    expect(getAssistantTexts(completedTurn.tail)).toEqual(["I", "’ll tie the block counter"]);
+
+    const completedAssistantRows = layout(completedTurn, false).history.filter(
+      (row) => row.item.kind === "assistant_message",
+    );
+    expect(completedAssistantRows).toHaveLength(2);
+    expect(completedAssistantRows.map((row) => row.item)).toMatchObject([
+      { text: "I" },
+      { text: "’ll tie the block counter" },
+    ]);
   });
 
   it("flushes the live assistant head before starting a different assistant message id", () => {

@@ -95,6 +95,7 @@ import { streamOmpHistory } from "./history.js";
 import { mapOmpTodoReminderEvent, mapOmpTodoState, mapOmpTodoToolResult } from "./todo-mapper.js";
 import { mapOmpRuntimeEventToTimelineItem } from "./event-mapper.js";
 import { mapOmpAdvisorMessageToToolCall } from "./advisor-message.js";
+import { mapOmpIrcMessageToToolCall } from "./irc-message.js";
 import {
   clearOmpHostToolState,
   handleOmpHostToolRuntimeEvent,
@@ -1998,7 +1999,8 @@ export class OmpAgentSession implements AgentSession {
     event: Extract<OmpAgentSessionEvent, { type: "message_start" }>,
   ): void {
     if (event.message.role === "assistant") {
-      this.activeAssistantMessageId = event.message.responseId || null;
+      // An early delta may already have established the visible message identity.
+      this.activeAssistantMessageId ??= event.message.responseId || null;
     }
   }
 
@@ -2019,6 +2021,7 @@ export class OmpAgentSession implements AgentSession {
         if (text) {
           const item =
             mapOmpAdvisorMessageToToolCall(event.message, text) ??
+            mapOmpIrcMessageToToolCall(event.message, text) ??
             mapOmpSystemNoticeToNotification(text);
           this.emit({
             type: "timeline",
@@ -2027,9 +2030,6 @@ export class OmpAgentSession implements AgentSession {
             item: item ?? { type: "assistant_message", text },
           });
         }
-      }
-      if (!this.activeTurnHasUserMessage) {
-        this.completeTurn(turnId, []);
       }
       return;
     }

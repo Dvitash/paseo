@@ -7,6 +7,7 @@ import pino from "pino";
 import type {
   AgentPersistenceHandle,
   AgentPermissionResponse,
+  AgentRunOptions,
   AgentSessionConfig,
   AgentStreamEvent,
   AgentTimelineItem,
@@ -460,9 +461,9 @@ export class OmpHarness {
     await this.requireSession().interrupt();
   }
 
-  async requireStartTurn(message: string): Promise<void> {
+  async requireStartTurn(message: string, options?: AgentRunOptions): Promise<void> {
     const promptStarted = this.omp.latestSession().nextPrompt();
-    await this.requireSession().startTurn(message);
+    await this.requireSession().startTurn(message, options);
     await promptStarted;
   }
 
