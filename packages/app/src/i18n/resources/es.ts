@@ -1248,6 +1248,10 @@ export const es: TranslationResources = {
       worktree: "Nuevo worktree",
       label: "Aislamiento",
     },
+    worktreeName: {
+      label: "Nombre del worktree",
+      placeholder: "Nombre del worktree (opcional)",
+    },
     fields: {
       project: "Proyecto",
       base: "Base",

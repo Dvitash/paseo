@@ -1226,6 +1226,10 @@ export const ja: TranslationResources = {
       worktree: "新しいワークツリー",
       label: "分離方法",
     },
+    worktreeName: {
+      label: "ワークツリー名",
+      placeholder: "ワークツリー名（任意）",
+    },
     fields: {
       project: "プロジェクト",
       base: "ベース",

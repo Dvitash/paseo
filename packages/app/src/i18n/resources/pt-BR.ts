@@ -1239,6 +1239,10 @@ export const ptBR: TranslationResources = {
       worktree: "Novo worktree",
       label: "Isolamento",
     },
+    worktreeName: {
+      label: "Nome do worktree",
+      placeholder: "Nome do worktree (opcional)",
+    },
     fields: {
       project: "Projeto",
       base: "Base",

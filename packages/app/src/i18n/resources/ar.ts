@@ -1214,6 +1214,10 @@ export const ar: TranslationResources = {
       worktree: "شجرة عمل جديدة",
       label: "العزل",
     },
+    worktreeName: {
+      label: "اسم شجرة العمل",
+      placeholder: "اسم شجرة العمل (اختياري)",
+    },
     fields: {
       project: "المشروع",
       base: "الأساس",

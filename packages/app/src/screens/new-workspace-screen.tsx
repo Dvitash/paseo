@@ -8,6 +8,8 @@ import type { PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { createNameId } from "mnemonic-id";
+import { Field, FormTextInput } from "@/components/ui/form-field";
+import { slugify, validateBranchSlug } from "@getpaseo/protocol/branch-slug";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Folder, FolderPlus, GitBranch, GitPullRequest } from "lucide-react-native";
 import { Composer } from "@/composer";
@@ -684,6 +686,44 @@ function FormRow({ children }: { children: React.ReactNode }) {
   return <View style={styles.row}>{children}</View>;
 }
 
+interface WorktreeNameFieldProps {
+  canCreateWorktree: boolean;
+  isolation: "local" | "worktree";
+  name: string;
+  onChangeName: (name: string) => void;
+  isPending: boolean;
+}
+
+function WorktreeNameField({
+  canCreateWorktree,
+  isolation,
+  name,
+  onChangeName,
+  isPending,
+}: WorktreeNameFieldProps) {
+  const { t } = useTranslation();
+  const isCompact = useIsCompactFormFactor();
+  if (!canCreateWorktree || isolation !== "worktree") return null;
+
+  return (
+    <View style={styles.worktreeNameContainer}>
+      <Field label={t("newWorkspace.worktreeName.label")}>
+        <FormTextInput
+          size={isCompact ? "md" : "sm"}
+          testID="workspace-create-worktree-name-input"
+          accessibilityLabel={t("newWorkspace.worktreeName.label")}
+          initialValue={name}
+          onChangeText={onChangeName}
+          placeholder={t("newWorkspace.worktreeName.placeholder")}
+          editable={!isPending}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+      </Field>
+    </View>
+  );
+}
+
 interface WorkspaceIsolationState {
   isolation: "local" | "worktree";
   setIsolation: (value: "local" | "worktree") => void;
@@ -814,6 +854,7 @@ async function createMultiplicityWorkspace(input: {
   ) => void;
   serverId: string;
   createFailedMessage: string;
+  worktreeSlug?: string;
 }): Promise<ReturnType<typeof normalizeWorkspaceDescriptor>> {
   const projectId = getHostProjectId(input.project, input.serverId);
   if (!projectId) throw new Error("Project is not available on the selected host");
@@ -828,7 +869,7 @@ async function createMultiplicityWorkspace(input: {
           kind: "worktree",
           cwd: input.sourceDirectory,
           projectId,
-          worktreeSlug: createNameId(),
+          worktreeSlug: input.worktreeSlug || createNameId(),
           ...input.checkoutRequest,
         }
       : {
@@ -1580,6 +1621,7 @@ export function NewWorkspaceScreen({
     typeof normalizeWorkspaceDescriptor
   > | null>(null);
   const [pendingAction, setPendingAction] = useState<"chat" | "empty" | "terminal" | null>(null);
+  const [worktreeName, setWorktreeName] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const openAddProjectPicker = useOpenAddProject();
@@ -1940,6 +1982,7 @@ export function NewWorkspaceScreen({
       prompt: string;
       attachments: AgentAttachment[];
       checkoutRequest: PickerCheckoutRequest | undefined;
+      worktreeSlug?: string;
     }): CreatePaseoWorktreeInput => {
       if (!selectedProject) {
         throw new Error("Choose a project");
@@ -1956,7 +1999,7 @@ export function NewWorkspaceScreen({
       return {
         cwd: selectedSourceDirectory,
         projectId: hostProjectId,
-        worktreeSlug: createNameId(),
+        worktreeSlug: input.worktreeSlug || createNameId(),
         ...(firstAgentContext ? { firstAgentContext } : {}),
         ...input.checkoutRequest,
       };
@@ -1982,6 +2025,20 @@ export function NewWorkspaceScreen({
       }
       const connectedClient = withConnectedClient();
       const createsWorktree = !supportsWorkspaceMultiplicity || effectiveIsolation === "worktree";
+      let resolvedWorktreeSlug: string | undefined;
+      if (createsWorktree) {
+        const trimmed = worktreeName.trim();
+        if (trimmed) {
+          const slug = slugify(trimmed);
+          const validation = validateBranchSlug(slug);
+          if (!validation.valid) {
+            throw new Error(`Invalid worktree name: ${validation.error}`);
+          }
+          resolvedWorktreeSlug = slug;
+        } else {
+          resolvedWorktreeSlug = createNameId();
+        }
+      }
       const checkoutStatusForCreate = createsWorktree
         ? await ensureCheckoutStatus({
             queryClient,
@@ -2008,10 +2065,15 @@ export function NewWorkspaceScreen({
             mergeWorkspaces,
             serverId: selectedServerId,
             createFailedMessage: t("newWorkspace.errors.createWorktreeFailed"),
+            worktreeSlug: resolvedWorktreeSlug,
           })
         : await createAndMergeWorkspace({
             client: connectedClient,
-            createInput: buildCreateWorktreeInput({ ...input, checkoutRequest }),
+            createInput: buildCreateWorktreeInput({
+              ...input,
+              checkoutRequest,
+              worktreeSlug: resolvedWorktreeSlug,
+            }),
             mergeWorkspaces,
             serverId: selectedServerId,
             createFailedMessage: t("newWorkspace.errors.createWorktreeFailed"),
@@ -2032,6 +2094,7 @@ export function NewWorkspaceScreen({
       supportsWorkspaceMultiplicity,
       t,
       withConnectedClient,
+      worktreeName,
     ],
   );
 
@@ -2281,6 +2344,13 @@ export function NewWorkspaceScreen({
             <Text style={styles.composerTitle}>{t("newWorkspace.title")}</Text>
           </View>
           {formStack}
+          <WorktreeNameField
+            canCreateWorktree={canCreateWorktree}
+            isolation={effectiveIsolation}
+            name={worktreeName}
+            onChangeName={setWorktreeName}
+            isPending={isPending}
+          />
           {isTerminalLaunch ? (
             <Composer
               key="terminal"
@@ -2407,6 +2477,11 @@ const styles = StyleSheet.create((theme) => ({
   desktopControl: {
     minWidth: 0,
     flexShrink: 1,
+  },
+  worktreeNameContainer: {
+    paddingLeft: theme.spacing[4],
+    paddingRight: theme.spacing[4],
+    marginBottom: theme.spacing[6],
   },
   // The row's left inset matches the heading's text x (composerTitleContainer
   // paddingLeft) so the control aligns with the "New workspace" glyph. The badge

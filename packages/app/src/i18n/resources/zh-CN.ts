@@ -1203,6 +1203,10 @@ export const zhCN: TranslationResources = {
       worktree: "新建 worktree",
       label: "隔离",
     },
+    worktreeName: {
+      label: "Worktree 名称",
+      placeholder: "Worktree 名称（可选）",
+    },
     fields: {
       project: "项目",
       base: "基线",

@@ -1223,6 +1223,10 @@ export const en = {
       worktree: "New worktree",
       label: "Isolation",
     },
+    worktreeName: {
+      label: "Worktree name",
+      placeholder: "Worktree name (optional)",
+    },
     fields: {
       project: "Project",
       base: "Base",

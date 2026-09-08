@@ -1221,6 +1221,10 @@ export const ko: TranslationResources = {
       worktree: "새 워크트리",
       label: "격리",
     },
+    worktreeName: {
+      label: "워크트리 이름",
+      placeholder: "워크트리 이름 (선택 사항)",
+    },
     fields: {
       project: "프로젝트",
       base: "기준",

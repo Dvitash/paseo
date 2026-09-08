@@ -1,3 +1,4 @@
+import path from "node:path";
 import { test, expect, type Page } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import { gotoWorkspace } from "../support/helpers/launcher";
@@ -166,6 +167,107 @@ test.describe("Workspace multiplicity creation flow", () => {
         .archivePaseoWorktree({ worktreePath: worktree.workspaceDirectory })
         .catch(() => undefined);
     } finally {
+      await seeded.cleanup();
+    }
+  });
+
+  test("custom worktree names are used for the directory and survive returning to the workspace", async ({
+    page,
+  }) => {
+    const seeded = await seedWorkspace({ repoPrefix: "multiplicity-named-worktree-" });
+    let worktreeDirectory: string | undefined;
+
+    try {
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openGlobalNewWorkspaceComposer(page);
+      await selectNewWorkspaceProject(page, {
+        projectKey: seeded.projectKey,
+        projectDisplayName: seeded.projectDisplayName,
+      });
+      await selectWorkspaceIsolation(page, "worktree");
+      const nameInput = page.getByTestId("workspace-create-worktree-name-input");
+      await nameInput.fill("!!!");
+      await submitNewWorkspaceEmpty(page);
+      await expect(page.getByText(/Invalid worktree name/).first()).toBeVisible();
+      await expect(page).toHaveURL(/\/new(?:\?.*)?$/);
+      await expect(nameInput).toHaveValue("!!!");
+      await expect(nameInput).toBeVisible();
+      await nameInput.fill("Fix Login Flow");
+
+      await selectWorkspaceIsolation(page, "local");
+      await expect(nameInput).toBeHidden();
+      await selectWorkspaceIsolation(page, "worktree");
+      await expect(nameInput).toHaveValue("Fix Login Flow");
+      await page.screenshot({ path: test.info().outputPath("named-worktree-desktop.png") });
+      await submitNewWorkspaceEmpty(page);
+
+      const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
+        serverId: getServerId(),
+        client,
+        previousWorkspaceId: seeded.workspaceId,
+        projectDisplayName: seeded.projectDisplayName,
+        assertSidebarRow: false,
+        assertHeader: false,
+      });
+      worktreeDirectory = worktree.workspaceDirectory;
+      expect(path.basename(worktreeDirectory)).toBe("fix-login-flow");
+      expect(worktree.workspaceName).toBe("fix-login-flow");
+      await page.reload();
+      await waitForSidebarHydration(page);
+      await expect(page.getByTestId(workspaceRowTestId(worktree.workspaceId))).toContainText(
+        "fix-login-flow",
+      );
+
+      await openGlobalNewWorkspaceComposer(page);
+      await selectNewWorkspaceProject(page, {
+        projectKey: seeded.projectKey,
+        projectDisplayName: seeded.projectDisplayName,
+      });
+      await selectWorkspaceIsolation(page, "worktree");
+      await expect(page.getByTestId("workspace-create-worktree-name-input")).toHaveValue("");
+    } finally {
+      if (worktreeDirectory) {
+        await client.archivePaseoWorktree({ worktreePath: worktreeDirectory });
+      }
+      await seeded.cleanup();
+    }
+  });
+
+  test("compact creation accepts a custom worktree name", async ({ page }) => {
+    const seeded = await seedWorkspace({ repoPrefix: "multiplicity-compact-worktree-" });
+    let worktreeDirectory: string | undefined;
+
+    try {
+      await gotoAppShell(page);
+      await waitForSidebarHydration(page);
+      await openGlobalNewWorkspaceComposer(page);
+      await selectNewWorkspaceProject(page, {
+        projectKey: seeded.projectKey,
+        projectDisplayName: seeded.projectDisplayName,
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await selectWorkspaceIsolation(page, "worktree");
+      await expect(page.getByText("Isolation", { exact: true })).toBeHidden();
+      const nameInput = page.getByRole("textbox", { name: "Worktree name", exact: true });
+      await nameInput.fill("Mobile Login");
+      await page.screenshot({ path: test.info().outputPath("named-worktree-compact.png") });
+      await submitNewWorkspaceEmpty(page);
+      const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
+        serverId: getServerId(),
+        client,
+        previousWorkspaceId: seeded.workspaceId,
+        projectDisplayName: seeded.projectDisplayName,
+        assertSidebarRow: false,
+        assertHeader: false,
+      });
+      worktreeDirectory = worktree.workspaceDirectory;
+      expect(path.basename(worktreeDirectory)).toBe("mobile-login");
+      expect(worktree.workspaceName).toBe("mobile-login");
+    } finally {
+      if (worktreeDirectory) {
+        await client.archivePaseoWorktree({ worktreePath: worktreeDirectory });
+      }
       await seeded.cleanup();
     }
   });

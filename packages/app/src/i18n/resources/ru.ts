@@ -1230,6 +1230,10 @@ export const ru: TranslationResources = {
       worktree: "Новый worktree",
       label: "Изоляция",
     },
+    worktreeName: {
+      label: "Имя worktree",
+      placeholder: "Имя worktree (необязательно)",
+    },
     fields: {
       project: "Проект",
       base: "Базовая ветка",
