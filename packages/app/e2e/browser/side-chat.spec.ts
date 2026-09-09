@@ -17,6 +17,11 @@ test("Side stays linked to main and retains its conversation when reopened", asy
     await openAgentRoute(page, workspace);
     await waitForWorkspaceTabsVisible(page);
     const sidebar = await ensureExplorerSidebar(page);
+    // Electron routes right-clicks on drag regions to the OS window menu instead.
+    await expect(sidebar.getByTestId("explorer-sidebar-tab-rail")).toHaveCSS(
+      "-webkit-app-region",
+      "no-drag",
+    );
     await sidebar.getByTestId("explorer-sidebar-tab-rail").click({
       button: "right",
       position: { x: 20, y: 2 },

@@ -23,6 +23,13 @@ export const titlebarDragSurfaceStyle: React.CSSProperties = {
   WebkitAppRegion: "drag",
 };
 
+/** Context-menu surfaces must receive pointer events instead of native window actions. */
+export const titlebarNoDragSurfaceStyle: React.CSSProperties = {
+  cursor: "default",
+  // @ts-expect-error — WebkitAppRegion is not in CSSProperties
+  WebkitAppRegion: "no-drag",
+};
+
 const DRAG_OVERLAY_STYLE: React.CSSProperties = {
   ...titlebarDragSurfaceStyle,
   top: 0,
