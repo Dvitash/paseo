@@ -5,7 +5,7 @@ import {
   waitForWorkspaceTabsVisible,
 } from "../support/helpers/workspace-tabs";
 
-test("Side stays linked to main and retains its conversation when reopened", async ({
+test("Side is enabled by default and retains its conversation when reopened", async ({
   page,
 }, testInfo) => {
   const workspace = await seedMockAgentWorkspace({
@@ -22,14 +22,22 @@ test("Side stays linked to main and retains its conversation when reopened", asy
       "-webkit-app-region",
       "no-drag",
     );
-    await sidebar.getByTestId("explorer-sidebar-tab-rail").click({
-      button: "right",
-      position: { x: 20, y: 2 },
+    const sideTab = sidebar.getByRole("button", {
+      name: "Side chat linked to active agent",
+      exact: true,
     });
-    await page
-      .getByTestId("explorer-sidebar-tab-configuration")
-      .getByRole("menuitem", { name: "Side", exact: true })
-      .click();
+    await expect(sideTab).toBeVisible();
+    await sideTab.click();
+    const toggleSideTab = async () => {
+      await sidebar.getByTestId("explorer-sidebar-tab-rail").click({
+        button: "right",
+        position: { x: 20, y: 2 },
+      });
+      await page
+        .getByTestId("explorer-sidebar-tab-configuration")
+        .getByRole("menuitem", { name: "Side", exact: true })
+        .click();
+    };
     const side = sidebar.getByTestId("side-chat-view");
     await expect(side.getByTestId("side-panel-linked-header")).toContainText("Main context");
     await expect(side.getByTestId("side-send-button")).toBeDisabled();
@@ -45,6 +53,7 @@ test("Side stays linked to main and retains its conversation when reopened", asy
     await side
       .getByTestId("side-input")
       .fill("Explain the current session without changing anything.");
+    await expect(side.getByTestId("side-send-button")).toBeEnabled();
     await input.press("Enter");
     await expect(side.getByTestId("side-running-indicator")).toBeVisible();
     await expect(side.locator('[data-testid^="side-message-assistant-"]')).toContainText("Cycle 1");
@@ -55,6 +64,13 @@ test("Side stays linked to main and retains its conversation when reopened", asy
     await side.getByTestId("side-stop-button").click();
     await expect(side.getByTestId("side-running-indicator")).not.toBeVisible();
     await expect(side.getByTestId("side-error-banner")).not.toBeVisible();
+    await toggleSideTab();
+    await expect(sideTab).not.toBeVisible();
+    await page.reload({ waitUntil: "commit" });
+    await ensureExplorerSidebar(page);
+    await expect(sideTab).not.toBeVisible();
+    await toggleSideTab();
+    await expect(sideTab).toBeVisible();
     await page.getByTestId("workspace-explorer-toggle").first().click();
     await expect(side).not.toBeVisible();
     await ensureExplorerSidebar(page);

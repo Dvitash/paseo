@@ -289,7 +289,7 @@ const WorkspaceLayoutPersistedStateSchema = z.strictObject({
 });
 
 const LEGACY_EXPLORER_SIDEBAR_REFERENCE_WIDTH = 1440;
-const WORKSPACE_LAYOUT_PERSIST_VERSION = 2;
+const WORKSPACE_LAYOUT_PERSIST_VERSION = 3;
 
 function convertLegacyExplorerSidebarRatios(
   ratiosByWorkspace: Record<string, number>,
@@ -408,7 +408,8 @@ function migrateVersionOneWorkspaceLayout(input: {
     (tab) =>
       legacyExplorerPane.tabIds.includes(tab.tabId) &&
       tab.target.kind !== "files" &&
-      tab.target.kind !== "changes_tree",
+      tab.target.kind !== "changes_tree" &&
+      tab.target.kind !== "side",
   );
   const preservedSide = preserveVersionOneSideTabs({
     layout: strippedLayout,
@@ -440,6 +441,25 @@ function migrateVersionOneWorkspaceLayout(input: {
     sidePaneId: preservedSide.sidePaneId,
   };
 }
+function migrateExplorerSidebarSideTab(input: {
+  layout: WorkspaceLayout;
+  registeredExplorerPaneId: string | null | undefined;
+}): WorkspaceLayout {
+  const normalized = normalizeLayout(input.layout);
+  const explorerPaneId = resolveExplorerSidebarPaneId(normalized, input.registeredExplorerPaneId);
+  if (!explorerPaneId) {
+    return normalized;
+  }
+  return (
+    openTabInLayoutBackground({
+      layout: normalized,
+      target: { kind: "side" },
+      now: Date.now(),
+      placement: { mode: "pane", paneId: explorerPaneId },
+      explorerSidebarPaneId: explorerPaneId,
+    })?.layout ?? normalized
+  );
+}
 
 function migrateWorkspaceLayoutPersistedState(
   persistedState: unknown,
@@ -451,29 +471,48 @@ function migrateWorkspaceLayoutPersistedState(
     return result.success ? result.data : { layoutByWorkspace: {} };
   }
 
-  const layoutByWorkspace: Record<string, WorkspaceLayout> = {};
-  const explorerPaneIdByWorkspace: Record<string, string | null> = {};
-  const sidePaneIdByWorkspace = { ...result.data.sidePaneIdByWorkspace };
-  for (const [workspaceKey, layout] of Object.entries(result.data.layoutByWorkspace)) {
-    const migrated = migrateVersionOneWorkspaceLayout({
-      layout,
-      legacyExplorerPaneId: result.data.explorerPaneIdByWorkspace?.[workspaceKey],
-      rememberedSidePaneId: result.data.sidePaneIdByWorkspace?.[workspaceKey],
-      ids,
-    });
-    layoutByWorkspace[workspaceKey] = migrated.layout;
-    explorerPaneIdByWorkspace[workspaceKey] = migrated.explorerPaneId;
-    sidePaneIdByWorkspace[workspaceKey] = migrated.sidePaneId;
+  let state = result.data;
+  if (version < 2) {
+    const layoutByWorkspace: Record<string, WorkspaceLayout> = {};
+    const explorerPaneIdByWorkspace: Record<string, string | null> = {};
+    const sidePaneIdByWorkspace = { ...state.sidePaneIdByWorkspace };
+    for (const [workspaceKey, layout] of Object.entries(state.layoutByWorkspace)) {
+      const migrated = migrateVersionOneWorkspaceLayout({
+        layout,
+        legacyExplorerPaneId: state.explorerPaneIdByWorkspace?.[workspaceKey],
+        rememberedSidePaneId: state.sidePaneIdByWorkspace?.[workspaceKey],
+        ids,
+      });
+      layoutByWorkspace[workspaceKey] = migrated.layout;
+      explorerPaneIdByWorkspace[workspaceKey] = migrated.explorerPaneId;
+      sidePaneIdByWorkspace[workspaceKey] = migrated.sidePaneId;
+    }
+    state = {
+      ...state,
+      layoutByWorkspace,
+      explorerPaneIdByWorkspace,
+      sidePaneIdByWorkspace,
+    };
   }
 
-  return {
-    ...result.data,
-    layoutByWorkspace,
-    explorerPaneIdByWorkspace,
-    sidePaneIdByWorkspace,
-  };
-}
+  if (version < 3) {
+    const layoutByWorkspace: Record<string, WorkspaceLayout> = {};
+    for (const [workspaceKey, layout] of Object.entries(state.layoutByWorkspace)) {
+      layoutByWorkspace[workspaceKey] = migrateExplorerSidebarSideTab({
+        layout,
+        registeredExplorerPaneId:
+          state.explorerSidebarPaneIdByWorkspace?.[workspaceKey] ??
+          state.explorerPaneIdByWorkspace?.[workspaceKey],
+      });
+    }
+    state = {
+      ...state,
+      layoutByWorkspace,
+    };
+  }
 
+  return state;
+}
 function trimNonEmpty(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null;

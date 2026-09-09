@@ -1138,14 +1138,17 @@ function restoreEmptyPanesInNode(
   explorerSidebarPaneId: string | null,
 ): SplitNodeInternal {
   if (node.kind === "pane") {
+    const isExplorer =
+      node.pane.id === explorerSidebarPaneId ||
+      (explorerSidebarPaneId === null && node.pane.id === EXPLORER_SIDEBAR_PANE_ID);
     return node.pane.tabs.length > 0
       ? node
       : createPaneNode({
           id: node.pane.id,
-          tabs:
-            node.pane.id === explorerSidebarPaneId
-              ? createDefaultExplorerSidebarTabs()
-              : [createNewWorkspaceTab()],
+          tabs: isExplorer ? createDefaultExplorerSidebarTabs() : [createNewWorkspaceTab()],
+          focusedTabId: isExplorer
+            ? buildDeterministicWorkspaceTabId({ kind: "changes_tree" })
+            : undefined,
           hidden: node.pane.hidden,
         });
   }
@@ -1191,9 +1194,9 @@ export function createDefaultLayout(): WorkspaceLayout {
   };
 }
 
-function createDefaultExplorerSidebarTabs(): WorkspaceTab[] {
+export function createDefaultExplorerSidebarTabs(): WorkspaceTab[] {
   const createdAt = Date.now();
-  const targets = [{ kind: "files" }, { kind: "changes_tree" }] as const;
+  const targets = [{ kind: "files" }, { kind: "changes_tree" }, { kind: "side" }] as const;
   return targets.map((target) => ({
     tabId: buildDeterministicWorkspaceTabId(target),
     target,
@@ -1212,6 +1215,7 @@ export function createWorkspaceLayoutWithExplorerSidebar(): WorkspaceLayout {
         createPaneNode({
           id: EXPLORER_SIDEBAR_PANE_ID,
           tabs: createDefaultExplorerSidebarTabs(),
+          focusedTabId: buildDeterministicWorkspaceTabId({ kind: "changes_tree" }),
           hidden: true,
         }),
       ],
