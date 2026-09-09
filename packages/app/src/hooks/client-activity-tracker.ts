@@ -23,7 +23,6 @@ export interface ClientActivityTrackerInput {
   initialFocusedTerminalId: string | null;
   initialAppVisible: boolean;
   now: () => number;
-  onAppResumed?: (awayMs: number) => void;
 }
 
 export interface ClientActivityTracker {
@@ -39,11 +38,10 @@ export interface ClientActivityTracker {
 export function createClientActivityTracker(
   input: ClientActivityTrackerInput,
 ): ClientActivityTracker {
-  const { client, deviceType, now, onAppResumed } = input;
+  const { client, deviceType, now } = input;
   let lastActivityAtMs = now();
   let appVisible = input.initialAppVisible;
   let appVisibilityChangedAtMs = now();
-  let backgroundedAtMs: number | null = appVisible ? null : now();
   let focusedAgentId = input.initialFocusedAgentId;
   let focusedTerminalId = input.initialFocusedTerminalId;
   let lastImmediateHeartbeatAtMs = 0;
@@ -92,13 +90,7 @@ export function createClientActivityTracker(
       appVisible = nextVisible;
       appVisibilityChangedAtMs = now();
       if (!nextVisible) {
-        backgroundedAtMs = now();
         return { changed: true };
-      }
-      const at = backgroundedAtMs;
-      backgroundedAtMs = null;
-      if (at !== null) {
-        onAppResumed?.(Math.max(0, now() - at));
       }
       recordUserActivity();
       return { changed: true };

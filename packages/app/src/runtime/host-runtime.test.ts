@@ -1489,7 +1489,7 @@ describe("HostRuntimeController", () => {
 
 describe("HostRuntimeStore", () => {
   it.each(["active", "inactive", "background"] as const)(
-    "keeps reconnect enabled through inactive/background and resumes immediately (mounted %s)",
+    "keeps reconnect enabled and checks both connected and disconnected hosts on resume (mounted %s)",
     async (currentState) => {
       const relay = (suffix: string): HostConnection => ({
         id: `relay:relay-${suffix}.paseo.sh:443`,
@@ -1569,7 +1569,6 @@ describe("HostRuntimeStore", () => {
       expect(clientA.ensureConnectedCalls).toBe(0);
       expect(clientB.ensureConnectedCalls).toBe(0);
       clientA.setConnectionState({ status: "disconnected", reason: "backgrounded" });
-      clientB.setConnectionState({ status: "disconnected", reason: "backgrounded" });
 
       changeAppState("active");
       expect(clientA.reconnectEnabledChanges.at(-1)).toBe(true);

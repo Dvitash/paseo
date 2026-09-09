@@ -68,7 +68,6 @@ function buildTracker(
     initialFocusedTerminalId: overrides.initialFocusedTerminalId ?? null,
     initialAppVisible: overrides.initialAppVisible ?? true,
     now: clock.now,
-    onAppResumed: overrides.onAppResumed,
   });
   return { tracker, client, clock };
 }
@@ -195,13 +194,9 @@ describe("client activity tracker", () => {
     expect(client.latest().lastActivityAt).toBe(userActivityAt);
   });
 
-  it("emits an appVisibilityChangedAt and runs onAppResumed when becoming visible after backgrounding", () => {
-    let resumed: number | null = null;
+  it("emits an appVisibilityChangedAt and refreshes user activity when becoming visible after backgrounding", () => {
     const { tracker, client, clock } = buildTracker({
       initialAppVisible: true,
-      onAppResumed: (awayMs) => {
-        resumed = awayMs;
-      },
     });
 
     clock.advance(2_000);
@@ -211,7 +206,6 @@ describe("client activity tracker", () => {
     clock.advance(8_000);
     const showTransition = tracker.notifyAppVisibility(true);
     expect(showTransition.changed).toBe(true);
-    expect(resumed).toBe(8_000);
 
     tracker.sendHeartbeat();
     expect(client.latest()).toMatchObject({
@@ -227,17 +221,21 @@ describe("client activity tracker", () => {
     expect(result.changed).toBe(false);
   });
 
-  it("does not call onAppResumed when transitioning visible→visible or from initial-visible to hidden", () => {
-    let resumed: number | null = null;
-    const { tracker } = buildTracker({
+  it("updates appVisibilityChangedAt without recording user activity when transitioning to hidden", () => {
+    const { tracker, client, clock } = buildTracker({
       initialAppVisible: true,
-      onAppResumed: (awayMs) => {
-        resumed = awayMs;
-      },
     });
 
-    tracker.notifyAppVisibility(false);
-    expect(resumed).toBeNull();
+    clock.advance(3_000);
+    const hideTransition = tracker.notifyAppVisibility(false);
+    expect(hideTransition.changed).toBe(true);
+
+    tracker.sendHeartbeat();
+    expect(client.latest()).toMatchObject({
+      appVisible: false,
+      appVisibilityChangedAt: new Date(START_MS + 3_000).toISOString(),
+      lastActivityAt: new Date(START_MS).toISOString(),
+    });
   });
 
   it("skips heartbeats while the client is disconnected", () => {

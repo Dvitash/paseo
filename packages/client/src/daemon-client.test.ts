@@ -2,6 +2,7 @@ import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
   DaemonClient,
+  ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS,
   type DaemonClientTrace,
   type DaemonTransport,
   type Logger,
@@ -57,8 +58,9 @@ function createTraceRecorder(): { trace: DaemonClientTrace; records: TraceRecord
   };
 }
 
-function createMockTransport() {
+function createMockTransport(transportOptions?: { autoAnswerSessionPing?: boolean }) {
   const sent: Array<string | Uint8Array | ArrayBuffer> = [];
+  const closeCalls: Array<{ code?: number; reason?: string }> = [];
 
   let onMessage: (data: unknown) => void = () => {};
   let onOpen: () => void = () => {};
@@ -72,12 +74,39 @@ function createMockTransport() {
       if (typeof data !== "string") {
         return;
       }
-      const frame = JSON.parse(data) as { type?: string };
+      const frame = JSON.parse(data) as {
+        type?: string;
+        message?: { type?: string; requestId?: string; clientSentAt?: number };
+      };
       if (frame.type === "ping") {
         onMessage(JSON.stringify({ type: "pong" }));
+      } else if (
+        transportOptions?.autoAnswerSessionPing &&
+        frame.type === "session" &&
+        frame.message?.type === "ping" &&
+        typeof frame.message.requestId === "string"
+      ) {
+        const pingMsg = frame.message;
+        const now = Date.now();
+        onMessage(
+          JSON.stringify({
+            type: "session",
+            message: {
+              type: "pong",
+              payload: {
+                requestId: pingMsg.requestId,
+                clientSentAt: pingMsg.clientSentAt ?? now,
+                serverReceivedAt: now,
+                serverSentAt: now,
+              },
+            },
+          }),
+        );
       }
     },
-    close: () => {},
+    close: (code?: number, reason?: string) => {
+      closeCalls.push({ code, reason });
+    },
     onMessage: (handler) => {
       onMessage = handler;
       return () => {};
@@ -99,6 +128,7 @@ function createMockTransport() {
   return {
     transport,
     sent,
+    closeCalls,
     triggerOpen: (options?: { preserveSent?: boolean; features?: Record<string, boolean> }) => {
       onOpen();
       if (!options?.preserveSent) {
@@ -1046,6 +1076,344 @@ test("disabling reconnect cancels a pending retry until explicitly resumed", asy
     client.ensureConnected();
     expect(client.getConnectionState().status).toBe("connecting");
     expect(transportIndex).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ensureConnected preserves a healthy connection when ping succeeds", async () => {
+  useHeartbeatClock();
+  try {
+    const mock = createMockTransport({ autoAnswerSessionPing: true });
+    let transportFactoryCalls = 0;
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_healthy_preservation",
+      logger: noopLogger,
+      transportFactory: () => {
+        transportFactoryCalls += 1;
+        return mock.transport;
+      },
+    });
+    clients.push(client);
+
+    const initialConnect = client.connect();
+    mock.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(transportFactoryCalls).toBe(1);
+
+    client.ensureConnected();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(transportFactoryCalls).toBe(1);
+    expect(mock.closeCalls).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ensureConnected recovers a silently broken socket without close event and restores subscriptions", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport({ autoAnswerSessionPing: true });
+    const transports = [first, second];
+    let transportIndex = 0;
+
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_silent_recovery",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+    clients.push(client);
+
+    const initialConnect = client.connect();
+    first.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(transportIndex).toBe(1);
+
+    const diffPromise = client.subscribeCheckoutDiff(
+      "/tmp/project",
+      { mode: "uncommitted" },
+      { subscriptionId: "checkout-sub-silent" },
+    );
+    const firstSubRequest = parseSentFrame(first.sent.at(-1));
+    expect(firstSubRequest.type).toBe("subscribe_checkout_diff_request");
+    first.triggerMessage(
+      wrapSessionMessage({
+        type: "subscribe_checkout_diff_response",
+        payload: {
+          requestId: firstSubRequest.requestId,
+          subscriptionId: "checkout-sub-silent",
+          cwd: "/tmp/project",
+          files: [],
+          error: null,
+        },
+      }),
+    );
+    await diffPromise;
+
+    client.ensureConnected();
+
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+
+    expect(first.closeCalls).toEqual([
+      {
+        code: 1001,
+        reason: `Timeout waiting for message (${ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS}ms)`,
+      },
+    ]);
+    expect(client.getConnectionState().status).toBe("connecting");
+    expect(transportIndex).toBe(2);
+
+    second.triggerOpen();
+    expect(client.getConnectionState().status).toBe("connected");
+
+    const resubRequest = second.sent
+      .map((data) => parseSentFrame(data))
+      .find((msg) => msg.type === "subscribe_checkout_diff_request");
+    expect(resubRequest).toMatchObject({
+      type: "subscribe_checkout_diff_request",
+      subscriptionId: "checkout-sub-silent",
+      cwd: "/tmp/project",
+      compare: { mode: "uncommitted" },
+    });
+    expect(typeof resubRequest?.requestId).toBe("string");
+    expect(z.string().parse(resubRequest?.requestId).length).toBeGreaterThan(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ensureConnected ignores uncorrelated pongs and latency pings, recovering when correlated pong is missing", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport({ autoAnswerSessionPing: true });
+    const transports = [first, second];
+    let transportIndex = 0;
+
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_pong_collision",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+
+    const initialConnect = client.connect();
+    first.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+
+    client.ensureConnected();
+
+    first.triggerMessage(JSON.stringify({ type: "pong" }));
+    first.triggerMessage(
+      wrapSessionMessage({
+        type: "pong",
+        payload: {
+          requestId: "wrong-session-request-id",
+          clientSentAt: Date.now(),
+          serverReceivedAt: Date.now(),
+          serverSentAt: Date.now(),
+        },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS / 2);
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(transportIndex).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS / 2);
+
+    expect(first.closeCalls).toHaveLength(1);
+    expect(client.getConnectionState().status).toBe("connecting");
+    expect(transportIndex).toBe(2);
+
+    second.triggerOpen();
+    expect(client.getConnectionState().status).toBe("connected");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ensureConnected coalesces repeated calls on the same transport", async () => {
+  useHeartbeatClock();
+  try {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_duplicate_calls",
+      logger: noopLogger,
+      transportFactory: () => mock.transport,
+    });
+
+    const initialConnect = client.connect();
+    mock.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+
+    mock.sent.length = 0;
+
+    client.ensureConnected();
+    client.ensureConnected();
+    client.ensureConnected();
+
+    const sessionPings = mock.sent.filter((data) => {
+      const parsed = parseSentFrame(data);
+      return parsed.type === "ping";
+    });
+    expect(sessionPings).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("stale timeout from a closed or replaced transport does not dispose newer connection", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport({ autoAnswerSessionPing: true });
+    const transports = [first, second];
+    let transportIndex = 0;
+
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_stale_timeout",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+
+    const initialConnect = client.connect();
+    first.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+
+    client.ensureConnected();
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    first.triggerClose({ code: 1006, reason: "network drop" });
+    expect(client.getConnectionState().status).toBe("disconnected");
+
+    client.ensureConnected();
+    expect(client.getConnectionState().status).toBe("connecting");
+    expect(transportIndex).toBe(2);
+
+    second.triggerOpen();
+    expect(client.getConnectionState().status).toBe("connected");
+
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(second.closeCalls).toHaveLength(0);
+    expect(transportIndex).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("stale timeout after client.close() does not trigger reconnect", async () => {
+  useHeartbeatClock();
+  try {
+    const mock = createMockTransport();
+    let transportFactoryCalls = 0;
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_stale_close",
+      logger: noopLogger,
+      transportFactory: () => {
+        transportFactoryCalls += 1;
+        return mock.transport;
+      },
+    });
+
+    const initialConnect = client.connect();
+    mock.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+
+    client.ensureConnected();
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    await client.close();
+    expect(client.getConnectionState().status).toBe("disposed");
+
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+
+    expect(client.getConnectionState().status).toBe("disposed");
+    expect(transportFactoryCalls).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("subsequent retries follow backoff when network remains unavailable after silent recovery", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport();
+    const third = createMockTransport();
+    const transports = [first, second, third];
+    let transportIndex = 0;
+
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_subsequent_retries",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 10_000 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+
+    const initialConnect = client.connect();
+    first.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+
+    client.ensureConnected();
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+
+    expect(transportIndex).toBe(2);
+    expect(client.getConnectionState().status).toBe("connecting");
+
+    second.triggerError(new Error("ECONNREFUSED"));
+    expect(client.getConnectionState().status).toBe("disconnected");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(transportIndex).toBe(2);
+    expect(client.getConnectionState().status).toBe("disconnected");
+
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(transportIndex).toBe(3);
+    expect(client.getConnectionState().status).toBe("connecting");
   } finally {
     vi.useRealTimers();
   }

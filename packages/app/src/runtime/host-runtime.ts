@@ -2333,7 +2333,7 @@ export class HostRuntimeStore {
 
   setAppVisible(visible: boolean): void {
     // Keep normal reconnect backoff running while hidden, for as long as the OS
-    // lets us execute. Foregrounding bypasses that backoff without closing healthy sockets.
+    // lets us execute. Foregrounding bypasses backoff and checks apparently healthy sockets.
     if (!visible) {
       void this.replicaCache.flush();
       return;

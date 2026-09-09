@@ -1,10 +1,14 @@
 import { expect, test, vi } from "vitest";
+import type { AgentStreamEventPayload } from "@getpaseo/protocol/messages";
 import type { ProjectedTimelineForwardFetchPlan } from "./timeline-sync-plan";
 import {
   consumeForcedTimelineTailReplacement,
+  createTimelineReplica,
+  createViewedTimelineOwner,
   createViewedTimelineSync,
   type TimelineResponsePayload,
 } from "./viewed-timeline-sync";
+import { selectAgentTimelineState, useSessionStore } from "@/stores/session-store";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -948,4 +952,209 @@ test("switching from legacy to selective delivery publishes membership and catch
   expect(membership.agentIds).toEqual(["agent-a"]);
   world.expectNoPendingMembership();
   world.expectNoPendingFetch();
+});
+
+test("healthy selective subscription preserved through background retains history sync generation while reconnect invalidates and catches up", async () => {
+  const serverId = "test-server";
+  const agentId = "agent-a";
+  useSessionStore.getState().initializeSession(serverId, null);
+
+  const memberships: string[][] = [];
+  const fetches: Array<{ agentId: string; request: ProjectedTimelineForwardFetchPlan }> = [];
+
+  const replica = createTimelineReplica({
+    serverId,
+    storage: {
+      readTimeline: async () => undefined,
+      commitTimeline: () => undefined,
+    },
+    prepareAgent: async () => undefined,
+  });
+
+  const owner = createViewedTimelineOwner({
+    serverId,
+    replica,
+    replaceDemandedAgentIds: () => undefined,
+    drainQueuedAgentMessage: () => undefined,
+    ports: {
+      initialDeliveryMode: "selective",
+      setSubscription: async (agentIds) => {
+        memberships.push(agentIds);
+      },
+      readCursor: () => undefined,
+      fetchPage: async (id, request) => {
+        fetches.push({ agentId: id, request });
+        return { hasNewer: false, endCursor: null };
+      },
+      fetchLatestTail: async (id) => {
+        fetches.push({
+          agentId: id,
+          request: { direction: "tail", limit: 40, projection: "projected" },
+        });
+        return { hasNewer: false, endCursor: null };
+      },
+      reportError: () => undefined,
+      schedule: () => () => undefined,
+    },
+  });
+
+  try {
+    owner.setConnected(true);
+    owner.replaceVisibleAgentIds("workspace", [agentId]);
+
+    await vi.waitFor(() => expect(memberships).toEqual([[agentId]]));
+    await vi.waitFor(() => expect(fetches.length).toBe(1));
+    expect(fetches[0].agentId).toBe(agentId);
+
+    owner.applyTimelineResponse({
+      requestId: "init-tail",
+      agentId,
+      agent: null,
+      direction: "tail",
+      projection: "projected",
+      reset: false,
+      epoch: "epoch-1",
+      window: { minSeq: 1, maxSeq: 1, nextSeq: 2 },
+      startCursor: { epoch: "epoch-1", seq: 1 },
+      endCursor: { epoch: "epoch-1", seq: 1 },
+      entries: [
+        {
+          provider: "codex",
+          item: { type: "user_message", text: "Initial canonical message" },
+          timestamp: "2026-09-09T10:00:00.000Z",
+          seqStart: 1,
+          seqEnd: 1,
+          sourceSeqRanges: [{ startSeq: 1, endSeq: 1 }],
+          collapsed: [],
+        },
+      ],
+      error: null,
+      hasNewer: false,
+      hasOlder: false,
+      staleCursor: false,
+      gap: false,
+    });
+
+    await vi.waitFor(() => expect(owner.getAgentTimelineStatus(agentId)).toBe("ready"));
+
+    let session = useSessionStore.getState().sessions[serverId];
+    expect(session?.historySyncGeneration).toBe(0);
+    expect(session?.agentHistorySyncGeneration.get(agentId)).toBe(0);
+
+    // Backgrounding preserves healthy selective subscription
+    owner.setActive(false);
+
+    // Canonical stream completion received while inactive
+    const streamEvent: AgentStreamEventPayload = {
+      type: "timeline",
+      provider: "codex",
+      item: { type: "assistant_message", text: "Streamed completion while backgrounded" },
+    };
+    owner.enqueueStreamEvent(agentId, {
+      event: streamEvent,
+      seq: 2,
+      epoch: "epoch-1",
+      timestamp: new Date("2026-09-09T10:01:00.000Z"),
+    });
+
+    const completionEvent: AgentStreamEventPayload = {
+      type: "turn_completed",
+      provider: "codex",
+    };
+    owner.enqueueStreamEvent(agentId, {
+      event: completionEvent,
+      seq: 3,
+      epoch: "epoch-1",
+      timestamp: new Date("2026-09-09T10:01:01.000Z"),
+    });
+    owner.flushStreamAgent(agentId);
+
+    // Foreground return preserves readiness without artificial generation invalidation
+    owner.setActive(true);
+
+    expect(owner.getAgentTimelineStatus(agentId)).toBe("ready");
+    expect(memberships).toHaveLength(1);
+    expect(fetches).toHaveLength(1);
+
+    // Rendered store items retained across backgrounding
+    const timeline = selectAgentTimelineState(
+      useSessionStore.getState().sessions[serverId],
+      agentId,
+    );
+    expect(timeline.status).toBe("synced");
+    if (timeline.status !== "synced") {
+      throw new Error("Expected timeline to be synced");
+    }
+    expect(timeline.items).toEqual([
+      expect.objectContaining({ kind: "user_message", text: "Initial canonical message" }),
+      expect.objectContaining({
+        kind: "assistant_message",
+        text: "Streamed completion while backgrounded",
+      }),
+    ]);
+
+    session = useSessionStore.getState().sessions[serverId];
+    expect(session?.historySyncGeneration).toBe(0);
+    expect(session?.agentHistorySyncGeneration.get(agentId)).toBe(0);
+
+    // Real reconnect marks history generation invalidated on online transition
+    owner.setConnected(false);
+    useSessionStore.getState().bumpHistorySyncGeneration(serverId);
+    owner.setConnected(true);
+
+    session = useSessionStore.getState().sessions[serverId];
+    expect(session?.historySyncGeneration).toBe(1);
+    expect(session?.agentHistorySyncGeneration.get(agentId)).toBe(0);
+
+    await vi.waitFor(() => expect(memberships.length).toBe(2));
+    expect(memberships[1]).toEqual([agentId]);
+    await vi.waitFor(() => expect(fetches.length).toBe(2));
+
+    owner.applyTimelineResponse({
+      requestId: "reconnect-tail",
+      agentId,
+      agent: null,
+      direction: "tail",
+      projection: "projected",
+      reset: false,
+      epoch: "epoch-1",
+      window: { minSeq: 1, maxSeq: 2, nextSeq: 3 },
+      startCursor: { epoch: "epoch-1", seq: 1 },
+      endCursor: { epoch: "epoch-1", seq: 2 },
+      entries: [
+        {
+          provider: "codex",
+          item: { type: "user_message", text: "Initial canonical message" },
+          timestamp: "2026-09-09T10:00:00.000Z",
+          seqStart: 1,
+          seqEnd: 1,
+          sourceSeqRanges: [{ startSeq: 1, endSeq: 1 }],
+          collapsed: [],
+        },
+        {
+          provider: "codex",
+          item: { type: "assistant_message", text: "Caught up canonical message" },
+          timestamp: "2026-09-09T10:02:00.000Z",
+          seqStart: 2,
+          seqEnd: 2,
+          sourceSeqRanges: [{ startSeq: 2, endSeq: 2 }],
+          collapsed: [],
+        },
+      ],
+      error: null,
+      hasNewer: false,
+      hasOlder: false,
+      staleCursor: false,
+      gap: false,
+    });
+
+    await vi.waitFor(() => expect(owner.getAgentTimelineStatus(agentId)).toBe("ready"));
+
+    session = useSessionStore.getState().sessions[serverId];
+    expect(session?.historySyncGeneration).toBe(1);
+    expect(session?.agentHistorySyncGeneration.get(agentId)).toBe(1);
+  } finally {
+    owner.dispose();
+    useSessionStore.getState().clearSession(serverId);
+  }
 });
