@@ -55,6 +55,7 @@ function nonnegativeNumber(value: unknown): number | null {
 
 export class ModelTurnTracker {
   private currentTurn: AgentModelTurnUsage | null = null;
+  private retainedCompletedTurn: AgentModelTurnUsage | null = null;
   private inferenceStartTime: number | null = null;
   private firstDeltaTime: number | null = null;
   private observedTtftMs: number | null = null;
@@ -65,7 +66,10 @@ export class ModelTurnTracker {
   }
 
   currentModelTurn(): AgentModelTurnUsage | null {
-    return this.currentTurn;
+    if (this.currentTurn?.status === "running" && this.retainedCompletedTurn !== null) {
+      return this.retainedCompletedTurn;
+    }
+    return this.currentTurn ?? this.retainedCompletedTurn;
   }
 
   onTurnStart(): AgentModelTurnUsage {
@@ -117,6 +121,7 @@ export class ModelTurnTracker {
       ttftMs: parsed.ttftMs,
       tokensPerSecond: parsed.tokensPerSecond,
     };
+    this.retainedCompletedTurn = this.currentTurn;
     this.inferenceStartTime = null;
     this.firstDeltaTime = null;
     this.observedTtftMs = null;
@@ -142,6 +147,7 @@ export class ModelTurnTracker {
             ttftMs: parsed.ttftMs,
             tokensPerSecond: parsed.tokensPerSecond,
           };
+          this.retainedCompletedTurn = this.currentTurn;
           return this.currentTurn;
         }
         return null;
@@ -157,6 +163,7 @@ export class ModelTurnTracker {
         ttftMs: this.observedTtftMs,
         tokensPerSecond: null,
       };
+      this.retainedCompletedTurn = this.currentTurn;
       this.inferenceStartTime = null;
       this.firstDeltaTime = null;
       this.observedTtftMs = null;

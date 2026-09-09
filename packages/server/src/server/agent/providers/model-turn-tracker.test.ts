@@ -244,7 +244,7 @@ describe("ModelTurnTracker", () => {
       ttftMs: null,
       tokensPerSecond: null,
     });
-    expect(tracker.currentModelTurn()).toEqual(turn2Running);
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
 
     // Inference 2 completes
     clock = 6200;
@@ -337,5 +337,224 @@ describe("ModelTurnTracker", () => {
     ];
     const hydratedNoNative = tracker2.hydrateFromMessages(historyWithoutNative);
     expect(hydratedNoNative).toBeNull();
+  });
+
+  it("retains previous completed metrics when next turn starts and during subsequent deltas", () => {
+    let clock = 1000;
+    const tracker = new ModelTurnTracker({ now: () => clock });
+
+    // Turn 1
+    tracker.onTurnStart();
+    clock = 1150;
+    tracker.onContentDelta();
+    clock = 1650;
+    const turn1Completed = tracker.onAssistantMessageEnd({
+      role: "assistant",
+      ttft: 150,
+      duration: 650,
+      usage: { output: 30 },
+    });
+    expect(turn1Completed).toEqual({
+      status: "completed",
+      ttftMs: 150,
+      tokensPerSecond: 60,
+    });
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    // Turn 2 starts - onTurnStart returns running with nulls, currentModelTurn retains turn 1
+    clock = 2000;
+    const turn2Running = tracker.onTurnStart();
+    expect(turn2Running).toEqual({
+      status: "running",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    // Turn 2 first delta - onContentDelta returns running with new observed TTFT, currentModelTurn still retains turn 1
+    clock = 2220;
+    const turn2Delta = tracker.onContentDelta();
+    expect(turn2Delta).toEqual({
+      status: "running",
+      ttftMs: 220,
+      tokensPerSecond: null,
+    });
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    // Turn 2 subsequent deltas return null and currentModelTurn remains turn 1
+    clock = 2300;
+    expect(tracker.onContentDelta()).toBeNull();
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+  });
+
+  it("replaces retained completed turn upon next turn completion even if new metrics are unavailable", () => {
+    let clock = 1000;
+    const tracker = new ModelTurnTracker({ now: () => clock });
+
+    // Turn 1 completes with valid metrics
+    tracker.onTurnStart();
+    const turn1Completed = tracker.onAssistantMessageEnd({
+      role: "assistant",
+      ttft: 100,
+      duration: 500,
+      usage: { output: 20 },
+    });
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    // Turn 2 starts and completes without native timing or deltas
+    clock = 2000;
+    tracker.onTurnStart();
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    const turn2Completed = tracker.onAssistantMessageEnd({
+      role: "assistant",
+    });
+    expect(turn2Completed).toEqual({
+      status: "completed",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+    // Replaced with turn 2's completed turn, true unavailable values preserved
+    expect(tracker.currentModelTurn()).toEqual({
+      status: "completed",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+
+    // Turn 3 starts while turn 2 completed is retained
+    clock = 3000;
+    tracker.onTurnStart();
+    expect(tracker.currentModelTurn()).toEqual({
+      status: "completed",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+
+    // Turn 3 completes with fresh metrics
+    const turn3Completed = tracker.onAssistantMessageEnd({
+      role: "assistant",
+      ttft: 200,
+      duration: 600,
+      usage: { output: 20 },
+    });
+    expect(turn3Completed).toEqual({
+      status: "completed",
+      ttftMs: 200,
+      tokensPerSecond: 50,
+    });
+    expect(tracker.currentModelTurn()).toEqual(turn3Completed);
+  });
+
+  it("retains hydrated metrics when a running turn starts and processes deltas", () => {
+    let clock = 1000;
+    const tracker = new ModelTurnTracker({ now: () => clock });
+
+    const historyWithNative = [
+      { role: "user", content: "Hello" },
+      {
+        role: "assistant",
+        ttft: 120,
+        duration: 520,
+        usage: { output: 20 },
+      },
+    ];
+    const hydrated = tracker.hydrateFromMessages(historyWithNative);
+    expect(hydrated).toEqual({
+      status: "completed",
+      ttftMs: 120,
+      tokensPerSecond: 50,
+    });
+    expect(tracker.currentModelTurn()).toEqual(hydrated);
+
+    // New running turn begins
+    const running = tracker.onTurnStart();
+    expect(running).toEqual({
+      status: "running",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+    // Retains hydrated metrics while running
+    expect(tracker.currentModelTurn()).toEqual(hydrated);
+
+    // Delta arrives during the running turn
+    clock = 1180;
+    const delta = tracker.onContentDelta();
+    expect(delta).toEqual({
+      status: "running",
+      ttftMs: 180,
+      tokensPerSecond: null,
+    });
+    expect(tracker.currentModelTurn()).toEqual(hydrated);
+
+    // Turn completes, updating currentModelTurn to new turn metrics
+    clock = 1580;
+    const completed = tracker.onAssistantMessageEnd({
+      role: "assistant",
+      usage: { output: 24 },
+    });
+    expect(completed).toEqual({
+      status: "completed",
+      ttftMs: 180,
+      tokensPerSecond: 60,
+    });
+    expect(tracker.currentModelTurn()).toEqual(completed);
+  });
+
+  it("updates retained state on finalizeRunning interruption and carries into next running turn", () => {
+    let clock = 1000;
+    const tracker = new ModelTurnTracker({ now: () => clock });
+
+    // Turn 1 completes normally
+    tracker.onTurnStart();
+    const turn1Completed = tracker.onAssistantMessageEnd({
+      role: "assistant",
+      ttft: 100,
+      duration: 500,
+      usage: { output: 20 },
+    });
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    // Turn 2 begins and receives a delta
+    clock = 2000;
+    tracker.onTurnStart();
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    clock = 2160;
+    tracker.onContentDelta();
+    expect(tracker.currentModelTurn()).toEqual(turn1Completed);
+
+    // Turn 2 is interrupted / cancelled
+    expect(tracker.finalizeRunning()).toBe(true);
+    expect(tracker.currentModelTurn()).toEqual({
+      status: "completed",
+      ttftMs: 160,
+      tokensPerSecond: null,
+    });
+
+    // Turn 3 begins - retains Turn 2's finalized metrics
+    clock = 3000;
+    tracker.onTurnStart();
+    expect(tracker.currentModelTurn()).toEqual({
+      status: "completed",
+      ttftMs: 160,
+      tokensPerSecond: null,
+    });
+
+    // Turn 3 is cancelled immediately without any delta
+    expect(tracker.finalizeRunning()).toBe(true);
+    expect(tracker.currentModelTurn()).toEqual({
+      status: "completed",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+
+    // Turn 4 begins - retains Turn 3's finalized metrics (nulls, not Turn 2's)
+    clock = 4000;
+    tracker.onTurnStart();
+    expect(tracker.currentModelTurn()).toEqual({
+      status: "completed",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
   });
 });

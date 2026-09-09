@@ -1105,12 +1105,12 @@ describe("OMP agent client and session", () => {
       tokensPerSecond: 50,
     });
 
-    // Inference 2 begins - resets to running
+    // Inference 2 begins - keep the most recent completed metrics visible
     runtime.beginTurn();
     expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
-      status: "running",
-      ttftMs: null,
-      tokensPerSecond: null,
+      status: "completed",
+      ttftMs: 100,
+      tokensPerSecond: 50,
     });
 
     // Inference 2 completes
@@ -1118,6 +1118,11 @@ describe("OMP agent client and session", () => {
       type: "message_update",
       message: { role: "assistant", content: [] },
       assistantMessageEvent: { type: "thinking_delta", delta: "Thinking..." },
+    });
+    expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 100,
+      tokensPerSecond: 50,
     });
     runtime.emit({
       type: "message_end",
