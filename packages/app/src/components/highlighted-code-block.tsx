@@ -88,6 +88,12 @@ export const HighlightedCodeBlock = React.memo(function HighlightedCodeBlock({
   // fence; pasting any of them into a terminal runs the last line.
   const getCode = useCallback(() => code.replace(TRAILING_CODE_LINE_BREAKS, ""), [code]);
 
+  // Agents can emit a bare opening fence, including before a tool call.
+  // Keep hooks mounted so a streaming fence appears when its content arrives.
+  if (renderedCode.trim().length === 0) {
+    return null;
+  }
+
   return (
     <View
       style={containerStyle}
