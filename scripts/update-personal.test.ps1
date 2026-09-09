@@ -63,6 +63,8 @@ Write-Host "========================================================="
 # Setup native temporary fixtures for real path checks
 $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) "paseo-ps-tests-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+$savedLocalAppData = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = Join-Path $fixtureRoot "LocalAppData"
 
 $appDir = Join-Path $fixtureRoot "App"
 if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
@@ -284,6 +286,7 @@ try {
     $mockAdapters = @{
         Guid = { return "test-fixed-uuid" }
         GetProcesses = { return @([PSCustomObject]@{ Path = $appExe }) }
+        GetRegLoc = { param($Key) return $null }
         StopProcesses = { param($Processes) $flowState.Stopped = $true }
         LaunchDesktop = { param($Path) $flowState.Launched = $Path }
         RunInstaller = {
@@ -298,7 +301,7 @@ try {
             return $true
         }
         Gh = {
-            param($CommandArgs)
+            param($CommandArgs, $TimeoutSeconds)
             $sub = $CommandArgs[0]
             if ($sub -eq "api" -and $CommandArgs[1] -eq "user") {
                 return @{ ExitCode = 0; Stdout = "Dvitash`n" }
@@ -327,11 +330,13 @@ try {
                 return @{ ExitCode = 0; Stdout = (ConvertTo-Json -InputObject $runs -Depth 5) }
             }
             if ($sub -eq "run" -and $CommandArgs[1] -eq "view") {
+                $flowState.QueryTimeout = $TimeoutSeconds
                 $flowState.ViewRunId = $CommandArgs[2]
                 $view = @{ status = "completed"; conclusion = "success" }
                 return @{ ExitCode = 0; Stdout = ($view | ConvertTo-Json) }
             }
             if ($sub -eq "run" -and $CommandArgs[1] -eq "download") {
+                $flowState.DownloadTimeout = $TimeoutSeconds
                 foreach ($name in $artifactFiles) {
                     New-Item -ItemType File -Path (Join-Path $CommandArgs[-1] $name) -Force | Out-Null
                 }
@@ -357,6 +362,8 @@ try {
     Assert-True $flowState.TargetExeVerified "Target executable presence verified"
     Assert-Equal $flowState.Launched $appExe "Relaunches GUI only after both updates succeed"
     Assert-Equal $flowState.ViewRunId "999" "Selects a scalar run ID from a real multi-run JSON array"
+    Assert-Equal $flowState.DownloadTimeout 3600 "Large artifact downloads allow a full hour on slow connections"
+    Assert-Equal $flowState.QueryTimeout 60 "Ordinary GitHub queries retain the short timeout"
 
     $flowState.SingleRun = $true
     $flowState.DispatchedArgs = $null
@@ -392,6 +399,7 @@ try {
     $failingInstallAdapters = @{
         Guid = { return "test-fail-uuid" }
         GetProcesses = { return @([PSCustomObject]@{ Path = $appExe }) }
+        GetRegLoc = { param($Key) return $null }
         StopProcesses = { param($Processes) }
         RunInstaller = {
             param($Exe, $ArgStr)
@@ -421,6 +429,7 @@ try {
     } "NSIS installer exited with code 1" "Reports failure when installer fails after dispatch"
 
 } finally {
+    $env:LOCALAPPDATA = $savedLocalAppData
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 

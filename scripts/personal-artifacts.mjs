@@ -450,10 +450,181 @@ export function packDaemonArtifacts({
   return { manifest, outputDir: resolvedOutputDir };
 }
 
+export const SUPPORTED_DESKTOP_TARGETS = Object.freeze([
+  "linux-arm64",
+  "linux-x64",
+  "macos-arm64",
+  "windows-x64",
+]);
+
+const WINDOWS_X64_INSTALLER_PATTERN = /^Paseo-Setup-.*-x64\.exe$/i;
+
+const NON_WINDOWS_ARCHIVE_EXTENSIONS = [
+  ".dmg",
+  ".zip",
+  ".appimage",
+  ".deb",
+  ".rpm",
+  ".tar.gz",
+  ".exe",
+];
+
+function isWindowsX64Installer(filename) {
+  if (typeof filename !== "string" || !filename.trim()) {
+    return false;
+  }
+  return WINDOWS_X64_INSTALLER_PATTERN.test(filename);
+}
+
+function matchesNonWindowsArchive(filename) {
+  if (typeof filename !== "string" || !filename.trim()) {
+    return false;
+  }
+  const lower = filename.toLowerCase();
+  return NON_WINDOWS_ARCHIVE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+function validateDesktopTarget(target) {
+  if (!target || typeof target !== "string" || !target.trim()) {
+    throw new Error("Desktop target must be specified");
+  }
+  const normalized = target.trim().toLowerCase();
+  if (!SUPPORTED_DESKTOP_TARGETS.includes(normalized)) {
+    throw new Error(
+      `Unsupported desktop target: ${target}. Expected one of: ${SUPPORTED_DESKTOP_TARGETS.join(", ")}`,
+    );
+  }
+  return normalized;
+}
+
+export function selectDesktopArtifacts(releaseDir, target) {
+  const normalizedTarget = validateDesktopTarget(target);
+
+  if (!releaseDir || typeof releaseDir !== "string") {
+    throw new Error("Desktop release directory must be specified");
+  }
+  const resolvedReleaseDir = path.resolve(releaseDir);
+  if (!fs.existsSync(resolvedReleaseDir)) {
+    throw new Error(`Desktop release directory not found at ${resolvedReleaseDir}`);
+  }
+  const stat = fs.statSync(resolvedReleaseDir);
+  if (!stat.isDirectory()) {
+    throw new Error(`Desktop release directory not found at ${resolvedReleaseDir}`);
+  }
+
+  const entries = fs.readdirSync(resolvedReleaseDir, { withFileTypes: true });
+  const regularFiles = entries
+    .filter((entry) => {
+      if (entry.isFile()) {
+        return true;
+      }
+      if (entry.isSymbolicLink()) {
+        try {
+          return fs.statSync(path.join(resolvedReleaseDir, entry.name)).isFile();
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    })
+    .map((entry) => entry.name);
+
+  if (normalizedTarget === "windows-x64") {
+    const matching = regularFiles.filter((file) => isWindowsX64Installer(file));
+    if (matching.length === 0) {
+      throw new Error(
+        `No Windows x64 installer matching Paseo-Setup-*-x64.exe found in ${resolvedReleaseDir}`,
+      );
+    }
+    if (matching.length > 1) {
+      throw new Error(
+        `Expected exactly 1 Windows x64 installer matching Paseo-Setup-*-x64.exe, found ${matching.length} (${matching.join(", ")}) in ${resolvedReleaseDir}`,
+      );
+    }
+    return matching;
+  }
+
+  const matching = regularFiles.filter((file) => matchesNonWindowsArchive(file));
+  if (matching.length === 0) {
+    throw new Error(`No installable archives found in ${resolvedReleaseDir}`);
+  }
+  return matching.sort();
+}
+
+export function stageDesktopArtifacts({
+  releaseDir = "packages/desktop/release",
+  outputDir = "personal-artifacts/desktop",
+  target,
+} = {}) {
+  const normalizedTarget = validateDesktopTarget(target);
+
+  if (!releaseDir || typeof releaseDir !== "string" || !releaseDir.trim()) {
+    throw new Error("Desktop release directory must be specified");
+  }
+  if (!outputDir || typeof outputDir !== "string" || !outputDir.trim()) {
+    throw new Error("Desktop output directory must be specified");
+  }
+
+  const resolvedReleaseDir = path.resolve(releaseDir);
+  const resolvedOutputDir = path.resolve(outputDir);
+
+  if (resolvedReleaseDir === resolvedOutputDir) {
+    throw new Error(
+      `Output directory cannot be the same as release directory: ${resolvedOutputDir}`,
+    );
+  }
+
+  const relFromOutputToRelease = path.relative(resolvedOutputDir, resolvedReleaseDir);
+  if (!relFromOutputToRelease.startsWith("..") && !path.isAbsolute(relFromOutputToRelease)) {
+    throw new Error(
+      `Output directory cannot be an ancestor of release directory: ${resolvedOutputDir}`,
+    );
+  }
+
+  const relFromReleaseToOutput = path.relative(resolvedReleaseDir, resolvedOutputDir);
+  if (!relFromReleaseToOutput.startsWith("..") && !path.isAbsolute(relFromReleaseToOutput)) {
+    throw new Error(`Output directory cannot be inside release directory: ${resolvedOutputDir}`);
+  }
+
+  if (fs.existsSync(resolvedOutputDir)) {
+    const outputStat = fs.statSync(resolvedOutputDir);
+    if (!outputStat.isDirectory()) {
+      throw new Error(`Output path already exists and is not a directory: ${resolvedOutputDir}`);
+    }
+    const existingEntries = fs.readdirSync(resolvedOutputDir);
+    if (existingEntries.length > 0) {
+      throw new Error(
+        `Output directory must be empty, found ${existingEntries.length} item(s) in: ${resolvedOutputDir}`,
+      );
+    }
+  }
+
+  // Verify selection before any disk mutations
+  const selectedFiles = selectDesktopArtifacts(resolvedReleaseDir, normalizedTarget);
+
+  if (!fs.existsSync(resolvedOutputDir)) {
+    fs.mkdirSync(resolvedOutputDir, { recursive: true });
+  }
+
+  for (const file of selectedFiles) {
+    const src = path.join(resolvedReleaseDir, file);
+    const dest = path.join(resolvedOutputDir, file);
+    fs.copyFileSync(src, dest);
+  }
+
+  return {
+    target: normalizedTarget,
+    files: selectedFiles,
+    outputDir: resolvedOutputDir,
+  };
+}
+
 function parseCliArgs(argv) {
   const args = {
     action: "pack",
-    outputDir: "personal-artifacts/daemon",
+    outputDir: null,
+    releaseDir: "packages/desktop/release",
+    target: process.env.DESKTOP_TARGET || null,
     commit: null,
     skipPrereqs: false,
   };
@@ -466,13 +637,24 @@ function parseCliArgs(argv) {
       args.action = "verify";
     } else if (arg === "check-prereqs") {
       args.action = "check-prereqs";
+    } else if (arg === "stage-desktop") {
+      args.action = "stage-desktop";
     } else if (arg === "--output-dir" || arg === "-o") {
       args.outputDir = argv[++i];
+    } else if (arg === "--release-dir" || arg === "-r") {
+      args.releaseDir = argv[++i];
+    } else if (arg === "--target" || arg === "-t") {
+      args.target = argv[++i];
     } else if (arg === "--commit" || arg === "-c") {
       args.commit = argv[++i];
     } else if (arg === "--skip-prereqs") {
       args.skipPrereqs = true;
     }
+  }
+
+  if (!args.outputDir) {
+    args.outputDir =
+      args.action === "stage-desktop" ? "personal-artifacts/desktop" : "personal-artifacts/daemon";
   }
 
   return args;
@@ -492,6 +674,18 @@ if (isMainModule(import.meta.url)) {
       });
       console.log(
         `Daemon artifacts verified successfully. Version: ${manifest.version}, Commit: ${manifest.commit}`,
+      );
+    } else if (args.action === "stage-desktop") {
+      const { files, outputDir } = stageDesktopArtifacts({
+        releaseDir: args.releaseDir,
+        outputDir: args.outputDir,
+        target: args.target,
+      });
+      for (const file of files) {
+        console.log(`Staging archive: ${file}`);
+      }
+      console.log(
+        `Successfully staged ${files.length} desktop archive(s) for ${args.target} into ${outputDir}`,
       );
     } else {
       const { manifest, outputDir } = packDaemonArtifacts({

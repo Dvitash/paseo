@@ -39,7 +39,7 @@ function Invoke-Gh {
         [hashtable]$LocalAdapters
     )
     if ($LocalAdapters -and $LocalAdapters.ContainsKey("Gh")) {
-        return & $LocalAdapters["Gh"] $CommandArgs
+        return & $LocalAdapters["Gh"] $CommandArgs $TimeoutSeconds
     }
     $ghCmd = Get-Command "gh" -ErrorAction SilentlyContinue
     if (-not $ghCmd) {
@@ -317,8 +317,9 @@ function Invoke-PersonalUpdate {
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
     try {
         $artName = "paseo-desktop-windows-x64-$headSha"
-        Write-Host "Downloading $artName..."
-        $dl = Invoke-Gh -CommandArgs @("run", "download", "$runId", "--repo", $Repo, "--name", $artName, "--dir", $tempDir) -TimeoutSeconds 600 -LocalAdapters $LocalAdapters
+        Write-Host "Downloading $artName (allowing up to 60 minutes on slow connections)..."
+        # Older artifacts include nearly 1 GB of multi-architecture archives.
+        $dl = Invoke-Gh -CommandArgs @("run", "download", "$runId", "--repo", $Repo, "--name", $artName, "--dir", $tempDir) -TimeoutSeconds 3600 -LocalAdapters $LocalAdapters
         if ($dl.ExitCode -ne 0) { throw "Failed downloading artifact: $($dl.Stdout)" }
 
         # electron-builder may include ARM64 and combined NSIS installers as well.
