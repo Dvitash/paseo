@@ -2293,6 +2293,27 @@ export const ko: TranslationResources = {
       },
     },
     host: {
+      webPush: {
+        title: "웹 푸시 알림",
+        label: "백그라운드 알림",
+        disabledHint: "에이전트가 완료되거나 주의가 필요할 때 백그라운드 알림을 받습니다.",
+        unsupportedInsecure: "웹 푸시 알림에는 보안 컨텍스트(HTTPS 또는 localhost)가 필요합니다.",
+        unsupportedIos: "iOS에서는 웹 푸시 알림을 위해 Paseo를 홈 화면에 추가해야 합니다.",
+        unsupportedBrowser: "사용 중인 브라우저가 웹 푸시 알림을 지원하지 않습니다.",
+        permissionDenied:
+          "브라우저 설정에서 알림 권한이 차단되었습니다. 이 사이트의 알림을 허용해 주세요.",
+        updateRequired: "웹 푸시 알림을 지원하려면 호스트 데몬 업데이트가 필요합니다.",
+        disconnected: "호스트 연결이 끊어졌습니다. 알림을 활성화하려면 연결하세요.",
+        enabledHint: "이 호스트에 대한 백그라운드 푸시 알림이 활성화되어 있습니다.",
+        enablingHint: "웹 푸시 알림 활성화 중…",
+        disablingHint: "웹 푸시 알림 비활성화 중…",
+        testingHint: "테스트 알림 전송 중…",
+        enable: "활성화",
+        disable: "비활성화",
+        testTitle: "테스트 알림",
+        testHint: "이 기기에서 수신을 확인하기 위해 테스트 알림을 보냅니다.",
+        sendTest: "테스트 전송",
+      },
       appearance: {
         title: "모양",
         name: {

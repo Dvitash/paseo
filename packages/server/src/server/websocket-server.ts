@@ -58,6 +58,9 @@ import {
   type PushNotifications,
   type PushNotificationSender,
 } from "./push/index.js";
+import { loadOrCreateVapidKeys } from "./push/vapid-keys.js";
+import { WebPushStore } from "./push/web-push-store.js";
+import { WebPushService } from "./push/web-push-service.js";
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
@@ -72,6 +75,7 @@ import {
   buildAgentAttentionNotificationPayload,
   findLatestPermissionRequest,
 } from "@getpaseo/protocol/agent-attention-notification";
+import type { WebPushSubscription } from "@getpaseo/protocol/messages";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -470,6 +474,7 @@ interface BrowserToolsRegistration {
 
 interface SocketSessionOptions {
   clientId: string;
+  principalId?: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
   permissions: readonly DaemonPermission[];
@@ -560,8 +565,10 @@ export class VoiceAssistantWebSocketServer {
   private readonly paseoHome: string;
   private readonly worktreesRoot: string | undefined;
   private readonly daemonConfigStore: DaemonConfigStore;
-  private readonly pushNotifications: PushNotifications;
-  private readonly pushNotificationSender: PushNotificationSender;
+  private pushNotifications!: PushNotifications;
+  private pushNotificationSender!: PushNotificationSender;
+  private webPushService!: WebPushService | null;
+  private webPushOperational!: boolean;
   private readonly mcpBaseUrl: string | null;
   private speech!: SpeechService | null;
   private terminalManager!: TerminalManager | null;
@@ -723,12 +730,7 @@ export class VoiceAssistantWebSocketServer {
       unsubscribeChange();
     };
 
-    const pushLogger = this.logger.child({ module: "push" });
-    this.pushNotifications = createPushNotifications({
-      logger: pushLogger,
-      filePath: join(paseoHome, "push-tokens.json"),
-    });
-    this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
+    this.initializePushServices(paseoHome, pushNotificationSender);
 
     this.agentManager.setAgentAttentionCallback((params) => {
       void this.broadcastAgentAttention(params).catch((err) => {
@@ -745,6 +747,35 @@ export class VoiceAssistantWebSocketServer {
     this.startApplicationSocketLeaseInterval();
 
     this.logger.info("WebSocket server initialized on /ws");
+  }
+  private initializePushServices(
+    paseoHome: string,
+    pushNotificationSender?: PushNotificationSender,
+  ): void {
+    const pushLogger = this.logger.child({ module: "push" });
+    const vapidKeyPath = join(paseoHome, "vapid-keys.json");
+    const webPushSubPath = join(paseoHome, "web-push-subscriptions.json");
+    let webPushService: WebPushService | null = null;
+    try {
+      const vapidKeys = loadOrCreateVapidKeys(vapidKeyPath, pushLogger);
+      const webPushStore = new WebPushStore(pushLogger, webPushSubPath);
+      webPushService = new WebPushService({
+        logger: pushLogger,
+        vapidKeys,
+        store: webPushStore,
+      });
+    } catch (error) {
+      pushLogger.warn({ err: error }, "Failed to initialize Web Push service; web push disabled");
+    }
+    this.webPushService = webPushService;
+    this.webPushOperational = webPushService !== null;
+
+    this.pushNotifications = createPushNotifications({
+      logger: pushLogger,
+      filePath: join(paseoHome, "push-tokens.json"),
+      webPush: webPushService ?? undefined,
+    });
+    this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
   }
 
   private assignOptionalServices(params: {
@@ -1012,6 +1043,9 @@ export class VoiceAssistantWebSocketServer {
         connection.session.setPermissions(permissions);
         this.syncBrowserToolsClientRegistration(connection);
       }
+    }
+    if (!permissions.includes("workspace.read")) {
+      this.webPushService?.revokePrincipal(principalId);
     }
   }
 
@@ -1317,6 +1351,7 @@ export class VoiceAssistantWebSocketServer {
 
     const session = this.createSocketSession({
       clientId,
+      principalId: admission.principalId,
       appVersion,
       clientCapabilities,
       permissions: admission.permissions,
@@ -1387,6 +1422,20 @@ export class VoiceAssistantWebSocketServer {
   }
 
   private createSocketSession(options: SocketSessionOptions): Session {
+    const webPush =
+      this.webPushService && options.principalId
+        ? {
+            getPublicKey: () => this.webPushService!.getPublicKey(),
+            subscribe: (sub: WebPushSubscription) =>
+              this.webPushService!.subscribe(sub, options.principalId!, options.clientId),
+            unsubscribe: (endpoint: string) =>
+              this.webPushService!.unsubscribe(endpoint, options.principalId!, options.clientId),
+            test: (endpoint: string) => this.webPushService!.test(endpoint, options.principalId!),
+            onClientActivity: () =>
+              this.webPushService!.renewPrincipal(options.principalId!, options.clientId),
+          }
+        : undefined;
+
     return new Session({
       clientId: options.clientId,
       appVersion: options.appVersion,
@@ -1408,6 +1457,7 @@ export class VoiceAssistantWebSocketServer {
       },
       downloadTokenStore: this.downloadTokenStore,
       pushNotifications: this.pushNotifications,
+      webPush,
       paseoHome: this.paseoHome,
       worktreesRoot: this.worktreesRoot,
       agentManager: this.agentManager,
@@ -1673,6 +1723,7 @@ export class VoiceAssistantWebSocketServer {
         ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
         pushTokenRevocation: true,
+        ...(this.webPushOperational ? { webPush: true } : {}),
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: true,
         pluginManagement: true,

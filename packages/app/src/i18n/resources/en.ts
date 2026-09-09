@@ -2385,6 +2385,28 @@ export const en = {
       },
     },
     host: {
+      webPush: {
+        title: "Web Push Notifications",
+        label: "Background notifications",
+        disabledHint: "Receive background notifications when agents finish or need attention.",
+        unsupportedInsecure:
+          "Web Push notifications require a secure context (HTTPS or localhost).",
+        unsupportedIos: "On iOS, Web Push notifications require adding Paseo to your Home Screen.",
+        unsupportedBrowser: "Your browser does not support Web Push notifications.",
+        permissionDenied:
+          "Notification permission was blocked in your browser settings. Please allow notifications for this site.",
+        updateRequired: "Host daemon update required to support Web Push notifications.",
+        disconnected: "Host is disconnected. Connect to enable notifications.",
+        enabledHint: "Background push notifications are active for this host.",
+        enablingHint: "Enabling Web Push notifications…",
+        disablingHint: "Disabling Web Push notifications…",
+        testingHint: "Sending test notification…",
+        enable: "Enable",
+        disable: "Disable",
+        testTitle: "Test notification",
+        testHint: "Send a test notification to verify delivery on this device.",
+        sendTest: "Send test",
+      },
       appearance: {
         title: "Appearance",
         name: {

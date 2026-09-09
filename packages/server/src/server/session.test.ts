@@ -323,6 +323,7 @@ interface SessionForTestOptions {
   daemonRuntimeConfig?: SessionOptions["daemonRuntimeConfig"];
   downloadTokenStore?: SessionOptions["downloadTokenStore"];
   pushNotifications?: SessionOptions["pushNotifications"];
+  webPush?: SessionOptions["webPush"];
   messages?: unknown[];
   targetedMessages?: Array<{ source: object; message: SessionOutboundMessage }>;
   binaryMessages?: Uint8Array[];
@@ -433,6 +434,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     daemonVersion: options.daemonVersion,
     daemonRuntimeConfig: options.daemonRuntimeConfig,
     permissions: options.permissions ?? OWNER_PERMISSIONS,
+    webPush: options.webPush,
   };
   return new Session(sessionOptions);
 }
@@ -1907,6 +1909,179 @@ test("push token revocation only acknowledges durable removal", async () => {
       requestId: "revoke-failed",
       requestType: "push.unregister.request",
       error: "Request failed: disk full",
+      code: "handler_error",
+    },
+  });
+});
+
+test("push.web.* RPCs succeed with configured Web Push registration and renew on activity", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const subscribed: unknown[] = [];
+  const unsubscribed: string[] = [];
+  const tested: string[] = [];
+  let activityCount = 0;
+
+  const mockWebPush: SessionOptions["webPush"] = {
+    getPublicKey: () => "BMc3Jld-mock-public-key",
+    subscribe: (sub) => {
+      subscribed.push(sub);
+    },
+    unsubscribe: (endpoint) => {
+      unsubscribed.push(endpoint);
+      return true;
+    },
+    test: async (endpoint) => {
+      tested.push(endpoint);
+    },
+    onClientActivity: () => {
+      activityCount++;
+    },
+  };
+
+  const session = createSessionForTest({
+    messages,
+    webPush: mockWebPush,
+  });
+
+  // 1. get_config
+  await session.handleMessage({
+    type: "push.web.get_config.request",
+    requestId: "cfg-1",
+  });
+  expect(messages).toContainEqual({
+    type: "push.web.get_config.response",
+    payload: {
+      requestId: "cfg-1",
+      publicKey: "BMc3Jld-mock-public-key",
+    },
+  });
+
+  // 2. subscribe
+  const subPayload = {
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+    keys: { auth: "auth-123", p256dh: "p256dh-123" },
+  };
+  await session.handleMessage({
+    type: "push.web.subscribe.request",
+    requestId: "sub-1",
+    subscription: subPayload,
+  });
+  expect(subscribed).toEqual([subPayload]);
+  expect(messages).toContainEqual({
+    type: "push.web.subscribe.response",
+    payload: { requestId: "sub-1" },
+  });
+
+  // 3. test
+  await session.handleMessage({
+    type: "push.web.test.request",
+    requestId: "test-1",
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+  });
+  expect(tested).toEqual(["https://updates.push.services.mozilla.com/wpush/v2/test-token"]);
+  expect(messages).toContainEqual({
+    type: "push.web.test.response",
+    payload: { requestId: "test-1" },
+  });
+
+  // 4. unsubscribe
+  await session.handleMessage({
+    type: "push.web.unsubscribe.request",
+    requestId: "unsub-1",
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+  });
+  expect(unsubscribed).toEqual(["https://updates.push.services.mozilla.com/wpush/v2/test-token"]);
+  expect(messages).toContainEqual({
+    type: "push.web.unsubscribe.response",
+    payload: { requestId: "unsub-1" },
+  });
+
+  // 5. client activity triggers onClientActivity
+  await session.handleMessage({
+    type: "client_heartbeat",
+    deviceType: "desktop",
+    focusedAgentId: null,
+    lastActivityAt: "2026-09-09T00:00:00.000Z",
+    appVisible: true,
+  });
+  expect(activityCount).toBe(1);
+});
+
+test("push.web.* RPCs reject with access_denied when lacking workspace.read permission", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    permissions: ["daemon.read"], // no workspace.read
+  });
+
+  await session.handleMessage({
+    type: "push.web.get_config.request",
+    requestId: "unauthorized-cfg",
+  });
+
+  expect(messages).toContainEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "unauthorized-cfg",
+      requestType: "push.web.get_config.request",
+      error: "Session is not authorized for push.web.get_config.request",
+      code: "access_denied",
+    },
+  });
+});
+
+test("push.web.* RPCs reject with handler_error when Web Push is unconfigured", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    webPush: undefined, // not configured
+  });
+
+  await session.handleMessage({
+    type: "push.web.get_config.request",
+    requestId: "no-config-req",
+  });
+
+  expect(messages).toContainEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "no-config-req",
+      requestType: "push.web.get_config.request",
+      error: "Request failed: Web push is not supported or not configured",
+      code: "handler_error",
+    },
+  });
+});
+
+test("push.web.test.request surfaces push service delivery failure as handler_error", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const mockWebPush: SessionOptions["webPush"] = {
+    getPublicKey: () => "key",
+    subscribe: () => {},
+    unsubscribe: () => true,
+    test: async () => {
+      throw new Error("Push service returned status 400: Invalid payload");
+    },
+    onClientActivity: () => {},
+  };
+
+  const session = createSessionForTest({
+    messages,
+    webPush: mockWebPush,
+  });
+
+  await session.handleMessage({
+    type: "push.web.test.request",
+    requestId: "test-err-req",
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+  });
+
+  expect(messages).toContainEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "test-err-req",
+      requestType: "push.web.test.request",
+      error: "Request failed: Push service returned status 400: Invalid payload",
       code: "handler_error",
     },
   });

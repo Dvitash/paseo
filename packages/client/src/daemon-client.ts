@@ -24,6 +24,7 @@ import {
   SessionInboundMessageSchema,
   type ActiveTurnBehavior,
   type ServerInfoStatusPayload,
+  type WebPushSubscription,
 } from "@getpaseo/protocol/messages";
 import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
 import type {
@@ -1978,6 +1979,43 @@ export class DaemonClient {
       message: { type: "push.unregister.request", token, requestId },
       responseType: "push.unregister.response",
       timeout: PUSH_TOKEN_REVOCATION_TIMEOUT_MS,
+    });
+  }
+
+  async getWebPushConfig(requestId?: string): Promise<{ publicKey: string }> {
+    const reqId = requestId ?? this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.get_config.request", requestId: reqId },
+      responseType: "push.web.get_config.response",
+    });
+    return { publicKey: payload.publicKey };
+  }
+
+  async subscribeWebPush(subscription: WebPushSubscription, requestId?: string): Promise<void> {
+    const reqId = requestId ?? this.createRequestId();
+    await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.subscribe.request", subscription, requestId: reqId },
+      responseType: "push.web.subscribe.response",
+    });
+  }
+
+  async unsubscribeWebPush(endpoint: string, requestId?: string): Promise<void> {
+    const reqId = requestId ?? this.createRequestId();
+    await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.unsubscribe.request", endpoint, requestId: reqId },
+      responseType: "push.web.unsubscribe.response",
+    });
+  }
+
+  async testWebPush(endpoint: string, requestId?: string): Promise<void> {
+    const reqId = requestId ?? this.createRequestId();
+    await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.test.request", endpoint, requestId: reqId },
+      responseType: "push.web.test.response",
     });
   }
 

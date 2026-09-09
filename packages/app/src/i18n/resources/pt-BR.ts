@@ -2318,6 +2318,31 @@ export const ptBR: TranslationResources = {
       },
     },
     host: {
+      webPush: {
+        title: "Notificações Web Push",
+        label: "Notificações em segundo plano",
+        disabledHint:
+          "Receba notificações em segundo plano quando os agentes terminarem ou precisarem de atenção.",
+        unsupportedInsecure:
+          "As notificações Web Push requerem um contexto seguro (HTTPS ou localhost).",
+        unsupportedIos:
+          "No iOS, as notificações Web Push exigem adicionar o Paseo à Tela de Início.",
+        unsupportedBrowser: "Seu navegador não suporta notificações Web Push.",
+        permissionDenied:
+          "A permissão de notificação foi bloqueada nas configurações do seu navegador. Permita notificações para este site.",
+        updateRequired:
+          "Atualização do daemon do host necessária para suportar notificações Web Push.",
+        disconnected: "O host está desconectado. Conecte-se para ativar as notificações.",
+        enabledHint: "Notificações push em segundo plano estão ativas para este host.",
+        enablingHint: "Ativando notificações Web Push…",
+        disablingHint: "Desativando notificações Web Push…",
+        testingHint: "Enviando notificação de teste…",
+        enable: "Ativar",
+        disable: "Desativar",
+        testTitle: "Notificação de teste",
+        testHint: "Envie uma notificação de teste para verificar o recebimento neste dispositivo.",
+        sendTest: "Enviar teste",
+      },
       appearance: {
         title: "Aparência",
         name: {

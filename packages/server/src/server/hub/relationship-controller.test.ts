@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
-import { hostname, platform } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, platform, tmpdir } from "node:os";
+import path from "node:path";
+import pino from "pino";
 import { afterEach, describe, expect, test } from "vitest";
 import { HubRelationshipHarness } from "./test-utils/relationship-harness.js";
+import { HubRelationshipController } from "./relationship-controller.js";
 
 async function captureUnhandledRejections(action: () => Promise<void>): Promise<unknown[]> {
   const rejections: unknown[] = [];
@@ -917,5 +921,66 @@ describe("Hub relationship", () => {
     await relationship.restartDaemon();
 
     expect(await relationship.storedOwnedStatus(created.payload.agentId!)).toBe("closed");
+  });
+
+  test("disconnect invokes updateAttachedPermissions with empty permissions for durable cleanup", async () => {
+    const attachedPermissionUpdates: Array<{
+      principalId: string;
+      permissions: readonly string[];
+    }> = [];
+    const tempPaseoHome = mkdtempSync(path.join(tmpdir(), "hub-controller-perm-test-"));
+    try {
+      const activeRecord = {
+        version: 2,
+        state: "active",
+        relationship: {
+          daemonId: "daemon-test-1",
+          idempotencyKey: "idem-1",
+          hubOrigin: "https://hub.example.com",
+          createdAt: new Date().toISOString(),
+          permissions: ["hub.execute"],
+        },
+        credential: { secret: "test-secret" },
+        transport: {
+          kind: "direct_websocket",
+          webSocketUrl: "wss://hub.example.com/socket",
+        },
+      };
+      writeFileSync(
+        path.join(tempPaseoHome, "hub-relationship.json"),
+        JSON.stringify(activeRecord),
+        "utf8",
+      );
+
+      const unexpected = () => {
+        throw new Error("Unexpected operation during offline disconnect");
+      };
+      const activeController = new HubRelationshipController({
+        paseoHome: tempPaseoHome,
+        hostname: "test-host",
+        serverId: "test-server",
+        daemonPublicKey: "test-pubkey",
+        logger: pino({ level: "silent" }),
+        remote: {
+          enroll: unexpected,
+          updatePermissions: unexpected,
+          openSocket: unexpected,
+          revoke: async () => {},
+        },
+        attachSocket: unexpected,
+        createExecutionAgents: unexpected,
+        updateAttachedPermissions(principalId, permissions) {
+          attachedPermissionUpdates.push({ principalId, permissions });
+        },
+      });
+
+      await activeController.disconnect({ force: true });
+
+      expect(attachedPermissionUpdates).toHaveLength(1);
+      expect(attachedPermissionUpdates[0]!.principalId).toMatch(/^hub:daemon-test-1:/);
+      expect(attachedPermissionUpdates[0]!.permissions).toEqual([]);
+    } finally {
+      rmSync(tempPaseoHome, { recursive: true, force: true });
+    }
   });
 });

@@ -2255,6 +2255,26 @@ export const zhCN: TranslationResources = {
       },
     },
     host: {
+      webPush: {
+        title: "Web Push 通知",
+        label: "后台通知",
+        disabledHint: "当智能体完成或需要注意时接收后台通知。",
+        unsupportedInsecure: "Web Push 通知需要安全上下文（HTTPS 或 localhost）。",
+        unsupportedIos: "在 iOS 上，Web Push 通知需要将 Paseo 添加到主屏幕。",
+        unsupportedBrowser: "您的浏览器不支持 Web Push 通知。",
+        permissionDenied: "通知权限已被浏览器设置阻止。请允许此网站的通知。",
+        updateRequired: "需要更新主机守护程序以支持 Web Push 通知。",
+        disconnected: "主机已断开连接。连接后以启用通知。",
+        enabledHint: "此主机的后台推送通知已激活。",
+        enablingHint: "正在启用 Web Push 通知…",
+        disablingHint: "正在禁用 Web Push 通知…",
+        testingHint: "正在发送测试通知…",
+        enable: "启用",
+        disable: "禁用",
+        testTitle: "测试通知",
+        testHint: "发送测试通知以验证在此设备上的接收情况。",
+        sendTest: "发送测试",
+      },
       appearance: {
         title: "外观",
         name: {

@@ -1,4 +1,4 @@
-import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
+import type { SessionEventSubscription, WebPushSubscription } from "@getpaseo/protocol/messages";
 import type { AgentRequests } from "./agent/requests/index.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
@@ -443,6 +443,14 @@ const nodeSessionFileSystem: SessionFileSystem = {
 };
 
 // Stub types for features under development (modules not yet available)
+export interface SessionWebPushRegistration {
+  getPublicKey(): string;
+  subscribe(subscription: WebPushSubscription): Promise<void> | void;
+  unsubscribe(endpoint: string): Promise<boolean> | boolean;
+  test(endpoint: string): Promise<void>;
+  onClientActivity(): void;
+}
+
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
 export interface SessionOptions {
@@ -460,6 +468,7 @@ export interface SessionOptions {
   logger: pino.Logger;
   downloadTokenStore: DownloadTokenStore;
   pushNotifications: PushNotifications;
+  webPush?: SessionWebPushRegistration;
   paseoHome: string;
   worktreesRoot?: string;
   agentManager: AgentManager;
@@ -729,6 +738,7 @@ export class Session {
     appVisibilityChangedAt: Date;
   } | null = null;
   private registeredPushToken: string | null = null;
+  private webPush: SessionWebPushRegistration | null = null;
   private readonly terminalManager: TerminalManager | null;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
   private readonly serviceProxy: ServiceProxySubsystem | null;
@@ -828,6 +838,7 @@ export class Session {
     this.onLifecycleIntent = onLifecycleIntent ?? null;
     this.onWorkspaceRecovered = onWorkspaceRecovered ?? null;
     this.pushNotifications = pushNotifications;
+    this.initializeWebPush(options.webPush);
     this.paseoHome = paseoHome;
     this.agentRequests = options.agentRequests;
     this.projectIcons = new ProjectIconReader(paseoHome);
@@ -2822,6 +2833,18 @@ export class Session {
           payload: { requestId: msg.requestId },
         });
         return;
+      case "push.web.get_config.request":
+        await this.handlePushWebGetConfigRequest(msg);
+        return;
+      case "push.web.subscribe.request":
+        await this.handlePushWebSubscribeRequest(msg);
+        return;
+      case "push.web.unsubscribe.request":
+        await this.handlePushWebUnsubscribeRequest(msg);
+        return;
+      case "push.web.test.request":
+        await this.handlePushWebTestRequest(msg);
+        return;
     }
   }
 
@@ -4374,6 +4397,7 @@ export class Session {
     if (this.registeredPushToken) {
       this.pushNotifications.renew(this.registeredPushToken);
     }
+    this.webPush?.onClientActivity();
   }
 
   private async clearFocusedTerminalAttention(terminalId: string): Promise<void> {
@@ -4395,6 +4419,79 @@ export class Session {
     this.registeredPushToken = token;
     this.pushNotifications.renew(token);
     this.sessionLogger.info("Registered push token");
+  }
+
+  private initializeWebPush(webPush?: SessionWebPushRegistration): void {
+    if (webPush) {
+      this.webPush = webPush;
+    } else {
+      this.webPush = null;
+    }
+  }
+
+  public bindWebPush(webPush: SessionWebPushRegistration): void {
+    this.webPush = webPush;
+  }
+
+  private async handlePushWebGetConfigRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.get_config.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    const publicKey = this.webPush.getPublicKey();
+    this.emit({
+      type: "push.web.get_config.response",
+      payload: {
+        requestId: msg.requestId,
+        publicKey,
+      },
+    });
+  }
+
+  private async handlePushWebSubscribeRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.subscribe.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    await this.webPush.subscribe(msg.subscription);
+    this.emit({
+      type: "push.web.subscribe.response",
+      payload: {
+        requestId: msg.requestId,
+      },
+    });
+  }
+
+  private async handlePushWebUnsubscribeRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.unsubscribe.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    await this.webPush.unsubscribe(msg.endpoint);
+    this.emit({
+      type: "push.web.unsubscribe.response",
+      payload: {
+        requestId: msg.requestId,
+      },
+    });
+  }
+
+  private async handlePushWebTestRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.test.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    await this.webPush.test(msg.endpoint);
+    this.emit({
+      type: "push.web.test.response",
+      payload: {
+        requestId: msg.requestId,
+      },
+    });
   }
 
   /**

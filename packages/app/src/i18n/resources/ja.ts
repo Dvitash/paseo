@@ -2302,6 +2302,29 @@ export const ja: TranslationResources = {
       },
     },
     host: {
+      webPush: {
+        title: "Web Push 通知",
+        label: "バックグラウンド通知",
+        disabledHint: "エージェントの完了時や注意が必要な時にバックグラウンド通知を受け取ります。",
+        unsupportedInsecure:
+          "Web Push 通知には安全なコンテキスト (HTTPS または localhost) が必要です。",
+        unsupportedIos:
+          "iOS では、Web Push 通知を使用するために Paseo をホーム画面に追加する必要があります。",
+        unsupportedBrowser: "お使いのブラウザは Web Push 通知に対応していません。",
+        permissionDenied:
+          "ブラウザ設定で通知権限がブロックされています。このサイトの通知を許可してください。",
+        updateRequired: "Web Push 通知をサポートするにはホストデーモンの更新が必要です。",
+        disconnected: "ホストが切断されています。通知を有効にするには接続してください。",
+        enabledHint: "このホストのバックグラウンド Push 通知は有効です。",
+        enablingHint: "Web Push 通知を有効にしています…",
+        disablingHint: "Web Push 通知を無効にしています…",
+        testingHint: "テスト通知を送信しています…",
+        enable: "有効にする",
+        disable: "無効にする",
+        testTitle: "テスト通知",
+        testHint: "このデバイスへの通知配信を確認するためのテスト通知を送信します。",
+        sendTest: "テスト送信",
+      },
       appearance: {
         title: "外観",
         name: {

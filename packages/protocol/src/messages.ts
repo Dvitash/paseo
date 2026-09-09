@@ -8,6 +8,18 @@ import { ProviderPaseoToolsPolicySchema } from "./provider-config.js";
 import { TOOL_CALL_ICON_NAMES } from "./agent-types.js";
 import { WORKSPACE_LABEL_COLORS } from "./workspace-labels.js";
 import {
+  WebPushSubscriptionKeysSchema,
+  WebPushSubscriptionSchema,
+  type WebPushSubscriptionKeys,
+  type WebPushSubscription,
+} from "./web-push.js";
+export {
+  WebPushSubscriptionKeysSchema,
+  WebPushSubscriptionSchema,
+  type WebPushSubscriptionKeys,
+  type WebPushSubscription,
+};
+import {
   SideChatGetRequestSchema,
   SideChatSendRequestSchema,
   SideChatStopRequestSchema,
@@ -2836,6 +2848,58 @@ export const PushUnregisterResponseSchema = z.object({
   }),
 });
 
+export const PushWebGetConfigRequestSchema = z.object({
+  type: z.literal("push.web.get_config.request"),
+  requestId: z.string(),
+});
+
+export const PushWebGetConfigResponseSchema = z.object({
+  type: z.literal("push.web.get_config.response"),
+  payload: z.object({
+    requestId: z.string(),
+    publicKey: z.string(),
+  }),
+});
+
+export const PushWebSubscribeRequestSchema = z.object({
+  type: z.literal("push.web.subscribe.request"),
+  requestId: z.string(),
+  subscription: WebPushSubscriptionSchema,
+});
+
+export const PushWebSubscribeResponseSchema = z.object({
+  type: z.literal("push.web.subscribe.response"),
+  payload: z.object({
+    requestId: z.string(),
+  }),
+});
+
+export const PushWebUnsubscribeRequestSchema = z.object({
+  type: z.literal("push.web.unsubscribe.request"),
+  requestId: z.string(),
+  endpoint: z.string(),
+});
+
+export const PushWebUnsubscribeResponseSchema = z.object({
+  type: z.literal("push.web.unsubscribe.response"),
+  payload: z.object({
+    requestId: z.string(),
+  }),
+});
+
+export const PushWebTestRequestSchema = z.object({
+  type: z.literal("push.web.test.request"),
+  requestId: z.string(),
+  endpoint: z.string(),
+});
+
+export const PushWebTestResponseSchema = z.object({
+  type: z.literal("push.web.test.response"),
+  payload: z.object({
+    requestId: z.string(),
+  }),
+});
+
 // ============================================================================
 // Terminal Messages
 // ============================================================================
@@ -3232,6 +3296,10 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ListCommandsRequestSchema,
   RegisterPushTokenMessageSchema,
   PushUnregisterRequestSchema,
+  PushWebGetConfigRequestSchema,
+  PushWebSubscribeRequestSchema,
+  PushWebUnsubscribeRequestSchema,
+  PushWebTestRequestSchema,
   ListTerminalsRequestSchema,
   SubscribeTerminalsRequestSchema,
   UnsubscribeTerminalsRequestSchema,
@@ -3593,6 +3661,7 @@ export const ServerInfoStatusPayloadSchema = z
         agentProfiles: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
+        webPush: z.boolean().optional(),
       })
       .optional(),
   })
@@ -6491,6 +6560,10 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   StatusMessageSchema,
   PongMessageSchema,
   PushUnregisterResponseSchema,
+  PushWebGetConfigResponseSchema,
+  PushWebSubscribeResponseSchema,
+  PushWebUnsubscribeResponseSchema,
+  PushWebTestResponseSchema,
   RpcErrorMessageSchema,
   ArtifactMessageSchema,
   AgentUpdateMessageSchema,
@@ -7082,6 +7155,14 @@ export type ListCommandsResponse = z.infer<typeof ListCommandsResponseSchema>;
 export type RegisterPushTokenMessage = z.infer<typeof RegisterPushTokenMessageSchema>;
 export type PushUnregisterRequest = z.infer<typeof PushUnregisterRequestSchema>;
 export type PushUnregisterResponse = z.infer<typeof PushUnregisterResponseSchema>;
+export type PushWebGetConfigRequest = z.infer<typeof PushWebGetConfigRequestSchema>;
+export type PushWebGetConfigResponse = z.infer<typeof PushWebGetConfigResponseSchema>;
+export type PushWebSubscribeRequest = z.infer<typeof PushWebSubscribeRequestSchema>;
+export type PushWebSubscribeResponse = z.infer<typeof PushWebSubscribeResponseSchema>;
+export type PushWebUnsubscribeRequest = z.infer<typeof PushWebUnsubscribeRequestSchema>;
+export type PushWebUnsubscribeResponse = z.infer<typeof PushWebUnsubscribeResponseSchema>;
+export type PushWebTestRequest = z.infer<typeof PushWebTestRequestSchema>;
+export type PushWebTestResponse = z.infer<typeof PushWebTestResponseSchema>;
 
 // Terminal message types
 export type ListTerminalsRequest = z.infer<typeof ListTerminalsRequestSchema>;

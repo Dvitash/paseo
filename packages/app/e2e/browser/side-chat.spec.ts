@@ -95,3 +95,32 @@ test("Side is enabled by default and retains its conversation when reopened", as
     await workspace.cleanup();
   }
 });
+
+test("Side is available in the compact Explorer and stays linked when reopened", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const workspace = await seedMockAgentWorkspace({
+    repoPrefix: "side-chat-compact-",
+    title: "Mobile main context",
+  });
+  try {
+    await openAgentRoute(page, workspace);
+    await page.getByTestId("workspace-explorer-toggle").filter({ visible: true }).click();
+    const sideTab = page.getByTestId("explorer-tab-side");
+    await expect(sideTab).toBeVisible();
+    await sideTab.click();
+    const side = page.getByTestId("side-chat-view");
+    await expect(side.getByTestId("side-panel-linked-header")).toContainText("Mobile main context");
+    await side.getByTestId("side-input").fill("Explain this session.");
+    await side.getByTestId("side-send-button").click();
+    await expect(side.locator('[data-testid^="side-message-assistant-"]')).toContainText("Cycle 1");
+    await page.getByTestId("explorer-close").click();
+    await expect(side).not.toBeVisible();
+    await page.getByTestId("workspace-explorer-toggle").filter({ visible: true }).click();
+    await expect(side.getByText("Explain this session.", { exact: true })).toBeVisible();
+    await expect(side.getByTestId("side-panel-linked-header")).toContainText("Mobile main context");
+  } finally {
+    await workspace.cleanup();
+  }
+});

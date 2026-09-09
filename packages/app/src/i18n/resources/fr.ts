@@ -2339,6 +2339,31 @@ export const fr: TranslationResources = {
       },
     },
     host: {
+      webPush: {
+        title: "Notifications Web Push",
+        label: "Notifications en arrière-plan",
+        disabledHint:
+          "Recevez des notifications en arrière-plan lorsque les agents ont terminé ou requièrent votre attention.",
+        unsupportedInsecure:
+          "Les notifications Web Push nécessitent un contexte sécurisé (HTTPS ou localhost).",
+        unsupportedIos:
+          "Sur iOS, les notifications Web Push nécessitent d'ajouter Paseo à l'écran d'accueil.",
+        unsupportedBrowser: "Votre navigateur ne prend pas en charge les notifications Web Push.",
+        permissionDenied:
+          "L'autorisation de notification a été bloquée dans les paramètres du navigateur. Veuillez autoriser les notifications pour ce site.",
+        updateRequired:
+          "Mise à jour du démon hôte requise pour prendre en charge les notifications Web Push.",
+        disconnected: "L'hôte est déconnecté. Connectez-vous pour activer les notifications.",
+        enabledHint: "Les notifications push en arrière-plan sont actives pour cet hôte.",
+        enablingHint: "Activation des notifications Web Push…",
+        disablingHint: "Désactivation des notifications Web Push…",
+        testingHint: "Envoi de la notification de test…",
+        enable: "Activer",
+        disable: "Désactiver",
+        testTitle: "Notification de test",
+        testHint: "Envoyez une notification de test pour vérifier la réception sur cet appareil.",
+        sendTest: "Envoyer le test",
+      },
       appearance: {
         title: "Apparence",
         name: {
