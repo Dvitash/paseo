@@ -4,6 +4,8 @@ import { SvgXml } from "react-native-svg";
 import { ClaudeIcon } from "@/components/icons/claude-icon";
 import { CodexIcon } from "@/components/icons/codex-icon";
 import { CopilotIcon } from "@/components/icons/copilot-icon";
+import { DevinIcon } from "@/components/icons/devin-icon";
+import { ACP_PROVIDER_ICON_SVGS } from "@/assets/acp-provider-icons";
 import { MiniMaxIcon } from "@/components/icons/minimax-icon";
 import { OpenCodeIcon } from "@/components/icons/opencode-icon";
 import { OmpIcon } from "@/components/icons/omp-icon";
@@ -22,6 +24,7 @@ const BUILTIN_PROVIDER_ICONS: Record<string, ProviderIconComponent> = {
   claude: ClaudeIcon as unknown as ProviderIconComponent,
   codex: CodexIcon as unknown as ProviderIconComponent,
   copilot: CopilotIcon as unknown as ProviderIconComponent,
+  devin: DevinIcon,
   kiro: PackagePlus,
   minimax: MiniMaxIcon as unknown as ProviderIconComponent,
   omp: OmpIcon as unknown as ProviderIconComponent,
@@ -32,6 +35,7 @@ const BUILTIN_PROVIDER_ICONS: Record<string, ProviderIconComponent> = {
 const CATALOG_ICON_SVGS = new Map(
   ACP_PROVIDER_CATALOG.flatMap((entry) => (entry.iconSvg ? [[entry.id, entry.iconSvg]] : [])),
 );
+CATALOG_ICON_SVGS.set("agy", ACP_PROVIDER_ICON_SVGS.agy);
 
 const catalogIconComponents = new Map<string, ProviderIconComponent>();
 const snapshotIconComponents = new Map<string, { svg: string; component: ProviderIconComponent }>();

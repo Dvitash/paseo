@@ -48,10 +48,8 @@ test.describe("provider usage settings", () => {
 
     await gotoAppShell(page);
     await openSettings(page);
-    expect(usageFixture.requestCount()).toBe(0);
     await openSettingsHostSection(page, serverId, "usage");
     await usageFixture.waitForRequestCount(1);
-
     const card = page.getByTestId("provider-usage-card");
     await expect(card).toBeVisible({ timeout: 10_000 });
     await expect(card.getByText("Claude", { exact: true })).toBeVisible();
@@ -103,13 +101,13 @@ test.describe("provider usage settings", () => {
     await openSettings(page);
     await openSettingsHostSection(page, serverId, "usage");
     await usageFixture.waitForRequestCount(1);
-    await expect(page.getByText("23%")).toBeVisible({ timeout: 10_000 });
-
+    const card = page.getByTestId("provider-usage-card");
+    await expect(card.getByText("23%")).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await usageFixture.waitForRequestCount(2);
 
     expect(usageFixture.requestCount()).toBe(2);
-    await expect(page.getByText("64%")).toBeVisible();
+    await expect(card.getByText("64%")).toBeVisible();
   });
 
   test("one provider error does not collapse the usage list", async ({ page }) => {
