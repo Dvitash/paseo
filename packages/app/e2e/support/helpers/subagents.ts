@@ -136,12 +136,26 @@ export async function seedParentWithCrossWorkspaceSubagent(
 export async function openSubagentsTrack(page: Page): Promise<void> {
   const panel = page.getByTestId("subagents-track-header-panel");
   if ((await panel.count()) === 0) {
-    await page.getByTestId("subagents-track-header").click();
+    const header = page.getByTestId("subagents-track-header");
+    if ((await header.count()) > 0) {
+      await header.click();
+    }
   }
   await expect(panel).toBeVisible({ timeout: 30_000 });
 }
 
 export async function expectSubagentRowVisible(page: Page, childId: string): Promise<void> {
+  const row = page.getByTestId(`subagents-track-row-${childId}`);
+  if ((await row.count()) === 0) {
+    const summary = page.getByTestId("subagents-track-completed-summary");
+    if ((await summary.count()) > 0 && (await summary.isVisible())) {
+      await summary.click();
+    }
+    const overflow = page.getByTestId("subagents-track-overflow-toggle");
+    if ((await overflow.count()) > 0 && (await overflow.isVisible())) {
+      await overflow.click();
+    }
+  }
   await expect(page.getByTestId(`subagents-track-row-${childId}`)).toBeVisible({
     timeout: 30_000,
   });

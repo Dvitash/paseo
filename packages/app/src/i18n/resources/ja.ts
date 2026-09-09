@@ -1789,6 +1789,16 @@ export const ja: TranslationResources = {
     archiveTooltip: "サブエージェントをアーカイブ",
     archiveFinishedAction: "完了したサブエージェントをアーカイブ",
     archiveFinishedRetry: "再試行 ({{failed}}/{{total}})",
+    openConversation: "会話を開く",
+    showMore: "他 {{count}} 件",
+    showLess: "折りたたむ",
+    completedSummaryOne: "1 件完了",
+    completedSummaryMany: "{{count}} 件完了",
+    recentActions: "最近のアクション",
+    noRecentActions: "最近のアクションはありません",
+    latestMessage: "最新のメッセージ",
+    activityThinking: "考え中...",
+    activityWorking: "実行中...",
   },
   panels: {
     draft: {

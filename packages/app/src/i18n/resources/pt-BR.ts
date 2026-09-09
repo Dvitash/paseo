@@ -1804,6 +1804,16 @@ export const ptBR: TranslationResources = {
     archiveTooltip: "Arquivar subagente",
     archiveFinishedAction: "Arquivar subagentes concluídos",
     archiveFinishedRetry: "Tentar novamente ({{failed}}/{{total}})",
+    openConversation: "Abrir conversa",
+    showMore: "+{{count}} mais",
+    showLess: "Mostrar menos",
+    completedSummaryOne: "1 concluído",
+    completedSummaryMany: "{{count}} concluídos",
+    recentActions: "Ações recentes",
+    noRecentActions: "Nenhuma ação recente",
+    latestMessage: "Última mensagem",
+    activityThinking: "Pensando...",
+    activityWorking: "Trabalhando...",
   },
   panels: {
     draft: {

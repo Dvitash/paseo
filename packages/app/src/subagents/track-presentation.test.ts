@@ -1,11 +1,18 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { i18n } from "@/i18n/i18next";
 import type { PaseoSubagentRow, ProviderSubagentRow, SubagentRow } from "./select";
+import type { StreamItem, ToolCallItem } from "@/types/stream";
 import {
   buildSubagentPillPresentation,
   buildSubagentRowPresentationData,
   countFinishedSubagents,
+  findLatestAssistantMessageText,
+  getLatestToolCallOrThought,
+  getRecentActions,
+  isSubagentActiveOrAttention,
+  isSubagentCompleted,
   resolveRowLabel,
+  sortSubagentRows,
 } from "./track-presentation";
 
 function row(
@@ -26,6 +33,29 @@ function row(
         : { phase: "idle", cancellationRequestId: null }),
     requiresAttention: overrides.requiresAttention ?? false,
     createdAt: overrides.createdAt ?? new Date("2026-04-20T00:00:00.000Z"),
+  };
+}
+
+function toolCallItem(
+  id: string,
+  name: string,
+  status: "running" | "completed" | "failed" = "completed",
+): ToolCallItem {
+  return {
+    kind: "tool_call",
+    id,
+    timestamp: new Date(),
+    payload: {
+      source: "agent",
+      data: {
+        provider: "mock",
+        callId: `call_${id}`,
+        name,
+        status,
+        error: null,
+        detail: { type: "shell", command: name },
+      },
+    },
   };
 }
 
@@ -295,5 +325,114 @@ describe("provider-owned row subtitles", () => {
         providerRow({ description: null, subtitle: null, title: "general-purpose" }),
       ).subtitle,
     ).toBe("");
+  });
+});
+
+describe("subagent classification and sorting", () => {
+  it("classifies active and attention rows correctly", () => {
+    expect(isSubagentActiveOrAttention(row({ id: "running", status: "running" }))).toBe(true);
+    expect(isSubagentActiveOrAttention(row({ id: "attention", requiresAttention: true }))).toBe(
+      true,
+    );
+    expect(isSubagentActiveOrAttention(row({ id: "error", status: "error" }))).toBe(true);
+    expect(isSubagentActiveOrAttention(row({ id: "idle", status: "idle" }))).toBe(false);
+  });
+
+  it("excludes errors and attention from completed summary", () => {
+    expect(isSubagentCompleted(row({ id: "error", status: "error" }))).toBe(false);
+    expect(
+      isSubagentCompleted(row({ id: "attention", status: "idle", requiresAttention: true })),
+    ).toBe(false);
+    expect(isSubagentCompleted(row({ id: "idle", status: "idle" }))).toBe(true);
+  });
+
+  it("sorts active/attention rows before completed rows, preserving createdAt order", () => {
+    const completedEarly = row({
+      id: "comp-1",
+      status: "idle",
+      createdAt: new Date("2026-04-20T00:00:01.000Z"),
+    });
+    const completedLate = row({
+      id: "comp-2",
+      status: "idle",
+      createdAt: new Date("2026-04-20T00:00:02.000Z"),
+    });
+    const running = row({
+      id: "run-1",
+      status: "running",
+      createdAt: new Date("2026-04-20T00:00:03.000Z"),
+    });
+    const attention = row({
+      id: "att-1",
+      status: "idle",
+      requiresAttention: true,
+      createdAt: new Date("2026-04-20T00:00:04.000Z"),
+    });
+
+    const sorted = sortSubagentRows([completedLate, completedEarly, attention, running]);
+    expect(sorted.map((r) => r.id)).toEqual(["run-1", "att-1", "comp-1", "comp-2"]);
+  });
+});
+
+describe("subagent stream extraction helpers", () => {
+  it("finds the latest assistant message text", () => {
+    const items: StreamItem[] = [
+      {
+        kind: "user_message",
+        id: "u1",
+        text: "hello",
+        timestamp: new Date(),
+      },
+      {
+        kind: "assistant_message",
+        id: "a1",
+        text: "first response",
+        timestamp: new Date(),
+      },
+      toolCallItem("t1", "Bash"),
+      {
+        kind: "assistant_message",
+        id: "a2",
+        text: "second response",
+        timestamp: new Date(),
+      },
+    ];
+
+    expect(findLatestAssistantMessageText(items)).toBe("second response");
+    expect(findLatestAssistantMessageText([])).toBe(null);
+    expect(findLatestAssistantMessageText(undefined)).toBe(null);
+  });
+
+  it("extracts bounded recent tool call actions with real types", () => {
+    const items: StreamItem[] = [
+      toolCallItem("t1", "Read file", "completed"),
+      toolCallItem("t2", "Edit file", "running"),
+      {
+        kind: "assistant_message",
+        id: "a1",
+        text: "working on it",
+        timestamp: new Date(),
+      },
+      toolCallItem("t3", "Bash test", "running"),
+      toolCallItem("t4", "Git status", "completed"),
+    ];
+
+    const recent = getRecentActions(items, 3);
+    expect(recent).toEqual([
+      { id: "t2", name: "Edit file", status: "running" },
+      { id: "t3", name: "Bash test", status: "running" },
+      { id: "t4", name: "Git status", status: "completed" },
+    ]);
+  });
+
+  it("finds the latest tool call or thought activity", () => {
+    expect(getLatestToolCallOrThought([toolCallItem("t1", "Bash")])).toBe("Bash");
+    expect(
+      getLatestToolCallOrThought([
+        toolCallItem("t1", "Bash"),
+        { kind: "thought", id: "th1", text: "thinking", timestamp: new Date(), status: "ready" },
+      ]),
+    ).toBe("thinking");
+    expect(getLatestToolCallOrThought([])).toBe(null);
   });
 });

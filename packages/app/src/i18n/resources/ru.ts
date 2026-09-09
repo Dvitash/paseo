@@ -1802,6 +1802,16 @@ export const ru: TranslationResources = {
     archiveTooltip: "Архивировать субагента",
     archiveFinishedAction: "Архивировать завершенные субагенты",
     archiveFinishedRetry: "Повторить ({{failed}}/{{total}})",
+    openConversation: "Открыть диалог",
+    showMore: "еще +{{count}}",
+    showLess: "Показать меньше",
+    completedSummaryOne: "1 завершен",
+    completedSummaryMany: "{{count}} завершено",
+    recentActions: "Недавние действия",
+    noRecentActions: "Нет недавних действий",
+    latestMessage: "Последнее сообщение",
+    activityThinking: "Думает...",
+    activityWorking: "Работает...",
   },
   panels: {
     draft: {

@@ -1822,6 +1822,16 @@ export const fr: TranslationResources = {
     archiveTooltip: "Sous-agent d'archivage",
     archiveFinishedAction: "Archiver les sous-agents terminés",
     archiveFinishedRetry: "Réessayer ({{failed}}/{{total}})",
+    openConversation: "Ouvrir la conversation",
+    showMore: "+{{count}} de plus",
+    showLess: "Afficher moins",
+    completedSummaryOne: "1 terminé",
+    completedSummaryMany: "{{count}} terminés",
+    recentActions: "Actions récentes",
+    noRecentActions: "Aucune action récente",
+    latestMessage: "Dernier message",
+    activityThinking: "Réflexion...",
+    activityWorking: "En cours...",
   },
   panels: {
     draft: {

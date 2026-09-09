@@ -1751,6 +1751,16 @@ export const zhCN: TranslationResources = {
     archiveTooltip: "归档 subagent",
     archiveFinishedAction: "归档已完成的 subagent",
     archiveFinishedRetry: "重试 ({{failed}}/{{total}})",
+    openConversation: "打开对话",
+    showMore: "还有 {{count}} 个",
+    showLess: "收起",
+    completedSummaryOne: "1 个已完成",
+    completedSummaryMany: "{{count}} 个已完成",
+    recentActions: "近期操作",
+    noRecentActions: "暂无操作",
+    latestMessage: "最新消息",
+    activityThinking: "思考中...",
+    activityWorking: "处理中...",
   },
   panels: {
     draft: {

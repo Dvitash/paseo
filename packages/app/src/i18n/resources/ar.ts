@@ -1772,6 +1772,16 @@ export const ar: TranslationResources = {
     archiveTooltip: "أرشفة الوكيل الفرعي",
     archiveFinishedAction: "أرشفة الوكلاء الفرعيين المكتملين",
     archiveFinishedRetry: "إعادة المحاولة ({{failed}}/{{total}})",
+    openConversation: "فتح المحادثة",
+    showMore: "+{{count}} المزيد",
+    showLess: "إظهار أقل",
+    completedSummaryOne: "1 مكتمل",
+    completedSummaryMany: "{{count}} مكتمل",
+    recentActions: "الإجراءات الأخيرة",
+    noRecentActions: "لا توجد إجراءات حديثة",
+    latestMessage: "آخر رسالة",
+    activityThinking: "جارٍ التفكير...",
+    activityWorking: "جارٍ العمل...",
   },
   panels: {
     draft: {

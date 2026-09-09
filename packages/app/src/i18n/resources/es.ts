@@ -1818,6 +1818,16 @@ export const es: TranslationResources = {
     archiveTooltip: "Subagente de archivo",
     archiveFinishedAction: "Archivar subagentes finalizados",
     archiveFinishedRetry: "Reintentar ({{failed}}/{{total}})",
+    openConversation: "Abrir conversación",
+    showMore: "+{{count}} más",
+    showLess: "Mostrar menos",
+    completedSummaryOne: "1 completado",
+    completedSummaryMany: "{{count}} completados",
+    recentActions: "Acciones recientes",
+    noRecentActions: "Sin acciones recientes",
+    latestMessage: "Último mensaje",
+    activityThinking: "Pensando...",
+    activityWorking: "Trabajando...",
   },
   panels: {
     draft: {

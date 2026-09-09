@@ -1782,6 +1782,16 @@ export const en = {
     archiveTooltip: "Archive subagent",
     archiveFinishedAction: "Archive finished subagents",
     archiveFinishedRetry: "Retry ({{failed}}/{{total}})",
+    openConversation: "Open conversation",
+    showMore: "+{{count}} more",
+    showLess: "Show less",
+    completedSummaryOne: "1 completed",
+    completedSummaryMany: "{{count}} completed",
+    recentActions: "Recent actions",
+    noRecentActions: "No recent actions",
+    latestMessage: "Latest message",
+    activityThinking: "Thinking...",
+    activityWorking: "Working...",
   },
   panels: {
     draft: {

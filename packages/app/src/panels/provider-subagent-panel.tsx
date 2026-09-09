@@ -9,7 +9,6 @@ import {
   resolveComposerTrackControlClearance,
   resolveComposerTrackTailClearance,
 } from "@/composer/pill-styles";
-import { ComposerTrackBar } from "@/composer/tracks";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import type { AgentScreenAgent } from "@/hooks/use-agent-screen-state-machine";
 import { usePaneContext } from "@/panels/pane-context";
@@ -53,7 +52,7 @@ function ProviderSubagentChildTrack({
 }) {
   if (rows.length === 0) return null;
   return (
-    <ComposerTrackBar>
+    <View style={styles.childTrackContainer} pointerEvents="box-none">
       <SubagentsTrack
         serverId={serverId}
         rows={rows}
@@ -61,7 +60,7 @@ function ProviderSubagentChildTrack({
         onOpenProviderSubagent={onOpenProviderSubagent}
         onArchiveSubagent={NOOP_SUBAGENT}
       />
-    </ComposerTrackBar>
+    </View>
   );
 }
 
@@ -274,6 +273,12 @@ function ProviderSubagentPanel() {
 
 const styles = StyleSheet.create((theme) => ({
   container: { flex: 1, minHeight: 0 },
+  childTrackContainer: {
+    width: "100%",
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[2],
+  },
   subtitleHeader: {
     paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[1],

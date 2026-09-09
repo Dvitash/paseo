@@ -1782,6 +1782,16 @@ export const ko: TranslationResources = {
     archiveTooltip: "서브에이전트 보관",
     archiveFinishedAction: "완료된 하위 에이전트 보관",
     archiveFinishedRetry: "다시 시도 ({{failed}}/{{total}})",
+    openConversation: "대화 열기",
+    showMore: "{{count}}개 더보기",
+    showLess: "간략히 보기",
+    completedSummaryOne: "1개 완료됨",
+    completedSummaryMany: "{{count}}개 완료됨",
+    recentActions: "최근 작업",
+    noRecentActions: "최근 작업 없음",
+    latestMessage: "최근 메시지",
+    activityThinking: "생각 중...",
+    activityWorking: "작업 중...",
   },
   panels: {
     draft: {

@@ -1,10 +1,15 @@
 import { memo, useCallback, type ReactElement } from "react";
+import { View } from "react-native";
+import { StyleSheet } from "react-native-unistyles";
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import { AgentModelTurnMetricsPill, useHasModelTurnMetrics } from "@/composer/model-turn-metrics";
 import { AgentTaskList } from "@/composer/task-list";
-import { ComposerTrackBar } from "@/composer/tracks";
-import { supportsDesktopPaneSplits, useIsCompactFormFactor } from "@/constants/layout";
+import {
+  MAX_CONTENT_WIDTH,
+  supportsDesktopPaneSplits,
+  useIsCompactFormFactor,
+} from "@/constants/layout";
 import { usePaneContext } from "@/panels/pane-context";
 import { useSettings } from "@/hooks/use-settings";
 import { PluginComposerPills } from "@/plugins";
@@ -114,47 +119,48 @@ export const AgentTracks = memo(function AgentTracks({
     });
   }, [cwd, isCompact, openInSidePane, serverId, workspaceKey]);
 
-  if (
-    !hasWorkspaceDiffStat &&
-    !hasModelTurnMetrics &&
-    !hasAgentTracks({
-      subagentRows,
-      tasks,
-      archiveFinishedStatus,
-      hasPluginComposerPills,
-    })
-  ) {
+  const hasPills =
+    Boolean(tasks?.length) || hasPluginComposerPills || hasWorkspaceDiffStat || hasModelTurnMetrics;
+  const hasSubagents = subagentRows.length > 0 || archiveFinishedStatus.kind !== "idle";
+
+  if (!hasPills && !hasSubagents) {
     return null;
   }
 
   return (
-    <ComposerTrackBar>
-      <AgentTaskList tasks={tasks} />
-      <SubagentsTrack
-        serverId={serverId}
-        rows={subagentRows}
-        onOpenSubagent={handleOpenSubagent}
-        onOpenProviderSubagent={handleOpenProviderSubagent}
-        onArchiveSubagent={archiveSubagent}
-        onArchiveFinished={onArchiveFinished}
-        archiveFinishedStatus={archiveFinishedStatus}
-        onDetachSubagent={canDetachSubagents ? detachSubagent : undefined}
-      />
-      <PluginComposerPills
-        serverId={serverId}
-        workspaceId={workspaceId}
-        agentId={agentId}
-        compact={isCompact}
-      />
-      <WorkspaceDiffStatPill
-        serverId={serverId}
-        workspaceId={workspaceId}
-        onPress={handleOpenChanges}
-      />
-      {hasModelTurnMetrics ? (
-        <AgentModelTurnMetricsPill serverId={serverId} agentId={agentId} />
+    <View style={styles.container} pointerEvents="box-none">
+      {hasSubagents ? (
+        <SubagentsTrack
+          serverId={serverId}
+          rows={subagentRows}
+          onOpenSubagent={handleOpenSubagent}
+          onOpenProviderSubagent={handleOpenProviderSubagent}
+          onArchiveSubagent={archiveSubagent}
+          onArchiveFinished={onArchiveFinished}
+          archiveFinishedStatus={archiveFinishedStatus}
+          onDetachSubagent={canDetachSubagents ? detachSubagent : undefined}
+        />
       ) : null}
-    </ComposerTrackBar>
+      {hasPills ? (
+        <View style={styles.pillsRow} pointerEvents="box-none">
+          <AgentTaskList tasks={tasks} />
+          <PluginComposerPills
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            compact={isCompact}
+          />
+          <WorkspaceDiffStatPill
+            serverId={serverId}
+            workspaceId={workspaceId}
+            onPress={handleOpenChanges}
+          />
+          {hasModelTurnMetrics ? (
+            <AgentModelTurnMetricsPill serverId={serverId} agentId={agentId} />
+          ) : null}
+        </View>
+      ) : null}
+    </View>
   );
 });
 
@@ -179,3 +185,20 @@ export function hasAgentTracks({
     hasModelTurnMetrics
   );
 }
+
+const styles = StyleSheet.create((theme) => ({
+  container: {
+    width: "100%",
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[2],
+    gap: theme.spacing[1.5],
+  },
+  pillsRow: {
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+  },
+}));
