@@ -463,6 +463,114 @@ describe("toAgentPayload", () => {
     });
   });
 
+  it("preserves modelTurn in lastUsage when running with null timings", () => {
+    const agent = createManagedAgent({
+      lastUsage: {
+        inputTokens: 10,
+        modelTurn: {
+          status: "running",
+          ttftMs: null,
+          tokensPerSecond: null,
+        },
+      },
+    });
+
+    const payload = toAgentPayload(agent);
+
+    expect(payload.lastUsage).toEqual({
+      inputTokens: 10,
+      modelTurn: {
+        status: "running",
+        ttftMs: null,
+        tokensPerSecond: null,
+      },
+    });
+  });
+
+  it("preserves modelTurn in lastUsage when completed with metrics", () => {
+    const agent = createManagedAgent({
+      lastUsage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        modelTurn: {
+          status: "completed",
+          ttftMs: 250,
+          tokensPerSecond: 45.5,
+        },
+      },
+    });
+
+    const payload = toAgentPayload(agent);
+
+    expect(payload.lastUsage).toEqual({
+      inputTokens: 10,
+      outputTokens: 20,
+      modelTurn: {
+        status: "completed",
+        ttftMs: 250,
+        tokensPerSecond: 45.5,
+      },
+    });
+  });
+
+  it("preserves modelTurn in lastUsage even when token counts are absent", () => {
+    const agent = createManagedAgent({
+      lastUsage: {
+        modelTurn: {
+          status: "completed",
+          ttftMs: 120,
+          tokensPerSecond: 30,
+        },
+      },
+    });
+
+    const payload = toAgentPayload(agent);
+
+    expect(payload.lastUsage).toEqual({
+      modelTurn: {
+        status: "completed",
+        ttftMs: 120,
+        tokensPerSecond: 30,
+      },
+    });
+  });
+
+  it("omits lastUsage when modelTurn has invalid status or metrics", () => {
+    const invalidStatusAgent = createManagedAgent();
+    Reflect.set(invalidStatusAgent, "lastUsage", {
+      inputTokens: 10,
+      modelTurn: {
+        status: "unknown",
+        ttftMs: null,
+        tokensPerSecond: null,
+      },
+    });
+    expect(toAgentPayload(invalidStatusAgent)).not.toHaveProperty("lastUsage");
+
+    const invalidTtftAgent = createManagedAgent();
+    Reflect.set(invalidTtftAgent, "lastUsage", {
+      inputTokens: 10,
+      modelTurn: {
+        status: "completed",
+        ttftMs: "fast",
+        tokensPerSecond: null,
+      },
+    });
+    expect(toAgentPayload(invalidTtftAgent)).not.toHaveProperty("lastUsage");
+
+    const nanTpsAgent = createManagedAgent({
+      lastUsage: {
+        inputTokens: 10,
+        modelTurn: {
+          status: "completed",
+          ttftMs: 100,
+          tokensPerSecond: NaN,
+        },
+      },
+    });
+    expect(toAgentPayload(nanTpsAgent)).not.toHaveProperty("lastUsage");
+  });
+
   it("includes features in the snapshot payload", () => {
     const features = [createFeature()];
     const agent = createManagedAgent({ features });

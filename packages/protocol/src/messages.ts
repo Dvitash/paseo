@@ -310,6 +310,7 @@ import type {
   AgentProviderNotice,
   ToolCallDetail,
   ToolCallTimelineItem,
+  AgentModelTurnUsage,
   AgentUsage,
   JsonValue,
 } from "./agent-types.js";
@@ -445,6 +446,12 @@ const AgentCapabilityFlagsSchema: z.ZodType<AgentCapabilityFlags> = z
   })
   .catchall(z.boolean());
 
+const AgentModelTurnUsageSchema: z.ZodType<AgentModelTurnUsage> = z.object({
+  status: z.enum(["running", "completed"]),
+  ttftMs: z.number().nullable(),
+  tokensPerSecond: z.number().nullable(),
+});
+
 const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
   inputTokens: z.number().optional(),
   cachedInputTokens: z.number().optional(),
@@ -452,6 +459,7 @@ const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
   totalCostUsd: z.number().optional(),
   contextWindowMaxTokens: z.number().optional(),
   contextWindowUsedTokens: z.number().optional(),
+  modelTurn: AgentModelTurnUsageSchema.optional(),
 });
 
 const McpStdioServerConfigSchema = z.object({
@@ -3505,6 +3513,8 @@ export const ServerInfoStatusPayloadSchema = z
       .object({
         // COMPAT(sideChat): added in v0.8.0; remove gate after 2027-03-08.
         sideChat: z.boolean().optional(),
+        // COMPAT(modelTurnMetrics): added in v0.8.0; remove gate after 2027-03-09.
+        modelTurnMetrics: z.boolean().optional(),
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.

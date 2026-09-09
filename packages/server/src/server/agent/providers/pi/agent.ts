@@ -29,6 +29,7 @@ import {
   type AgentSlashCommand,
   type AgentSlashCommandKind,
   type AgentStreamEvent,
+  type AgentUsage,
   type FetchCatalogOptions,
   type SteerActiveTurnOptions,
   type SteerResult,
@@ -40,6 +41,7 @@ import {
   type ProviderRefreshContext,
   type ToolCallDetail,
 } from "../../agent-sdk-types.js";
+import { ModelTurnTracker } from "../model-turn-tracker.js";
 import { importSessionFromPersistence } from "../../provider-session-import.js";
 import { runProviderRefreshActivity } from "../../provider-refresh-deadline.js";
 import { runProviderTurn } from "../provider-runner.js";
@@ -191,6 +193,7 @@ export interface PiRpcAgentClientOptions {
   providerParams?: unknown;
   runtime?: PiRuntime;
   usagePollScheduler?: PiUsagePollScheduler;
+  now?: () => number;
 }
 
 interface PiPromptPayload {
@@ -252,6 +255,7 @@ interface PiRpcAgentSessionOptions {
   extensionTimeoutMs?: number;
   logger: Logger;
   usagePollScheduler?: PiUsagePollScheduler;
+  now?: () => number;
 }
 
 interface PiResumeConfig {
@@ -1401,6 +1405,8 @@ export class PiRpcAgentSession implements AgentSession {
   private readonly currentModeId: string | null;
   private readonly logger: Logger;
   private readonly usagePoller: PiUsagePoller;
+  private latestUsageTotals: AgentUsage = {};
+  private readonly modelTurnTracker: ModelTurnTracker;
   private closed = false;
   // Pi publishes the terminal before acknowledging abort. Autonomous runs have no
   // turn ID; retain their errors too until the cancellation request settles.
@@ -1420,16 +1426,13 @@ export class PiRpcAgentSession implements AgentSession {
       null;
     this.extensionTimeoutMs = options.extensionTimeoutMs ?? DEFAULT_PI_EXTENSION_RESULT_TIMEOUT_MS;
     this.logger = options.logger;
+    this.modelTurnTracker = new ModelTurnTracker({ now: options.now });
     this.usagePoller = new PiUsagePoller({
       scheduler: options.usagePollScheduler,
       readStats: () => this.runtimeSession.getSessionStats(),
       onUsage: (usage, turnId) => {
-        this.emit({
-          type: "usage_updated",
-          provider: this.provider,
-          usage,
-          ...(turnId === undefined ? {} : { turnId }),
-        });
+        this.latestUsageTotals = { ...this.latestUsageTotals, ...usage };
+        this.emitUsageUpdate(turnId);
       },
       onPollError: (error) => {
         this.logger.debug({ err: error }, "Pi context usage poll failed");
@@ -1603,14 +1606,31 @@ export class PiRpcAgentSession implements AgentSession {
       this.subscribers.delete(callback);
     };
   }
+  private emitUsageUpdate(turnId?: string): void {
+    const modelTurn = this.modelTurnTracker.currentModelTurn();
+    const usage: AgentUsage = {
+      ...this.latestUsageTotals,
+      ...(modelTurn ? { modelTurn } : {}),
+    };
+    if (Object.keys(usage).length === 0) {
+      return;
+    }
+    this.emit({
+      type: "usage_updated",
+      provider: this.provider,
+      usage,
+      ...(turnId === undefined ? {} : { turnId }),
+    });
+  }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
     await this.requestEntryCapture("history");
-    yield* streamPiHistory(
-      this.provider,
-      await this.runtimeSession.getMessages(),
-      this.capturedUserEntries,
-    );
+    const messages = await this.runtimeSession.getMessages();
+    const restored = this.modelTurnTracker.hydrateFromMessages(messages);
+    if (restored) {
+      this.emitUsageUpdate();
+    }
+    yield* streamPiHistory(this.provider, messages, this.capturedUserEntries);
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
@@ -1713,6 +1733,9 @@ export class PiRpcAgentSession implements AgentSession {
         this.activeTurnId = null;
         this.activeClientMessageId = null;
         this.activeTurnStarted = false;
+        if (this.modelTurnTracker.finalizeRunning()) {
+          this.emitUsageUpdate(turnId);
+        }
         this.activeTurnStartedEmitted = false;
         this.pendingSettledMessages = null;
         this.activeAssistantMessageId = null;
@@ -1733,6 +1756,9 @@ export class PiRpcAgentSession implements AgentSession {
       (this.activeTurnId || this.activeTurnStarted) &&
       (this.activeTurnId ?? undefined) === turnId
     ) {
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.usagePoller.stopTurn();
       this.activeTurnId = null;
       this.activeClientMessageId = null;
@@ -2331,6 +2357,9 @@ export class PiRpcAgentSession implements AgentSession {
     this.pendingSettledMessages = null;
     this.pendingSteerSubmissions.length = 0;
     this.clearNoTurnBuffers();
+    if (this.modelTurnTracker.finalizeRunning()) {
+      this.emitUsageUpdate(turnId);
+    }
     this.emit({
       type: "turn_failed",
       provider: this.provider,
@@ -2359,15 +2388,16 @@ export class PiRpcAgentSession implements AgentSession {
       case "turn_start":
         this.activeTurnStarted = true;
         this.clearNoTurnBuffers();
-        if (this.activeTurnStartedEmitted) {
-          return;
+        this.modelTurnTracker.onTurnStart();
+        if (!this.activeTurnStartedEmitted) {
+          this.activeTurnStartedEmitted = true;
+          this.emit({
+            type: "turn_started",
+            provider: this.provider,
+            turnId,
+          });
         }
-        this.activeTurnStartedEmitted = true;
-        this.emit({
-          type: "turn_started",
-          provider: this.provider,
-          turnId,
-        });
+        this.emitUsageUpdate(turnId);
         return;
       case "message_start":
         this.handleMessageStart(event);
@@ -2514,6 +2544,17 @@ export class PiRpcAgentSession implements AgentSession {
     if (event.message && event.message.role !== "assistant") {
       return;
     }
+    const eventType = event.assistantMessageEvent.type;
+    if (
+      eventType === "text_delta" ||
+      eventType === "thinking_delta" ||
+      eventType === "toolcall_delta"
+    ) {
+      const updated = this.modelTurnTracker.onContentDelta();
+      if (updated) {
+        this.emitUsageUpdate(turnId);
+      }
+    }
     if (event.assistantMessageEvent.type === "text_delta") {
       // Pi-compatible runtimes may emit updates without a preceding message_start.
       this.activeAssistantMessageId ??= event.message?.responseId || randomUUID();
@@ -2554,6 +2595,8 @@ export class PiRpcAgentSession implements AgentSession {
   ): void {
     if (event.message.role === "assistant") {
       this.activeAssistantMessageId = null;
+      this.modelTurnTracker.onAssistantMessageEnd(event.message);
+      this.emitUsageUpdate(turnId);
       return;
     }
     if (event.message.role === "custom") {
@@ -2631,6 +2674,9 @@ export class PiRpcAgentSession implements AgentSession {
     this.clearNoTurnBuffers();
     if (typeof errorMessage === "string" && errorMessage.length > 0) {
       this.usagePoller.stopTurn();
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.emit({
         type: "turn_failed",
         provider: this.provider,
@@ -2667,6 +2713,7 @@ export class PiRpcAgentClient implements AgentClient {
   private readonly runtime: PiRuntime;
   private readonly usagePollScheduler?: PiUsagePollScheduler;
 
+  private readonly now?: () => number;
   constructor(options: PiRpcAgentClientOptions) {
     this.provider = PI_PROVIDER;
     this.capabilities = capabilitiesForClient();
@@ -2677,8 +2724,8 @@ export class PiRpcAgentClient implements AgentClient {
       options.runtime ??
       createRuntime(options.logger, options.runtimeSettings, this.providerParams.rpcTimeoutMs);
     this.usagePollScheduler = options.usagePollScheduler;
+    this.now = options.now;
   }
-
   private resolveHostToolNames(launchContext?: AgentLaunchContext): string[] {
     const tools = launchContext?.paseoTools?.tools;
     return tools ? [...tools.keys()] : [];
@@ -2756,6 +2803,7 @@ export class PiRpcAgentClient implements AgentClient {
         extensionTimeoutMs: this.providerParams.extensionTimeoutMs,
         logger: this.logger,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
@@ -2823,6 +2871,7 @@ export class PiRpcAgentClient implements AgentClient {
         extensionTimeoutMs: this.providerParams.extensionTimeoutMs,
         logger: this.logger,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);

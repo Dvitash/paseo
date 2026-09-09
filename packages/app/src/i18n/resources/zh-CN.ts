@@ -169,6 +169,12 @@ export const zhCN: TranslationResources = {
       title: "附加 issue 或 PR",
       title_mr: "附加 issue 或 MR",
     },
+    modelTurnMetrics: {
+      current: "当前模型回合",
+      previous: "上一个模型回合",
+      description:
+        "TTFT: 首个 token 时间。TPS: 首个 token 后的每秒输出 token 数。已排除 subagent。不可用的指标显示为 —。",
+    },
   },
   agentControls: {
     provider: {

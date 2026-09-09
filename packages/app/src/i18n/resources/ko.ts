@@ -169,6 +169,12 @@ export const ko: TranslationResources = {
       title: "이슈 또는 PR 첨부",
       title_mr: "이슈 또는 MR 첨부",
     },
+    modelTurnMetrics: {
+      current: "현재 모델 턴",
+      previous: "이전 모델 턴",
+      description:
+        "TTFT: 첫 번째 토큰까지의 시간. TPS: 첫 번째 토큰 이후 초당 출력 토큰 수. 하위 에이전트는 제외됩니다. 사용할 수 없는 지표는 —로 표시됩니다.",
+    },
   },
   agentControls: {
     provider: {

@@ -169,6 +169,12 @@ export const ru: TranslationResources = {
       title: "Прикрепить задачу или PR",
       title_mr: "Прикрепить задачу или MR",
     },
+    modelTurnMetrics: {
+      current: "Текущий ответ модели",
+      previous: "Предыдущий ответ модели",
+      description:
+        "TTFT: время до первого токена. TPS: количество выходных токенов в секунду после первого токена. Субагенты исключены. Недоступные метрики отображаются как —.",
+    },
   },
   agentControls: {
     provider: {

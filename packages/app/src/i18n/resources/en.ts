@@ -166,6 +166,12 @@ export const en = {
       title: "Attach issue or PR",
       title_mr: "Attach issue or MR",
     },
+    modelTurnMetrics: {
+      current: "Current model turn",
+      previous: "Previous model turn",
+      description:
+        "TTFT: time to first token. TPS: output tokens per second after the first token. Subagents are excluded. Unavailable metrics show —.",
+    },
   },
   agentControls: {
     provider: {

@@ -175,6 +175,12 @@ export interface AgentRunOptions {
   maxThinkingTokens?: number;
 }
 
+export interface AgentModelTurnUsage {
+  status: "running" | "completed";
+  ttftMs: number | null;
+  tokensPerSecond: number | null;
+}
+
 export interface AgentUsage {
   inputTokens?: number;
   cachedInputTokens?: number;
@@ -182,6 +188,7 @@ export interface AgentUsage {
   totalCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;
+  modelTurn?: AgentModelTurnUsage;
 }
 
 export const TOOL_CALL_ICON_NAMES = [

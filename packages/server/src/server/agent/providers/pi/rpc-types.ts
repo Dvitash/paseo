@@ -51,6 +51,15 @@ export type PiAgentMessage =
       responseModel?: string;
       errorMessage?: string | null;
       stopReason?: string;
+      duration?: number;
+      ttft?: number;
+      usage?: {
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        total?: number;
+      };
     }
   | {
       role: "toolResult";
@@ -153,6 +162,7 @@ export interface PiRpcResponse {
 export type PiAssistantMessageEvent =
   | { type: "text_delta"; delta?: string }
   | { type: "thinking_delta"; delta?: string }
+  | { type: "toolcall_delta"; delta?: string }
   | { type: "start" | "text_start" | "text_end" | "thinking_start" | "thinking_end" | "done" };
 
 export type PiAgentSessionEvent =

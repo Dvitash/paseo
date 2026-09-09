@@ -85,6 +85,7 @@ import {
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
 import { AgentTracks, hasAgentTracks } from "@/panels/agent-tracks";
+import { useHasModelTurnMetrics } from "@/composer/model-turn-metrics";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
@@ -1272,12 +1273,14 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     rows: subagentRows,
   });
   const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
+  const hasModelTurnMetrics = useHasModelTurnMetrics(serverId, agentId);
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const hasVisibleAgentTracks = hasAgentTracks({
     subagentRows,
     tasks,
     archiveFinishedStatus: archiveFinishedSubagents.status,
     hasPluginComposerPills,
+    hasModelTurnMetrics,
   });
   const rawAgentInputDraft = useAgentInputDraft({
     draftKey: buildDraftStoreKey({

@@ -169,6 +169,12 @@ export const ar: TranslationResources = {
       title: "إرفاق المشكلة أو PR",
       title_mr: "إرفاق المشكلة أو MR",
     },
+    modelTurnMetrics: {
+      current: "جولة النموذج الحالية",
+      previous: "جولة النموذج السابقة",
+      description:
+        "TTFT: الوقت حتى أول رمز. TPS: رموز الإخراج في الثانية بعد الرمز الأول. يتم استبعاد الوكلاء الفرعيين. تعرض المقاييس غير المتاحة —.",
+    },
   },
   agentControls: {
     provider: {

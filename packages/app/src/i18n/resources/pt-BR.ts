@@ -169,6 +169,12 @@ export const ptBR: TranslationResources = {
       title: "Anexar issue ou PR",
       title_mr: "Anexar issue ou MR",
     },
+    modelTurnMetrics: {
+      current: "Turno atual do modelo",
+      previous: "Turno anterior do modelo",
+      description:
+        "TTFT: tempo até o primeiro token. TPS: tokens de saída por segundo após o primeiro token. Os subagentes são excluídos. Métricas indisponíveis mostram —.",
+    },
   },
   agentControls: {
     provider: {

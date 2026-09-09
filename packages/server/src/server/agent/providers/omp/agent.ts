@@ -28,6 +28,7 @@ import {
   type AgentSlashCommand,
   type AgentStreamEvent,
   type AgentTimelineItem,
+  type AgentUsage,
   type FetchCatalogOptions,
   type ImportableProviderSession,
   type ImportProviderSessionContext,
@@ -105,6 +106,7 @@ import {
 import { OmpSubagentIndex } from "./subagent-index.js";
 import { mapOmpToolDetail } from "./tool-call-mapper.js";
 import { OmpUsagePoller, type OmpUsagePollScheduler } from "./usage-poller.js";
+import { ModelTurnTracker } from "../model-turn-tracker.js";
 import {
   buildOmpRpcUiPermissionResponse,
   mapOmpRpcUiPermissionRequest,
@@ -139,6 +141,7 @@ export interface OmpAgentClientOptions {
   providerIdleScheduler?: OmpProviderIdleScheduler;
   noTurnScheduler?: OmpNoTurnScheduler;
   usagePollScheduler?: OmpUsagePollScheduler;
+  now?: () => number;
 }
 
 export interface OmpProviderIdleScheduler {
@@ -196,6 +199,7 @@ interface OmpAgentSessionOptions {
    */
   live?: boolean;
   cleanup?: () => void;
+  now?: () => number;
 }
 
 function createOmpProviderIdleScheduler(): OmpProviderIdleScheduler {
@@ -1075,6 +1079,8 @@ export class OmpAgentSession implements AgentSession {
   private readonly providerIdleScheduler: OmpProviderIdleScheduler;
   private readonly noTurnScheduler: OmpNoTurnScheduler;
   private readonly usagePoller: OmpUsagePoller;
+  private latestUsageTotals: AgentUsage = {};
+  private readonly modelTurnTracker: ModelTurnTracker;
   private closed = false;
   private live: boolean;
   private readonly emittedUserMessageIds = new Set<string>();
@@ -1091,21 +1097,21 @@ export class OmpAgentSession implements AgentSession {
     this.cleanup = options.cleanup;
     this.providerIdleScheduler = options.providerIdleScheduler ?? createOmpProviderIdleScheduler();
     this.noTurnScheduler = options.noTurnScheduler ?? createOmpNoTurnScheduler();
+    this.modelTurnTracker = new ModelTurnTracker({ now: options.now });
     this.usagePoller = new OmpUsagePoller({
       scheduler: options.usagePollScheduler,
       readStats: () => this.runtimeSession.getSessionStats(),
       onUsage: (usage, turnId) => {
-        this.emit({
-          type: "usage_updated",
-          provider: this.provider,
-          usage,
-          ...(turnId === undefined ? {} : { turnId }),
-        });
+        this.latestUsageTotals = { ...this.latestUsageTotals, ...usage };
+        this.emitUsageUpdate(turnId);
       },
       onPollError: (error) => {
         this.logger.debug({ err: error }, "OMP context usage poll failed");
       },
     });
+    if (this.live === false) {
+      void this.restoreModelTurnFromMessages();
+    }
     this.subagentCardTracker = new OmpSubagentCardTracker({
       scheduler: options.subagentCardScheduler,
     });
@@ -1234,7 +1240,37 @@ export class OmpAgentSession implements AgentSession {
     };
   }
 
+  private emitUsageUpdate(turnId?: string): void {
+    const modelTurn = this.modelTurnTracker.currentModelTurn();
+    const usage: AgentUsage = {
+      ...this.latestUsageTotals,
+      ...(modelTurn ? { modelTurn } : {}),
+    };
+    if (Object.keys(usage).length === 0) {
+      return;
+    }
+    this.emit({
+      type: "usage_updated",
+      provider: this.provider,
+      usage,
+      ...(turnId === undefined ? {} : { turnId }),
+    });
+  }
+
+  private async restoreModelTurnFromMessages(): Promise<void> {
+    try {
+      const messages = await this.runtimeSession.getMessages();
+      const restored = this.modelTurnTracker.hydrateFromMessages(messages);
+      if (restored) {
+        this.emitUsageUpdate();
+      }
+    } catch (error) {
+      this.logger.debug({ err: error }, "Failed to restore model turn from OMP get_messages");
+    }
+  }
+
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    await this.restoreModelTurnFromMessages();
     yield* streamOmpHistory({
       sessionFile: this.state.sessionFile,
       runtimeSession: this.runtimeSession,
@@ -1346,6 +1382,9 @@ export class OmpAgentSession implements AgentSession {
       this.activeAssistantMessageId = null;
       this.activeTurnTerminalAssistantMessage = null;
       this.clearNoTurnBuffers();
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.emit({
         type: "turn_canceled",
         provider: this.provider,
@@ -2006,6 +2045,9 @@ export class OmpAgentSession implements AgentSession {
     this.activeTurnHasUserMessage = false;
     this.activeTurnTerminalAssistantMessage = null;
     this.clearNoTurnBuffers();
+    if (this.modelTurnTracker.finalizeRunning()) {
+      this.emitUsageUpdate(this.activeTurnId ?? undefined);
+    }
     this.emit({
       type: "turn_failed",
       provider: this.provider,
@@ -2030,11 +2072,13 @@ export class OmpAgentSession implements AgentSession {
       case "turn_start":
         this.activeTurnStarted = true;
         this.clearNoTurnBuffers();
+        this.modelTurnTracker.onTurnStart();
         this.emit({
           type: "turn_started",
           provider: this.provider,
           turnId,
         });
+        this.emitUsageUpdate(turnId);
         return;
       case "message_start":
         this.handleMessageStart(event);
@@ -2181,6 +2225,17 @@ export class OmpAgentSession implements AgentSession {
     if (event.message.role !== "assistant") {
       return;
     }
+    const eventType = event.assistantMessageEvent.type;
+    if (
+      eventType === "text_delta" ||
+      eventType === "thinking_delta" ||
+      eventType === "toolcall_delta"
+    ) {
+      const updated = this.modelTurnTracker.onContentDelta();
+      if (updated) {
+        this.emitUsageUpdate(turnId);
+      }
+    }
     if (event.assistantMessageEvent.type === "text_delta") {
       // Omp-compatible runtimes may emit updates without a preceding message_start.
       this.activeAssistantMessageId ??= event.message.responseId || randomUUID();
@@ -2227,6 +2282,8 @@ export class OmpAgentSession implements AgentSession {
       if (turnId) {
         this.activeTurnTerminalAssistantMessage = event.message;
       }
+      this.modelTurnTracker.onAssistantMessageEnd(event.message);
+      this.emitUsageUpdate(turnId);
       return;
     }
     if (event.message.role === "custom") {
@@ -2350,6 +2407,9 @@ export class OmpAgentSession implements AgentSession {
     const errorMessage = latestOmpErrorMessage(messages);
     if (typeof errorMessage === "string" && errorMessage.length > 0) {
       this.usagePoller.stopTurn();
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.emit({
         type: "turn_failed",
         provider: this.provider,
@@ -2407,6 +2467,7 @@ export class OmpAgentClient implements AgentClient {
   private readonly providerIdleScheduler?: OmpProviderIdleScheduler;
   private readonly noTurnScheduler?: OmpNoTurnScheduler;
   private readonly usagePollScheduler?: OmpUsagePollScheduler;
+  private readonly now?: () => number;
   private readonly runtime: OmpRuntime;
 
   constructor(options: OmpAgentClientOptions) {
@@ -2430,6 +2491,7 @@ export class OmpAgentClient implements AgentClient {
     this.providerIdleScheduler = options.providerIdleScheduler;
     this.noTurnScheduler = options.noTurnScheduler;
     this.usagePollScheduler = options.usagePollScheduler;
+    this.now = options.now;
     this.runtime =
       options.runtime ?? createRuntime(options.logger, runtimeSettings, this.providerParams);
   }
@@ -2526,6 +2588,7 @@ export class OmpAgentClient implements AgentClient {
         providerIdleScheduler: this.providerIdleScheduler,
         noTurnScheduler: this.noTurnScheduler,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
         paseoTools: launchContext?.paseoTools,
         cleanup: cleanupFiles,
       });
@@ -2619,6 +2682,7 @@ export class OmpAgentClient implements AgentClient {
         providerIdleScheduler: this.providerIdleScheduler,
         noTurnScheduler: this.noTurnScheduler,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
         paseoTools: launchContext?.paseoTools,
         live: false,
         cleanup: cleanupFiles,

@@ -169,6 +169,12 @@ export const es: TranslationResources = {
       title: "Adjuntar problema oPR",
       title_mr: "Adjuntar problema o MR",
     },
+    modelTurnMetrics: {
+      current: "Turno actual del modelo",
+      previous: "Turno anterior del modelo",
+      description:
+        "TTFT: tiempo hasta el primer token. TPS: tokens de salida por segundo después del primer token. Se excluyen los subagentes. Las métricas no disponibles muestran —.",
+    },
   },
   agentControls: {
     provider: {

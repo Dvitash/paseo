@@ -169,6 +169,12 @@ export const ja: TranslationResources = {
       title: "イシューまたはPRを添付",
       title_mr: "イシューまたはMRを添付",
     },
+    modelTurnMetrics: {
+      current: "現在のモデルターン",
+      previous: "前のモデルターン",
+      description:
+        "TTFT: 最初のトークンまでの時間。TPS: 最初のトークン以降の1秒あたりの出力トークン数。サブエージェントは除外されます。利用できないメトリクスは — と表示されます。",
+    },
   },
   agentControls: {
     provider: {

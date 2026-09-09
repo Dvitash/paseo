@@ -171,6 +171,12 @@ export const fr: TranslationResources = {
       title: "Joindre le problème ouPR",
       title_mr: "Joindre le problème ou MR",
     },
+    modelTurnMetrics: {
+      current: "Tour actuel du modèle",
+      previous: "Tour précédent du modèle",
+      description:
+        "TTFT : temps jusqu'au premier jeton. TPS : jetons de sortie par seconde après le premier jeton. Les sous-agents sont exclus. Les métriques indisponibles affichent —.",
+    },
   },
   agentControls: {
     provider: {

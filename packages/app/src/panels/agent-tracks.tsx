@@ -1,6 +1,7 @@
 import { memo, useCallback, type ReactElement } from "react";
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
+import { AgentModelTurnMetricsPill, useHasModelTurnMetrics } from "@/composer/model-turn-metrics";
 import { AgentTaskList } from "@/composer/task-list";
 import { ComposerTrackBar } from "@/composer/tracks";
 import { supportsDesktopPaneSplits, useIsCompactFormFactor } from "@/constants/layout";
@@ -51,6 +52,7 @@ export const AgentTracks = memo(function AgentTracks({
 }): ReactElement | null {
   const { tabId, openTab } = usePaneContext();
   const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
+  const hasModelTurnMetrics = useHasModelTurnMetrics(serverId, agentId);
   const isCompact = useIsCompactFormFactor();
   const canSplit = supportsDesktopPaneSplits() && !isCompact;
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
@@ -114,6 +116,7 @@ export const AgentTracks = memo(function AgentTracks({
 
   if (
     !hasWorkspaceDiffStat &&
+    !hasModelTurnMetrics &&
     !hasAgentTracks({
       subagentRows,
       tasks,
@@ -148,6 +151,9 @@ export const AgentTracks = memo(function AgentTracks({
         workspaceId={workspaceId}
         onPress={handleOpenChanges}
       />
+      {hasModelTurnMetrics ? (
+        <AgentModelTurnMetricsPill serverId={serverId} agentId={agentId} />
+      ) : null}
     </ComposerTrackBar>
   );
 });
@@ -157,16 +163,19 @@ export function hasAgentTracks({
   tasks,
   archiveFinishedStatus,
   hasPluginComposerPills = false,
+  hasModelTurnMetrics = false,
 }: {
   subagentRows: readonly SubagentRow[];
   tasks: readonly TodoEntry[] | undefined;
   archiveFinishedStatus: ArchiveFinishedStatus;
   hasPluginComposerPills?: boolean;
+  hasModelTurnMetrics?: boolean;
 }): boolean {
   return (
     subagentRows.length > 0 ||
     Boolean(tasks?.length) ||
     archiveFinishedStatus.kind !== "idle" ||
-    hasPluginComposerPills
+    hasPluginComposerPills ||
+    hasModelTurnMetrics
   );
 }

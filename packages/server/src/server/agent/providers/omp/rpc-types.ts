@@ -46,6 +46,16 @@ const OmpCustomMessageSchema = z
     content: z.union([z.string(), z.array(z.union([OmpTextContentSchema, OmpImageContentSchema]))]),
   })
   .passthrough();
+export const OmpMessageUsageSchema = z
+  .object({
+    input: z.number().optional(),
+    output: z.number().optional(),
+    cacheRead: z.number().optional(),
+    cacheWrite: z.number().optional(),
+    total: z.number().optional(),
+  })
+  .passthrough();
+
 const OmpAssistantMessageSchema = z
   .object({
     role: z.literal("assistant"),
@@ -56,6 +66,9 @@ const OmpAssistantMessageSchema = z
     responseModel: z.string().optional(),
     errorMessage: z.string().nullable().optional(),
     stopReason: z.string().optional(),
+    duration: z.number().optional(),
+    ttft: z.number().optional(),
+    usage: OmpMessageUsageSchema.optional(),
   })
   .passthrough();
 const OmpToolResultMessageSchema = z
@@ -265,12 +278,16 @@ export const OmpSubagentProgressPayloadSchema = z
 export const OmpAssistantMessageEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text_delta"), delta: z.string().optional() }).passthrough(),
   z.object({ type: z.literal("thinking_delta"), delta: z.string().optional() }).passthrough(),
+  z.object({ type: z.literal("toolcall_delta"), delta: z.string().optional() }).passthrough(),
   z.object({ type: z.literal("start") }).passthrough(),
   z.object({ type: z.literal("text_start") }).passthrough(),
   z.object({ type: z.literal("text_end") }).passthrough(),
   z.object({ type: z.literal("thinking_start") }).passthrough(),
   z.object({ type: z.literal("thinking_end") }).passthrough(),
+  z.object({ type: z.literal("toolcall_start") }).passthrough(),
+  z.object({ type: z.literal("toolcall_end") }).passthrough(),
   z.object({ type: z.literal("done") }).passthrough(),
+  z.object({ type: z.literal("error") }).passthrough(),
 ]);
 
 export const OmpAgentSessionEventSchema = z.discriminatedUnion("type", [

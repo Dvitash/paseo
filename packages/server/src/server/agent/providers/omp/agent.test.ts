@@ -185,7 +185,7 @@ describe("OMP agent client and session", () => {
       { type: "user_message", text: "hello OMP", messageId: "user-1" },
       { type: "assistant_message", text: "hello from OMP", messageId: "omp-assistant-1" },
     ]);
-    expect(omp.eventTypes().slice(0, 2)).toEqual(["turn_started", "timeline"]);
+    expect(omp.eventTypes().slice(0, 3)).toEqual(["turn_started", "usage_updated", "timeline"]);
     expect(omp.completedTurnCount()).toBe(1);
   });
 
@@ -996,6 +996,191 @@ describe("OMP agent client and session", () => {
     await expect(omp.startTurn("/mode plan")).rejects.toThrow(
       "Reconfiguration command /mode is prohibited in read-only sessions",
     );
+    await omp.close();
+  });
+
+  test("emits modelTurn lifecycle on turn_start, content delta, and completion", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    await omp.requireStartTurn("test model turn metrics");
+    const runtime = omp.runtime();
+
+    // turn_start resets modelTurn to running
+    runtime.beginTurn();
+    const updatesAfterStart = omp.usageUpdates();
+    expect(updatesAfterStart.length).toBeGreaterThanOrEqual(1);
+    expect(updatesAfterStart.at(-1)?.modelTurn).toEqual({
+      status: "running",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+
+    // First delta records TTFT and publishes update
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_delta", delta: "Hello" },
+    });
+    const updatesAfterDelta = omp.usageUpdates();
+    expect(updatesAfterDelta.at(-1)?.modelTurn).toMatchObject({
+      status: "running",
+      ttftMs: expect.any(Number),
+      tokensPerSecond: null,
+    });
+    const deltaUpdateCount = updatesAfterDelta.length;
+
+    // Subsequent delta must NOT emit an extra usage_updated
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_delta", delta: " world" },
+    });
+    expect(omp.usageUpdates().length).toBe(deltaUpdateCount);
+
+    // Assistant message_end completes model turn with exact native duration, ttft, and TPS
+    runtime.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        duration: 500,
+        ttft: 100,
+        usage: { output: 20 },
+      },
+    });
+    const updatesAfterComplete = omp.usageUpdates();
+    // TPS = 20 / ((500 - 100) / 1000) = 20 / 0.4 = 50
+    expect(updatesAfterComplete.at(-1)?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 100,
+      tokensPerSecond: 50,
+    });
+
+    runtime.finishTurn();
+    await waitForImmediate();
+    await omp.close();
+  });
+
+  test("supports multiple inference turns and subagent events do not contaminate metrics", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    await omp.requireStartTurn("multi-inference turn");
+    const runtime = omp.runtime();
+
+    // Inference 1 begins
+    runtime.beginTurn();
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_delta", delta: "Calling subagent" },
+    });
+    runtime.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        duration: 400,
+        ttft: 100,
+        usage: { output: 15 },
+      },
+    });
+    expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 100,
+      tokensPerSecond: 50, // 15 / ((400-100)/1000) = 50
+    });
+
+    // Subagent progress arrives - must NOT modify or contaminate main-chat modelTurn
+    runtime.emit({
+      type: "subagent_progress",
+      payload: {
+        index: 0,
+        agent: "scout",
+        progress: { id: "child-1", status: "running" },
+      },
+    });
+    expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 100,
+      tokensPerSecond: 50,
+    });
+
+    // Inference 2 begins - resets to running
+    runtime.beginTurn();
+    expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
+      status: "running",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+
+    // Inference 2 completes
+    runtime.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_delta", delta: "Thinking..." },
+    });
+    runtime.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        duration: 1000,
+        ttft: 200,
+        usage: { output: 40 },
+      },
+    });
+    expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 200,
+      tokensPerSecond: 50, // 40 / ((1000-200)/1000) = 50
+    });
+
+    runtime.finishTurn();
+    await waitForImmediate();
+    await omp.close();
+  });
+
+  test("finalizes running modelTurn on interrupt", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    await omp.requireStartTurn("interrupted prompt");
+    const runtime = omp.runtime();
+
+    runtime.beginTurn();
+    expect(omp.usageUpdates().at(-1)?.modelTurn?.status).toBe("running");
+
+    await omp.interrupt();
+    expect(omp.usageUpdates().at(-1)?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+    await omp.close();
+  });
+
+  test("restores latest completed native assistant metrics from getMessages on resume", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    const runtime = omp.runtime();
+    runtime.messages = [
+      { role: "user", content: "Historical question" },
+      {
+        role: "assistant",
+        content: [],
+        duration: 800,
+        ttft: 200,
+        usage: { output: 30 },
+      },
+    ];
+
+    await omp.history();
+
+    const latestUsage = omp.usageUpdates().at(-1);
+    expect(latestUsage?.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 200,
+      tokensPerSecond: 50, // 30 / ((800-200)/1000) = 50
+    });
     await omp.close();
   });
 });

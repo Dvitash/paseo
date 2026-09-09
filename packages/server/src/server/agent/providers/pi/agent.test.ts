@@ -838,7 +838,7 @@ describe("PiRpcAgentSession", () => {
     expect(events.timelineItems()).toEqual([
       { type: "user_message", text: "hello", messageId: "entry-user-1" },
     ]);
-    expect(events.eventTypes().slice(0, 2)).toEqual(["turn_started", "timeline"]);
+    expect(events.eventTypes().slice(0, 3)).toEqual(["turn_started", "usage_updated", "timeline"]);
   });
 
   test("uses the Pi entry attached to a submitted prompt after resuming old history", async () => {
@@ -1821,6 +1821,54 @@ describe("PiRpcAgentSession", () => {
     await flushTurnScheduling();
     expect(events.usageUpdatedEvents()).toHaveLength(1);
     expect(events.turnCompletedEvents()).toHaveLength(1);
+  });
+
+  test("emits modelTurn lifecycle on turn_start, content delta, and completion in Pi", async () => {
+    const { pi, session, events } = await createSession(new FakePi());
+    const fakeSession = pi.latestSession();
+
+    await session.startTurn("hello Pi");
+
+    // turn_start resets modelTurn to running
+    fakeSession.emit({ type: "turn_start" });
+    const updatesAfterStart = events.usageUpdatedEvents();
+    expect(updatesAfterStart.at(-1)?.usage.modelTurn).toEqual({
+      status: "running",
+      ttftMs: null,
+      tokensPerSecond: null,
+    });
+
+    // Content delta records TTFT
+    fakeSession.emit({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_delta", delta: "Hello" },
+    });
+    expect(events.usageUpdatedEvents().at(-1)?.usage.modelTurn).toMatchObject({
+      status: "running",
+      ttftMs: expect.any(Number),
+      tokensPerSecond: null,
+    });
+
+    // Assistant message_end completes modelTurn
+    fakeSession.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        duration: 500,
+        ttft: 100,
+        usage: { output: 20 },
+      },
+    });
+    expect(events.usageUpdatedEvents().at(-1)?.usage.modelTurn).toEqual({
+      status: "completed",
+      ttftMs: 100,
+      tokensPerSecond: 50,
+    });
+
+    fakeSession.finishTurn();
+    await session.close();
   });
 
   test("poll errors do not fail the turn and final usage still emits", async () => {
