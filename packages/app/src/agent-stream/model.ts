@@ -57,6 +57,29 @@ const turnTimingCache = new WeakMap<
   StreamItem[],
   WeakMap<StreamItem[], Map<string, StreamTurnTiming>>
 >();
+interface CachedTailSlice {
+  historyStart: number;
+  items: StreamItem[];
+}
+
+const tailSliceCache = new WeakMap<StreamItem[], CachedTailSlice>();
+
+function getRenderedTail(tail: StreamItem[], historyStart?: number): StreamItem[] {
+  if (!historyStart) {
+    return tail;
+  }
+  if (historyStart >= tail.length) {
+    return EMPTY_STREAM_ITEMS;
+  }
+  const cached = tailSliceCache.get(tail);
+  if (cached?.historyStart === historyStart) {
+    return cached.items;
+  }
+  const sliced = tail.slice(historyStart);
+  // Retain only the current window, not every progressively larger scrollback slice.
+  tailSliceCache.set(tail, { historyStart, items: sliced });
+  return sliced;
+}
 
 function getOrderedItems(params: {
   cache: WeakMap<StreamItem[], Map<string, StreamItem[]>>;
@@ -163,7 +186,7 @@ export function buildAgentStreamRenderModel(
     isMobileBreakpoint: input.isMobileBreakpoint,
   });
   const orderingCacheKey = `${input.platform}:${input.isMobileBreakpoint}`;
-  const renderedTail = input.historyStart ? input.tail.slice(input.historyStart) : input.tail;
+  const renderedTail = getRenderedTail(input.tail, input.historyStart);
   const orderedTail = getOrderedItems({
     cache: orderedTailCache,
     source: renderedTail,

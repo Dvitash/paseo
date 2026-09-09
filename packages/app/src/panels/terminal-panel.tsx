@@ -6,7 +6,7 @@ import { Text, View } from "react-native";
 import invariant from "tiny-invariant";
 import type { ListTerminalsResponse } from "@getpaseo/protocol/messages";
 import { deriveTerminalActivityStatusBucket } from "@getpaseo/protocol/terminal-activity";
-import { TerminalPane } from "@/components/terminal-pane";
+import { TerminalPaneLoader } from "./terminal-pane-loader";
 import { usePaneContext, usePaneFocus } from "@/panels/pane-context";
 import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
 import { queryClient } from "@/data/query-client";
@@ -102,7 +102,7 @@ function TerminalPanel() {
   }
 
   return (
-    <TerminalPane
+    <TerminalPaneLoader
       serverId={serverId}
       cwd={workspaceDirectory}
       terminalId={target.terminalId}

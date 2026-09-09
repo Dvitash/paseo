@@ -240,4 +240,188 @@ describe("buildAgentStreamRenderModel", () => {
 
     expect(model.turnTiming.byAssistantId.size).toBe(0);
   });
+
+  it("reuses unchanged history timing structure for text-only streaming head growth", () => {
+    const tail = [userMessage("u1", 1), assistantMessage("a1", 2), userMessage("u2", 3)];
+    const firstHead = [assistantMessage("live-a", 4)];
+    const secondHead = [{ ...assistantMessage("live-a", 4), text: "live-a extended text" }];
+
+    const first = buildAgentStreamRenderModel({
+      isTurnActive: true,
+      activeTurnStartedAt: tail[2]?.timestamp ?? null,
+      tail,
+      head: firstHead,
+      platform: "web",
+      isMobileBreakpoint: false,
+    });
+    const second = buildAgentStreamRenderModel({
+      isTurnActive: true,
+      activeTurnStartedAt: tail[2]?.timestamp ?? null,
+      tail,
+      head: secondHead,
+      platform: "web",
+      isMobileBreakpoint: false,
+    });
+
+    expect(first.turnTiming.byAssistantId).toBe(second.turnTiming.byAssistantId);
+    expect(first.turnTiming.byAssistantId.get("a1")).toEqual({
+      completedAt: tail[1]?.timestamp,
+      durationMs: 1000,
+    });
+    expect(second.turnTiming.byAssistantId.has("live-a")).toBe(false);
+  });
+
+  it("memoizes historyStart slices to keep WeakMap caches stable", () => {
+    const tail = [
+      userMessage("u1", 1),
+      assistantMessage("a1", 2),
+      userMessage("u2", 3),
+      assistantMessage("a2", 4),
+    ];
+    const first = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail,
+      head: [],
+      platform: "web",
+      isMobileBreakpoint: false,
+      historyStart: 2,
+    });
+    const second = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail,
+      head: [],
+      platform: "web",
+      isMobileBreakpoint: false,
+      historyStart: 2,
+    });
+
+    expect(first.history).toBe(second.history);
+    expect(first.segments.historyMounted).toBe(second.segments.historyMounted);
+    expect(first.turnTiming.byAssistantId).toBe(second.turnTiming.byAssistantId);
+  });
+
+  it("releases obsolete scrollback slices when the visible history window changes", () => {
+    const input = {
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail: [
+        userMessage("u1", 1),
+        assistantMessage("a1", 2),
+        userMessage("u2", 3),
+        assistantMessage("a2", 4),
+        userMessage("u3", 5),
+        assistantMessage("a3", 6),
+      ],
+      head: [],
+      platform: "web" as const,
+      isMobileBreakpoint: false,
+    };
+    const recent = buildAgentStreamRenderModel({ ...input, historyStart: 4 });
+    const expanded = buildAgentStreamRenderModel({ ...input, historyStart: 2 });
+    const returned = buildAgentStreamRenderModel({ ...input, historyStart: 4 });
+    const repeated = buildAgentStreamRenderModel({ ...input, historyStart: 4 });
+
+    expect(expanded.history).toHaveLength(4);
+    expect(returned.history).toEqual(recent.history);
+    expect(returned.history).not.toBe(recent.history);
+    expect(repeated.history).toBe(returned.history);
+  });
+
+  it("preserves slice semantics for history offsets relative to the end", () => {
+    const model = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail: [
+        userMessage("u1", 1),
+        assistantMessage("a1", 2),
+        userMessage("u2", 3),
+        assistantMessage("a2", 4),
+      ],
+      head: [],
+      platform: "web",
+      isMobileBreakpoint: false,
+      historyStart: -2,
+    });
+    expect(model.history.map((item) => item.id)).toEqual(["u2", "a2"]);
+  });
+
+  it("invalidates historyStart slice when historyStart offset changes or tail is replaced", () => {
+    const tail1 = [
+      userMessage("u1", 1),
+      assistantMessage("a1", 2),
+      userMessage("u2", 3),
+      assistantMessage("a2", 4),
+    ];
+    const modelOffset2 = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail: tail1,
+      head: [],
+      platform: "web",
+      isMobileBreakpoint: false,
+      historyStart: 2,
+    });
+    const modelOffset0 = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail: tail1,
+      head: [],
+      platform: "web",
+      isMobileBreakpoint: false,
+      historyStart: 0,
+    });
+    expect(modelOffset2.history).not.toBe(modelOffset0.history);
+    expect(modelOffset2.history.length).toBe(2);
+    expect(modelOffset0.history.length).toBe(4);
+
+    const tail2 = [...tail1, userMessage("u3", 5), assistantMessage("a3", 6)];
+    const modelReplacedTail = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail: tail2,
+      head: [],
+      platform: "web",
+      isMobileBreakpoint: false,
+      historyStart: 2,
+    });
+    expect(modelReplacedTail.history).not.toBe(modelOffset2.history);
+    expect(modelReplacedTail.history.length).toBe(4);
+  });
+
+  it("preserves active-to-completed transition timing across tail and live head", () => {
+    const tail = [userMessage("u1", 1), assistantMessage("a1_tail", 2)];
+    const streamingHead = [assistantMessage("a1_head", 4)];
+
+    const active = buildAgentStreamRenderModel({
+      isTurnActive: true,
+      activeTurnStartedAt: tail[0]?.timestamp ?? null,
+      tail,
+      head: streamingHead,
+      platform: "web",
+      isMobileBreakpoint: false,
+    });
+    expect(active.turnTiming.runningStartedAt).toBe(tail[0]?.timestamp);
+    expect(active.turnTiming.byAssistantId.has("a1_tail")).toBe(false);
+    expect(active.turnTiming.byAssistantId.has("a1_head")).toBe(false);
+
+    const completed = buildAgentStreamRenderModel({
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+      tail,
+      head: streamingHead,
+      platform: "web",
+      isMobileBreakpoint: false,
+    });
+    expect(completed.turnTiming.runningStartedAt).toBe(null);
+    expect(completed.turnTiming.byAssistantId.get("a1_tail")).toEqual({
+      completedAt: streamingHead[0]?.timestamp,
+      durationMs: 3000,
+    });
+    expect(completed.turnTiming.byAssistantId.get("a1_head")).toEqual({
+      completedAt: streamingHead[0]?.timestamp,
+      durationMs: 3000,
+    });
+  });
 });

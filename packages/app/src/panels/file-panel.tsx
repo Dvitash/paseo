@@ -2,7 +2,7 @@ import { Text, View } from "react-native";
 import { useMemo } from "react";
 import invariant from "tiny-invariant";
 import { useTranslation } from "react-i18next";
-import { FilePane } from "@/file-pane/pane";
+import { FilePaneLoader } from "./file-pane-loader";
 import { usePaneContext } from "@/panels/pane-context";
 import { definePanel } from "@/panels/panel-registry";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
@@ -41,7 +41,7 @@ function FilePanel() {
     );
   }
   return (
-    <FilePane
+    <FilePaneLoader
       serverId={serverId}
       workspaceRoot={workspaceDirectory}
       location={target}

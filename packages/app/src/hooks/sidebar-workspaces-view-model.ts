@@ -367,8 +367,11 @@ export function buildSidebarWorkspaceEntries(input: {
   sessions: SidebarWorkspaceSession[];
   pendingCreateAttempts?: Record<string, PendingCreateAttempt>;
   previousEntries?: ReadonlyMap<string, SidebarWorkspaceEntry>;
-}): Map<string, SidebarWorkspaceEntry> {
+}): ReadonlyMap<string, SidebarWorkspaceEntry> {
   if (input.placements.length === 0 || input.sessions.length === 0) {
+    if (input.previousEntries && input.previousEntries.size === 0) {
+      return input.previousEntries;
+    }
     return new Map();
   }
 
@@ -401,7 +404,34 @@ export function buildSidebarWorkspaceEntries(input: {
     );
   }
 
+  if (
+    input.previousEntries &&
+    areSidebarWorkspaceEntriesMapsEqual(input.previousEntries, entries)
+  ) {
+    return input.previousEntries;
+  }
+
   return entries;
+}
+
+function areSidebarWorkspaceEntriesMapsEqual(
+  left: ReadonlyMap<string, SidebarWorkspaceEntry>,
+  right: ReadonlyMap<string, SidebarWorkspaceEntry>,
+): boolean {
+  if (left === right) return true;
+  if (left.size !== right.size) return false;
+
+  const leftIterator = left.entries();
+  for (const [rightKey, rightValue] of right.entries()) {
+    const nextLeft = leftIterator.next();
+    if (nextLeft.done) return false;
+    const [leftKey, leftValue] = nextLeft.value;
+    if (leftKey !== rightKey || leftValue !== rightValue) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function areSidebarWorkspaceEntriesEqual(
@@ -411,6 +441,13 @@ function areSidebarWorkspaceEntriesEqual(
   const keys = Object.keys(left) as Array<keyof SidebarWorkspaceEntry>;
   if (keys.length !== Object.keys(right).length) return false;
   return keys.every((key) => {
+    if (key === "statusEnteredAt") {
+      const leftDate = left.statusEnteredAt;
+      const rightDate = right.statusEnteredAt;
+      if (leftDate === rightDate) return true;
+      if (!leftDate || !rightDate) return false;
+      return leftDate.getTime() === rightDate.getTime();
+    }
     if (key !== "prHint") return Object.is(left[key], right[key]);
     const leftHint = left.prHint;
     const rightHint = right.prHint;

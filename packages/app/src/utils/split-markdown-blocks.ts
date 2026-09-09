@@ -1,6 +1,9 @@
 import MarkdownIt from "markdown-it";
 
 const markdownBlockParser = new MarkdownIt();
+// Only block line ranges are consumed here. Inline parsing belongs to the renderer,
+// not the splitter that runs on every streaming text reveal.
+markdownBlockParser.core.ruler.enableOnly(["normalize", "block"]);
 
 export function splitMarkdownBlocks(text: string): string[] {
   if (text.length === 0) {
@@ -11,6 +14,10 @@ export function splitMarkdownBlocks(text: string): string[] {
   let currentLines: string[] = [];
   let sawBlockSeparator = false;
   const lines = text.split("\n");
+  const hasBlankLines = lines.some((line) => line.trim().length === 0);
+  if (!hasBlankLines) {
+    return [text];
+  }
   const structuralBlankLines = getStructuralBlankLines(text, lines);
 
   for (const [index, line] of lines.entries()) {

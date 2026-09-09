@@ -81,4 +81,26 @@ describe("splitMarkdownBlocks", () => {
       "Second paragraph",
     ]);
   });
+
+  it("keeps inline-rich text unchanged while splitting its paragraphs", () => {
+    const paragraph =
+      "**Bold** _emphasis_ `code` [link](https://example.com/a_(b)) ![image](image.png) &amp;";
+    expect(splitMarkdownBlocks(`${paragraph}\n\n${paragraph}`)).toEqual([paragraph, paragraph]);
+  });
+
+  it("keeps blank lines inside blockquotes and indented code", () => {
+    expect(
+      splitMarkdownBlocks("Before\n\n> First\n>\n> Second\n\n    first()\n\n    second()\n\nAfter"),
+    ).toEqual(["Before", "> First\n>\n> Second", "    first()\n\n    second()", "After"]);
+  });
+
+  it("preserves single newlines without blank separators", () => {
+    const text = "| Name | Value |\n| --- | --- |\n| **one** | `two` |";
+    expect(splitMarkdownBlocks(text)).toEqual([text]);
+  });
+
+  it("filters whitespace-only input and surrounding blank lines", () => {
+    expect(splitMarkdownBlocks(" \n\t\n")).toEqual([]);
+    expect(splitMarkdownBlocks("\n \nHello\n\t\n")).toEqual(["Hello"]);
+  });
 });

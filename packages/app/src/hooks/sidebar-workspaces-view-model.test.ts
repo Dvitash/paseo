@@ -447,8 +447,280 @@ describe("shared sidebar workspace model", () => {
       previousEntries,
     });
 
+    expect(nextEntries).not.toBe(previousEntries);
     expect(nextEntries.get("srv:one")).toBe(previousEntries.get("srv:one"));
     expect(nextEntries.get("srv:two")).not.toBe(previousEntries.get("srv:two"));
+  });
+
+  it("preserves the entire previous map reference when keys, values, and order are unchanged", () => {
+    const model = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:one", "srv:two"] })],
+    });
+    const one = workspace({
+      id: "one",
+      name: "one",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const two = workspace({
+      id: "two",
+      name: "two",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const previousEntries = buildSidebarWorkspaceEntries({
+      placements: model.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([
+            ["one", one],
+            ["two", two],
+          ]),
+        },
+      ],
+    });
+
+    const nextEntries = buildSidebarWorkspaceEntries({
+      placements: model.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([
+            ["one", one],
+            ["two", two],
+          ]),
+        },
+      ],
+      previousEntries,
+    });
+    expect(nextEntries).toBe(previousEntries);
+
+    // Re-evaluating with equivalent date timestamps preserves the map reference
+    const timestamp = new Date("2026-06-10T00:00:00.000Z");
+    const runningModel = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:running"] })],
+    });
+    const runningWorkspace = workspace({
+      id: "running",
+      name: "running",
+      projectId: "project",
+      projectDisplayName: "project",
+      status: "running",
+      statusEnteredAt: timestamp,
+    });
+    const initialRunningEntries = buildSidebarWorkspaceEntries({
+      placements: runningModel.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([["running", runningWorkspace]]),
+        },
+      ],
+    });
+    const nextRunningEntries = buildSidebarWorkspaceEntries({
+      placements: runningModel.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([
+            [
+              "running",
+              {
+                ...runningWorkspace,
+                statusEnteredAt: new Date(timestamp.getTime()),
+              },
+            ],
+          ]),
+        },
+      ],
+      previousEntries: initialRunningEntries,
+    });
+    expect(nextRunningEntries).toBe(initialRunningEntries);
+  });
+
+  it("returns a new map reference and updates the row when a workspace value changes", () => {
+    const model = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:one"] })],
+    });
+    const one = workspace({
+      id: "one",
+      name: "one",
+      projectId: "project",
+      projectDisplayName: "project",
+      status: "done",
+    });
+    const previousEntries = buildSidebarWorkspaceEntries({
+      placements: model.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([["one", one]]),
+        },
+      ],
+    });
+
+    const nextEntries = buildSidebarWorkspaceEntries({
+      placements: model.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([["one", { ...one, status: "running" }]]),
+        },
+      ],
+      previousEntries,
+    });
+
+    expect(nextEntries).not.toBe(previousEntries);
+    expect(nextEntries.get("srv:one")).not.toBe(previousEntries.get("srv:one"));
+    expect(nextEntries.get("srv:one")?.statusBucket).toBe("running");
+  });
+
+  it("returns a new map reference when a workspace is deleted or added", () => {
+    const modelWithTwo = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:one", "srv:two"] })],
+    });
+    const one = workspace({
+      id: "one",
+      name: "one",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const two = workspace({
+      id: "two",
+      name: "two",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const initialEntries = buildSidebarWorkspaceEntries({
+      placements: modelWithTwo.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([
+            ["one", one],
+            ["two", two],
+          ]),
+        },
+      ],
+    });
+
+    // Deletion
+    const modelWithOne = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:one"] })],
+    });
+    const afterDeletion = buildSidebarWorkspaceEntries({
+      placements: modelWithOne.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([["one", one]]),
+        },
+      ],
+      previousEntries: initialEntries,
+    });
+    expect(afterDeletion).not.toBe(initialEntries);
+    expect(afterDeletion.size).toBe(1);
+    expect(afterDeletion.has("srv:two")).toBe(false);
+    expect(afterDeletion.get("srv:one")).toBe(initialEntries.get("srv:one"));
+
+    // Addition
+    const three = workspace({
+      id: "three",
+      name: "three",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const modelWithThree = buildSidebarWorkspacePlacementModel({
+      projects: [
+        project({ projectKey: "project", workspaceKeys: ["srv:one", "srv:two", "srv:three"] }),
+      ],
+    });
+    const afterAddition = buildSidebarWorkspaceEntries({
+      placements: modelWithThree.workspaces,
+      sessions: [
+        {
+          serverId: "srv",
+          workspaceAgentActivity: new Map(),
+          workspaces: new Map([
+            ["one", one],
+            ["two", two],
+            ["three", three],
+          ]),
+        },
+      ],
+      previousEntries: initialEntries,
+    });
+    expect(afterAddition).not.toBe(initialEntries);
+    expect(afterAddition.size).toBe(3);
+    expect(afterAddition.get("srv:one")).toBe(initialEntries.get("srv:one"));
+    expect(afterAddition.get("srv:two")).toBe(initialEntries.get("srv:two"));
+    expect(afterAddition.has("srv:three")).toBe(true);
+  });
+
+  it("returns a new map reference when observable iteration order changes even if keys and values are identical", () => {
+    const modelForward = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:one", "srv:two"] })],
+    });
+    const modelReverse = buildSidebarWorkspacePlacementModel({
+      projects: [project({ projectKey: "project", workspaceKeys: ["srv:two", "srv:one"] })],
+    });
+    const one = workspace({
+      id: "one",
+      name: "one",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const two = workspace({
+      id: "two",
+      name: "two",
+      projectId: "project",
+      projectDisplayName: "project",
+    });
+    const sessions = [
+      {
+        serverId: "srv",
+        workspaceAgentActivity: new Map(),
+        workspaces: new Map([
+          ["one", one],
+          ["two", two],
+        ]),
+      },
+    ];
+
+    const forwardEntries = buildSidebarWorkspaceEntries({
+      placements: modelForward.workspaces,
+      sessions,
+    });
+    const reverseEntries = buildSidebarWorkspaceEntries({
+      placements: modelReverse.workspaces,
+      sessions,
+      previousEntries: forwardEntries,
+    });
+
+    expect(reverseEntries).not.toBe(forwardEntries);
+    expect(Array.from(reverseEntries.keys())).toEqual(["srv:two", "srv:one"]);
+    expect(Array.from(forwardEntries.keys())).toEqual(["srv:one", "srv:two"]);
+    expect(reverseEntries.get("srv:one")).toBe(forwardEntries.get("srv:one"));
+    expect(reverseEntries.get("srv:two")).toBe(forwardEntries.get("srv:two"));
+  });
+
+  it("preserves empty map reference when inputs remain empty", () => {
+    const previousEmpty = buildSidebarWorkspaceEntries({ placements: [], sessions: [] });
+    const nextEmpty = buildSidebarWorkspaceEntries({
+      placements: [],
+      sessions: [],
+      previousEntries: previousEmpty,
+    });
+    expect(nextEmpty).toBe(previousEmpty);
   });
 
   it("keeps a structurally disambiguated project key in status entries", () => {
