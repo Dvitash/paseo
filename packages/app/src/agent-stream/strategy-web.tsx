@@ -1160,6 +1160,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       overflowY: scrollEnabled ? "auto" : "hidden",
       overscrollBehaviorY: "contain",
       scrollbarWidth: overlayScrollbarEnabled ? "none" : undefined,
+      touchAction: "pan-y",
     };
   }, [isMobileBreakpoint, scrollEnabled]);
   const viewportStyle = useMemo(

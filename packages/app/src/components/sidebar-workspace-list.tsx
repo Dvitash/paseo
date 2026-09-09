@@ -2478,6 +2478,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   list: {
     flex: 1,
+    ...(platformIsWeb ? { touchAction: "pan-y" as const } : {}),
   },
   listContent: {
     paddingHorizontal: theme.spacing[2],

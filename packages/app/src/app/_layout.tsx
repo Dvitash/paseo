@@ -456,7 +456,6 @@ function QueryProvider({ children }: { children: ReactNode }) {
 
 const rowStyle = { flex: 1, flexDirection: "row" } as const;
 const flexStyle = { flex: 1 } as const;
-const MOBILE_WEB_GESTURE_TOUCH_ACTION = isWeb ? "auto" : "pan-y";
 
 interface AppContainerProps {
   children: ReactNode;
@@ -664,7 +663,7 @@ function MobileGestureWrapper({
   const openGesture = useOpenAgentListGesture(chromeEnabled);
 
   return (
-    <GestureDetector gesture={openGesture} touchAction={MOBILE_WEB_GESTURE_TOUCH_ACTION}>
+    <GestureDetector gesture={openGesture} touchAction="pan-y">
       <View collapsable={false} style={layoutStyles.surfaceFill}>
         {children}
       </View>

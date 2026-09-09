@@ -1706,6 +1706,7 @@ const styles = StyleSheet.create((theme) => ({
   treeList: {
     flex: 1,
     minHeight: 0,
+    ...(isWeb ? { touchAction: "pan-y" as const } : {}),
   },
   entriesContent: {
     flexGrow: 1,

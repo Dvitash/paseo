@@ -2,14 +2,11 @@ import { useCallback, useMemo } from "react";
 import { Gesture } from "react-native-gesture-handler";
 import { useSharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
-import { isWeb } from "@/constants/platform";
 import { useHorizontalScrollOptional } from "@/contexts/horizontal-scroll-context";
 import { usePanelStore } from "@/stores/panel-store";
 import { canBeginMobilePanelGesture, isMobilePanelGestureCurrent } from "./model";
 import { useMobilePanelsRuntime } from "./provider";
 import { resolveMobilePanelGestureIntent } from "./gesture-intent";
-
-const MOBILE_WEB_EDGE_SWIPE_WIDTH = 32;
 
 function isCurrentSelection(startedRevision: number): boolean {
   return usePanelStore.getState().mobilePanel.revision === startedRevision;
@@ -84,7 +81,6 @@ export function useOpenAgentListGesture(enabled: boolean) {
           if (
             !canBeginMobilePanelGesture(motionState.value, "agent", position.value) ||
             horizontalScroll?.isAnyScrolledRight.value ||
-            (isWeb && touchStartX.value > MOBILE_WEB_EDGE_SWIPE_WIDTH) ||
             panIntent === "fail"
           ) {
             stateManager.fail();
@@ -276,7 +272,6 @@ export function useOpenFileExplorerGesture({ enabled, onOpen }: OpenFileExplorer
           });
           if (
             !canBeginMobilePanelGesture(motionState.value, "agent", position.value) ||
-            (isWeb && touchStartX.value < windowWidth - MOBILE_WEB_EDGE_SWIPE_WIDTH) ||
             panIntent === "fail"
           ) {
             stateManager.fail();

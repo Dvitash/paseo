@@ -29,8 +29,6 @@ interface CompactExplorerOpenGestureSurfaceProps {
   onOpenExplorer: () => void;
 }
 
-const COMPACT_WEB_GESTURE_TOUCH_ACTION = isWeb ? "auto" : "pan-y";
-
 function CompactExplorerOpenGestureSurface({
   children,
   enabled,
@@ -42,7 +40,7 @@ function CompactExplorerOpenGestureSurface({
   });
 
   return (
-    <GestureDetector gesture={explorerOpenGesture} touchAction={COMPACT_WEB_GESTURE_TOUCH_ACTION}>
+    <GestureDetector gesture={explorerOpenGesture} touchAction="pan-y">
       <View style={styles.fill}>{children}</View>
     </GestureDetector>
   );
