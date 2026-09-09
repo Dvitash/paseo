@@ -67,25 +67,31 @@ export function resolveSidebarHostServerId(input: {
 export function resolveProviderUsageSlot(provider: ProviderUsage): SidebarProviderUsageSlot {
   const window =
     provider.windows.find((candidate) => candidate.id === "omp-rollup") ??
-    provider.windows.find((candidate) => typeof candidate.usedPct === "number") ??
+    provider.windows.find(
+      (candidate) =>
+        (typeof candidate.remainingPct === "number" && Number.isFinite(candidate.remainingPct)) ||
+        (typeof candidate.usedPct === "number" && Number.isFinite(candidate.usedPct)),
+    ) ??
     null;
 
-  const usedPct =
-    window && typeof window.usedPct === "number" && Number.isFinite(window.usedPct)
-      ? window.usedPct
-      : null;
-  const remainingPct =
+  const rawRemaining =
     window && typeof window.remainingPct === "number" && Number.isFinite(window.remainingPct)
       ? window.remainingPct
       : null;
+  const rawUsed =
+    window && typeof window.usedPct === "number" && Number.isFinite(window.usedPct)
+      ? window.usedPct
+      : null;
 
-  const hasCurrentUsage = provider.status === "available" && usedPct !== null;
+  const remainingPct = rawRemaining ?? (rawUsed !== null ? 100 - rawUsed : null);
+
+  const usedPct = rawUsed ?? (rawRemaining !== null ? 100 - rawRemaining : null);
+
+  const hasCurrentUsage = provider.status === "available" && remainingPct !== null;
   if (hasCurrentUsage) {
-    const roundedUsed = Math.round(clampPct(usedPct));
-    const percentageText = `${roundedUsed}%`;
-    const remainingClause =
-      remainingPct !== null ? `, ${Math.round(clampPct(remainingPct))}% remaining` : "";
-    const label = `${provider.displayName}: ${roundedUsed}% used${remainingClause}`;
+    const roundedRemaining = Math.round(clampPct(remainingPct));
+    const percentageText = `${roundedRemaining}%`;
+    const label = `${provider.displayName}: ${roundedRemaining}% remaining`;
     return {
       providerId: provider.providerId,
       displayName: provider.displayName,
@@ -94,7 +100,7 @@ export function resolveProviderUsageSlot(provider: ProviderUsage): SidebarProvid
       status: provider.status,
       percentageText,
       accessibilityLabel: label,
-      tooltipText: label,
+      tooltipText: provider.sourceLabel ? `${label} · ${provider.sourceLabel}` : label,
     };
   }
 

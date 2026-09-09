@@ -8,7 +8,7 @@ import {
 } from "./sidebar-usage-model";
 
 describe("resolveProviderUsageSlot", () => {
-  it("extracts and rounds usedPct from the omp-rollup window", () => {
+  it("extracts and rounds remainingPct from the omp-rollup window", () => {
     const provider: ProviderUsage = {
       providerId: "openai-codex",
       displayName: "OpenAI Codex",
@@ -31,10 +31,23 @@ describe("resolveProviderUsageSlot", () => {
       usedPct: 73.8,
       remainingPct: 26.2,
       status: "available",
-      percentageText: "74%",
-      accessibilityLabel: "OpenAI Codex: 74% used, 26% remaining",
-      tooltipText: "OpenAI Codex: 74% used, 26% remaining",
+      percentageText: "26%",
+      accessibilityLabel: "OpenAI Codex: 26% remaining",
+      tooltipText: "OpenAI Codex: 26% remaining",
     });
+  });
+
+  it("keeps cached percentages and identifies them in the tooltip", () => {
+    const slot = resolveProviderUsageSlot({
+      providerId: "opencode-go",
+      displayName: "OpenCode Go",
+      status: "available",
+      planLabel: null,
+      sourceLabel: "OMP (cached)",
+      windows: [{ id: "omp-rollup", label: "Usage", usedPct: 74, remainingPct: 26 }],
+    });
+    expect(slot.percentageText).toBe("26%");
+    expect(slot.tooltipText).toBe("OpenCode Go: 26% remaining · OMP (cached)");
   });
 
   it("handles 0% used correctly without treating it as unavailable", () => {
@@ -54,8 +67,46 @@ describe("resolveProviderUsageSlot", () => {
     };
 
     const slot = resolveProviderUsageSlot(provider);
+    expect(slot.percentageText).toBe("100%");
+    expect(slot.accessibilityLabel).toBe("OpenAI Codex: 100% remaining");
+  });
+
+  it("supports remaining-only windows when usedPct is absent", () => {
+    const provider: ProviderUsage = {
+      providerId: "anthropic",
+      displayName: "Anthropic",
+      status: "available",
+      planLabel: null,
+      windows: [{ id: "session", label: "Session", remainingPct: 42 }],
+    };
+
+    const slot = resolveProviderUsageSlot(provider);
+    expect(slot.percentageText).toBe("42%");
+    expect(slot.remainingPct).toBe(42);
+    expect(slot.usedPct).toBe(58);
+    expect(slot.accessibilityLabel).toBe("Anthropic: 42% remaining");
+  });
+
+  it("handles 0% remaining correctly without treating it as unavailable", () => {
+    const provider: ProviderUsage = {
+      providerId: "openai-codex",
+      displayName: "OpenAI Codex",
+      status: "available",
+      planLabel: null,
+      windows: [
+        {
+          id: "omp-rollup",
+          label: "Usage",
+          usedPct: 100,
+          remainingPct: 0,
+        },
+      ],
+    };
+
+    const slot = resolveProviderUsageSlot(provider);
     expect(slot.percentageText).toBe("0%");
-    expect(slot.accessibilityLabel).toBe("OpenAI Codex: 0% used, 100% remaining");
+    expect(slot.remainingPct).toBe(0);
+    expect(slot.accessibilityLabel).toBe("OpenAI Codex: 0% remaining");
   });
 
   it("falls back to the first window with a numeric percentage when omp-rollup is absent", () => {
@@ -72,7 +123,7 @@ describe("resolveProviderUsageSlot", () => {
 
     const slot = resolveProviderUsageSlot(provider);
     expect(slot.percentageText).toBe("50%");
-    expect(slot.accessibilityLabel).toBe("Anthropic: 50% used");
+    expect(slot.accessibilityLabel).toBe("Anthropic: 50% remaining");
   });
 
   it("returns an em dash when no limits or percentages are available", () => {
@@ -136,7 +187,7 @@ describe("resolveSidebarProviderUsageSlots", () => {
     const slots = resolveSidebarProviderUsageSlots(providers);
     expect(slots).toHaveLength(2);
     expect(slots[0]?.percentageText).toBe("50%");
-    expect(slots[1]?.percentageText).toBe("74%");
+    expect(slots[1]?.percentageText).toBe("26%");
   });
 });
 

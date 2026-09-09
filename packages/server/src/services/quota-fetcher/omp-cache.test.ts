@@ -341,7 +341,7 @@ describe("OMP Usage Cache Adapter & Service", () => {
     expect(window.remainingPct).toBeNull();
   });
 
-  it("marks stale cache older than 5 minutes as error so it does not look current", async () => {
+  it("retains valid quota percentages as available with cached annotation when cache is older than 5 minutes", async () => {
     const fixedNow = Date.parse("2026-09-08T12:00:00.000Z");
     // 6 minutes old (> 5 minute threshold)
     const staleTime = fixedNow - 6 * 60 * 1000;
@@ -370,14 +370,15 @@ describe("OMP Usage Cache Adapter & Service", () => {
 
     expect(result.providers).toHaveLength(1);
     const codex = result.providers[0]!;
-    expect(codex.status).toBe("error");
-    expect(codex.error).toContain("stale");
+    expect(codex.status).toBe("available");
+    expect(codex.sourceLabel).toBe("OMP (cached)");
+    expect(codex.error).toBeNull();
     expect(codex.fetchedAt).toBe(new Date(staleTime).toISOString());
-    expect(codex.windows[0]?.usedPct).toBeNull();
-    expect(codex.windows[0]?.remainingPct).toBeNull();
+    expect(codex.windows[0]?.remainingPct).toBe(90);
+    expect(codex.windows[0]?.usedPct).toBe(10);
   });
 
-  it("honors stale report.fetchedAt even when generatedAt is fresh", async () => {
+  it("retains valid quota percentages as available with cached annotation when report.fetchedAt is stale even if generatedAt is fresh", async () => {
     const fixedNow = Date.parse("2026-09-08T12:00:00.000Z");
     const staleReportTime = fixedNow - 7 * 60 * 1000; // 7m old report
     const payload: OmpUsageData = {
@@ -405,9 +406,105 @@ describe("OMP Usage Cache Adapter & Service", () => {
 
     expect(result.providers).toHaveLength(1);
     const codex = result.providers[0]!;
-    expect(codex.status).toBe("error");
-    expect(codex.error).toContain("stale");
-    expect(codex.windows[0]?.usedPct).toBeNull();
+    expect(codex.status).toBe("available");
+    expect(codex.sourceLabel).toBe("OMP (cached)");
+    expect(codex.error).toBeNull();
+    expect(codex.fetchedAt).toBe(new Date(staleReportTime).toISOString());
+    expect(codex.windows[0]?.remainingPct).toBe(90);
+    expect(codex.windows[0]?.usedPct).toBe(10);
+  });
+
+  it("computes usedPct as 100 - remainingPct directly from remainingFraction input", async () => {
+    const fixedNow = Date.parse("2026-09-08T12:00:00.000Z");
+    const payload: OmpUsageData = {
+      generatedAt: fixedNow - 10_000,
+      reports: [
+        {
+          provider: "openai-codex",
+          fetchedAt: fixedNow - 10_000,
+          limits: [
+            {
+              id: "weekly",
+              label: "Weekly",
+              amount: { remainingFraction: 0.72 },
+            },
+          ],
+        },
+      ],
+    };
+    writeFileSync(cacheFile, JSON.stringify(payload));
+
+    const result = await readOmpUsage({
+      cachePath: cacheFile,
+      now: () => fixedNow,
+    });
+
+    expect(result.providers).toHaveLength(1);
+    const codex = result.providers[0]!;
+    expect(codex.status).toBe("available");
+    expect(codex.sourceLabel).toBe("OMP");
+    expect(codex.windows[0]?.remainingPct).toBe(72);
+    expect(codex.windows[0]?.usedPct).toBe(28);
+  });
+
+  it("keeps true fetch errors and unavailable data distinguishable even when stale", async () => {
+    const fixedNow = Date.parse("2026-09-08T12:00:00.000Z");
+    const staleTime = fixedNow - 10 * 60 * 1000;
+    const payload: OmpUsageData = {
+      generatedAt: staleTime,
+      reports: [
+        {
+          provider: "claude",
+          fetchedAt: staleTime,
+          error: "Rate limit reached / auth expired",
+          limits: [],
+        },
+        {
+          provider: "cursor",
+          fetchedAt: staleTime,
+          limits: [],
+        },
+        {
+          provider: "google-antigravity",
+          fetchedAt: staleTime,
+          limits: [
+            {
+              id: "weekly",
+              amount: { remainingFraction: 0.8 },
+            },
+          ],
+        },
+        {
+          provider: "google-antigravity",
+          fetchedAt: staleTime,
+          limits: [], // Second account missing limits
+        },
+      ],
+    };
+    writeFileSync(cacheFile, JSON.stringify(payload));
+
+    const result = await readOmpUsage({
+      cachePath: cacheFile,
+      now: () => fixedNow,
+    });
+
+    const claude = result.providers.find((p) => p.providerId === "claude")!;
+    expect(claude.status).toBe("error");
+    expect(claude.error).toBe("Provider quota fetch failed");
+    expect(claude.windows[0]?.usedPct).toBeNull();
+    expect(claude.sourceLabel).toBe("OMP");
+
+    const cursor = result.providers.find((p) => p.providerId === "cursor")!;
+    expect(cursor.status).toBe("unavailable");
+    expect(cursor.error).toBeNull();
+    expect(cursor.windows[0]?.usedPct).toBeNull();
+    expect(cursor.sourceLabel).toBe("OMP");
+
+    const agy = result.providers.find((p) => p.providerId === "google-antigravity")!;
+    expect(agy.status).toBe("error");
+    expect(agy.error).toBe("Provider usage contains failed or unavailable account data");
+    expect(agy.windows[0]?.usedPct).toBeNull();
+    expect(agy.sourceLabel).toBe("OMP");
   });
 
   it("does not let partial failure or stale account make rollup look fully current", async () => {

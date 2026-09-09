@@ -31,8 +31,11 @@ interface UsageAccount {
   usedFraction: number;
 }
 
-async function writeUsageCache(path: string, accounts: UsageAccount[]): Promise<void> {
-  const now = Date.now();
+async function writeUsageCache(
+  path: string,
+  accounts: UsageAccount[],
+  now = Date.now(),
+): Promise<void> {
   const reports = accounts.map(({ provider, usedFraction }) => ({
     provider,
     fetchedAt: now,
@@ -63,7 +66,7 @@ test("shows systemd-cache usage above the matching footer and redistributes prov
   const footer = page.getByTestId("sidebar-footer");
   await expect(bar).toBeVisible();
   await expect(bar.getByTestId("sidebar-provider-usage-anthropic")).toContainText("50%");
-  await expect(bar.getByTestId("sidebar-provider-usage-openai-codex")).toContainText("74%");
+  await expect(bar.getByTestId("sidebar-provider-usage-openai-codex")).toContainText("26%");
   await expect(bar.locator("svg")).toHaveCount(2);
   const barBounds = await bar.boundingBox();
   const footerBounds = await footer.boundingBox();
@@ -80,7 +83,7 @@ test("shows systemd-cache usage above the matching footer and redistributes prov
     { provider: "devin", usedFraction: 0.6 },
   ]);
   await page.reload();
-  await expect(bar.getByTestId("sidebar-provider-usage-devin")).toContainText("60%");
+  await expect(bar.getByTestId("sidebar-provider-usage-devin")).toContainText("40%");
   const slots = bar.locator('[data-testid^="sidebar-provider-usage-"]');
   await expect(slots).toHaveCount(5);
   await expect(bar.locator("svg")).toHaveCount(5);
@@ -99,7 +102,7 @@ test("shows systemd-cache usage above the matching footer and redistributes prov
   await writeUsageCache(usageCachePath, [{ provider: "openai-codex", usedFraction: 0 }]);
   await page.reload();
   await expect(slots).toHaveCount(1);
-  await expect(bar.getByTestId("sidebar-provider-usage-openai-codex")).toContainText("0%");
+  await expect(bar.getByTestId("sidebar-provider-usage-openai-codex")).toContainText("100%");
 
   await writeUsageCache(usageCachePath, []);
   await page.reload();
@@ -122,7 +125,7 @@ test("refreshes over the connected daemon even when the browser reports offline"
     await writeUsageCache(usageCachePath, [{ provider: "openai-codex", usedFraction: 0.74 }]);
     await slot.click();
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
-    await expect(slot).toContainText("74%");
+    await expect(slot).toContainText("26%");
   } finally {
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
   }
@@ -155,6 +158,30 @@ test("uses the registered host instead of a workspace remembered from a removed 
     );
   });
   await gotoAppShell(page);
-  await expect(page.getByTestId("sidebar-provider-usage-openai-codex")).toContainText("74%");
+  await expect(page.getByTestId("sidebar-provider-usage-openai-codex")).toContainText("26%");
   await expect(page.getByTestId("sidebar-provider-usage-status")).toHaveCount(0);
+});
+
+test("keeps stale cached percentages and labels them as remaining", async ({
+  page,
+  usageCachePath,
+}) => {
+  await writeUsageCache(
+    usageCachePath,
+    [{ provider: "opencode-go", usedFraction: 0.74 }],
+    Date.now() - 10 * 60_000,
+  );
+  await gotoAppShell(page);
+  const slot = page.getByTestId("sidebar-provider-usage-opencode-go");
+  await expect(slot).toContainText("26%");
+  await slot.click();
+  const card = page.getByTestId("provider-usage-card");
+  await expect(card.getByText("26% remaining", { exact: true })).toBeVisible();
+  await expect(card.getByText(/OMP \(cached\)/)).toBeVisible();
+  await expect(card.getByText("Error", { exact: true })).toHaveCount(0);
+
+  await writeUsageCache(usageCachePath, [{ provider: "opencode-go", usedFraction: 0.8 }]);
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(card.getByText("20% remaining", { exact: true })).toBeVisible();
+  await expect(card.getByText(/OMP \(cached\)/)).toHaveCount(0);
 });

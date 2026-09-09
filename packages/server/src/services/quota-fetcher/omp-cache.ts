@@ -329,10 +329,7 @@ function assembleProviderGroup(
   let usedPct: number | null = null;
   let remainingPct: number | null = null;
 
-  if (isCacheStale || hasStaleReport) {
-    status = "error";
-    error = "OMP usage cache is stale (> 5 minutes old)";
-  } else if (hasErrorReport) {
+  if (hasErrorReport) {
     status = "error";
     error = "Provider quota fetch failed";
   } else if (validLimitsCount === 0) {
@@ -345,6 +342,9 @@ function assembleProviderGroup(
     remainingPct = Math.min(100, Math.max(0, Math.round((weightedRemaining / totalWeight) * 100)));
     usedPct = 100 - remainingPct;
   }
+
+  const isStale = isCacheStale || hasStaleReport;
+  const sourceLabel = isStale && status === "available" ? "OMP (cached)" : "OMP";
 
   const window: ProviderUsageWindow = {
     id: "omp-rollup",
@@ -359,7 +359,7 @@ function assembleProviderGroup(
     displayName,
     status,
     planLabel,
-    sourceLabel: "OMP",
+    sourceLabel,
     fetchedAt: fetchedAtIso,
     windows: [window],
     balances: [],

@@ -57,7 +57,7 @@ test.describe("provider usage settings", () => {
     await expect(card.getByText("GLM coding plan", { exact: true }).first()).toBeVisible();
     await expect(card.getByText("Biweekly", { exact: true })).toBeVisible();
     await expect(card.getByText("Daily", { exact: true })).toBeVisible();
-    await expect(card.getByText("70%")).toBeVisible();
+    await expect(card.getByText("30% remaining", { exact: true })).toBeVisible();
     await expect(card.getByText("Credits", { exact: true })).toBeVisible();
     await expect(card.getByText("1,234 left", { exact: true })).toBeVisible();
     await expect(card.getByText("Extra usage", { exact: true })).toBeVisible();
@@ -102,12 +102,12 @@ test.describe("provider usage settings", () => {
     await openSettingsHostSection(page, serverId, "usage");
     await usageFixture.waitForRequestCount(1);
     const card = page.getByTestId("provider-usage-card");
-    await expect(card.getByText("23%")).toBeVisible({ timeout: 10_000 });
+    await expect(card.getByText("77%")).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await usageFixture.waitForRequestCount(2);
 
     expect(usageFixture.requestCount()).toBe(2);
-    await expect(card.getByText("64%")).toBeVisible();
+    await expect(card.getByText("36%")).toBeVisible();
   });
 
   test("one provider error does not collapse the usage list", async ({ page }) => {
@@ -145,6 +145,6 @@ test.describe("provider usage settings", () => {
     await expect(card.getByText("Error", { exact: true })).toBeVisible();
     await expect(card.getByText("Claude auth expired", { exact: true })).toBeVisible();
     await expect(card.getByText("Codex", { exact: true })).toBeVisible();
-    await expect(card.getByText("71%")).toBeVisible();
+    await expect(card.getByText("29%")).toBeVisible();
   });
 });
