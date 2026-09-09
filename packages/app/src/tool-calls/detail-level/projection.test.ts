@@ -36,6 +36,43 @@ function toolCall(
   };
 }
 
+function advisorToolCall(
+  id: string,
+  text: string,
+  options: {
+    label?: string;
+    status?: "running" | "completed" | "failed" | "canceled";
+  } = {},
+): ToolCallItem {
+  return {
+    kind: "tool_call",
+    id,
+    timestamp: new Date(`2026-01-01T00:00:${id.padStart(2, "0")}.000Z`),
+    payload: {
+      source: "agent",
+      data: {
+        provider: "claude",
+        callId: id,
+        name: "advisor",
+        status: options.status ?? "completed",
+        error: null,
+        detail: {
+          type: "plain_text",
+          label: options.label ?? "Advisor · 1 note",
+          text,
+          icon: "brain",
+        },
+        metadata: {
+          synthetic: true,
+          source: "omp_advisor",
+          noteCount: 1,
+          blockerCount: 0,
+        },
+      },
+    },
+  };
+}
+
 function assistant(id: string): AssistantMessageItem {
   return {
     kind: "assistant_message",
@@ -456,5 +493,64 @@ describe("tool call detail-level projection", () => {
     expect(result.head).toEqual([singleCall, plan, speak]);
     expect(result.groupsByHostId.get(singleCall.id)?.run.calls).toEqual([singleCall]);
     expect(result.groupsByHostId.size).toBe(1);
+  });
+
+  it("preserves advisor tool calls ungrouped in live head between other tools", () => {
+    const shell1 = toolCall("1", { type: "shell", command: "one" });
+    const shell2 = toolCall("2", { type: "shell", command: "two" });
+    const advisor = advisorToolCall("3", "[nit] Check naming convention");
+    const shell3 = toolCall("4", { type: "shell", command: "three" });
+
+    const result = project({
+      level: "overview",
+      head: [shell1, shell2, advisor, shell3],
+      isTurnActive: true,
+    });
+
+    expect(result.head).toEqual([
+      expect.objectContaining({ id: shell1.id }),
+      advisor,
+      expect.objectContaining({ id: shell3.id }),
+    ]);
+    expect(result.groupsByHostId.get(shell1.id)?.run.calls).toEqual([shell1, shell2]);
+    expect(result.groupsByHostId.get(advisor.id)).toBeUndefined();
+    expect(result.groupsByHostId.get(shell3.id)?.run.calls).toEqual([shell3]);
+  });
+
+  it("preserves advisor rows ungrouped in prepared history tail", () => {
+    const shell1 = toolCall("1", { type: "shell", command: "one" });
+    const advisor = advisorToolCall("2", "[concern] Potential race condition");
+    const shell2 = toolCall("3", { type: "shell", command: "two" });
+
+    const result = project({
+      level: "overview",
+      tail: [shell1, advisor, shell2],
+      head: [],
+      isTurnActive: false,
+    });
+
+    expect(result.tail).toEqual([
+      expect.objectContaining({ id: shell1.id }),
+      advisor,
+      expect.objectContaining({ id: shell2.id }),
+    ]);
+    expect(result.groupsByHostId.get(advisor.id)).toBeUndefined();
+  });
+
+  it("preserves advisor rows between tools across history and live transition", () => {
+    const historyShell = toolCall("1", { type: "shell", command: "hist" });
+    const historyAdvisor = advisorToolCall("2", "[nit] Formatting");
+    const liveShell = toolCall("3", { type: "shell", command: "live" });
+    const liveAdvisor = advisorToolCall("4", "[blocker] Fix security vulnerability");
+
+    const result = project({
+      level: "overview",
+      tail: [historyShell, historyAdvisor],
+      head: [liveShell, liveAdvisor],
+      isTurnActive: true,
+    });
+
+    expect(result.tail).toEqual([expect.objectContaining({ id: historyShell.id }), historyAdvisor]);
+    expect(result.head).toEqual([expect.objectContaining({ id: liveShell.id }), liveAdvisor]);
   });
 });

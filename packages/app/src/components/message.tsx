@@ -79,6 +79,8 @@ import { setAssistantMarkdownBlockHeight } from "@/utils/assistant-message-heigh
 import { isRenderProfileEnabled } from "@/utils/render-profiler";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { PlanCard } from "./plan-card";
+import { AdvisorComments } from "./advisor-comments";
+import { isAdvisorToolCall } from "@/tool-calls/advisor";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import {
@@ -3160,6 +3162,17 @@ export const ToolCall = memo(function ToolCall({
       <PlanCard
         text={effectiveDetail.text}
         testID="timeline-plan-card"
+        disableOuterSpacing={disableOuterSpacing}
+      />
+    );
+  }
+
+  if (isAdvisorToolCall({ detail: effectiveDetail, metadata })) {
+    return (
+      <AdvisorComments
+        text={effectiveDetail?.type === "plain_text" ? effectiveDetail.text : undefined}
+        label={effectiveDetail?.type === "plain_text" ? effectiveDetail.label : undefined}
+        testID="timeline-advisor-comments"
         disableOuterSpacing={disableOuterSpacing}
       />
     );
