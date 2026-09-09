@@ -1,6 +1,11 @@
+import { createElement, type ComponentType } from "react";
+import { lightTheme } from "../src/styles/theme";
+
 const testTheme = {
+  ...lightTheme,
   colorScheme: "light",
   colors: {
+    ...lightTheme.colors,
     foreground: "#111111",
     foregroundMuted: "#666666",
     statusSuccess: "#15803d",
@@ -22,8 +27,9 @@ const testTheme = {
     border: "#e4e4e7",
     borderAccent: "#a1a1aa",
     palette: {
+      ...lightTheme.colors.palette,
       amber: { 500: "#f59e0b" },
-      blue: { 300: "#93c5fd" },
+      blue: lightTheme.colors.palette.blue,
       green: { 500: "#22c55e" },
       red: { 300: "#fca5a5" },
       white: "#ffffff",
@@ -32,6 +38,7 @@ const testTheme = {
   borderWidth: { 1: 1 },
   spacing: [0, 4, 8, 12, 16, 20, 24, 28, 32],
   fontSize: {
+    ...lightTheme.fontSize,
     xs: 12,
     sm: 14,
     base: 16,
@@ -41,6 +48,7 @@ const testTheme = {
     mono: "monospace",
   },
   fontWeight: {
+    ...lightTheme.fontWeight,
     normal: "400",
     medium: "500",
   },
@@ -86,7 +94,13 @@ export const StyleSheet = {
     isStyleFactory(styles) ? styles(testTheme) : styles,
 };
 
-export const withUnistyles = <T>(Component: T): T => Component;
+export function withUnistyles<P extends object>(Component: ComponentType<P>) {
+  return function ThemedComponent(
+    props: P & { uniProps?: (theme: typeof testTheme) => Partial<P> },
+  ) {
+    return createElement(Component, { ...props, ...props.uniProps?.(testTheme) });
+  };
+}
 
 export const useUnistyles = () => ({
   theme: testTheme,

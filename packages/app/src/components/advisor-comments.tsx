@@ -1,6 +1,7 @@
 import React, { memo, useMemo } from "react";
 import { View, Text } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
 import {
   parseAdvisorComments,
   getAdvisorSeverityLabel,
@@ -82,9 +83,7 @@ function AdvisorCommentItem({ comment }: { comment: ParsedAdvisorComment }) {
         {severityLabel}
         {comment.advisor ? ` · ${comment.advisor}` : null}
       </Text>
-      <Text style={styles.commentText} selectable>
-        {comment.text}
-      </Text>
+      <MarkdownRenderer text={comment.text} />
     </View>
   );
 }
@@ -136,10 +135,5 @@ const styles = StyleSheet.create((theme) => ({
   },
   blockerLabel: {
     color: theme.colors.statusDanger,
-  },
-  commentText: {
-    fontSize: theme.fontSize.content,
-    lineHeight: theme.fontSize.content * 1.5,
-    color: theme.colors.foreground,
   },
 }));

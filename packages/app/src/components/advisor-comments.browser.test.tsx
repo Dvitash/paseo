@@ -101,6 +101,38 @@ Paragraph two with deeper details.
     expect(element.textContent).toContain("A separate nit comment.");
   });
 
+  it("renders Markdown code, emphasis, lists, and links inside advisor notes", () => {
+    const element = mountAdvisorComments({
+      text: [
+        "[blocker] Check `packages/app/src/composer/model-turn-metrics.tsx`.",
+        "",
+        "```ts",
+        'const status = "running";',
+        'expect(status).toBe("running");',
+        "```",
+        "",
+        "**Retain metrics** between turns.",
+        "",
+        "- Keep the last values",
+        "- Handle null metrics",
+        "",
+        "[Read the docs](https://paseo.sh)",
+      ].join("\n"),
+    });
+    element.style.width = "320px";
+
+    expect(element.textContent).not.toContain("```");
+    expect(element.textContent).not.toContain("`packages/");
+    expect(element.textContent).not.toContain("**Retain metrics**");
+    expect(element.textContent).toContain('const status = "running";');
+    expect(element.textContent).toContain('expect(status).toBe("running");');
+    expect(element.textContent).toContain("Retain metrics");
+    expect(element.textContent).toContain("Keep the last values");
+    expect(element.textContent).toContain("Handle null metrics");
+    expect(element.querySelector('[role="link"]')?.textContent).toBe("Read the docs");
+    expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth + 1);
+  });
+
   it("renders untyped neutral notes with fallback Note label", () => {
     const text = "General architectural advice without severity tag";
     const element = mountAdvisorComments({ text });
