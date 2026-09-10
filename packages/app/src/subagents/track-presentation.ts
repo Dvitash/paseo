@@ -103,23 +103,8 @@ function summarizeSubagentStatus(rows: readonly SubagentRow[]): SubagentStatusCo
   });
 }
 
-/** A failed or canceled fan-out is a dead row: not worth the space above the composer. */
-export function isSubagentDead(row: SubagentRow): boolean {
-  return (
-    row.status === "error" ||
-    row.status === "failed" ||
-    row.status === "canceled" ||
-    row.status === "closed"
-  );
-}
-
 export function countFinishedSubagents(rows: readonly SubagentRow[]): number {
   return rows.filter(isFinishedSubagent).length;
-}
-
-/** A successful terminal state, kept for the quiet completed summary. */
-export function isSubagentCompleted(row: SubagentRow): boolean {
-  return !isSubagentDead(row) && !isSubagentActiveOrAttention(row) && isFinishedSubagent(row);
 }
 
 export function resolveRowLabel(title: string | null | undefined): string | null {
@@ -140,7 +125,7 @@ export interface RecentSubagentAction {
 }
 
 export function isSubagentActiveOrAttention(row: SubagentRow): boolean {
-  if (row.requiresAttention || row.status === "error" || row.status === "failed") {
+  if (row.requiresAttention) {
     return true;
   }
   if (row.kind === "paseo") {

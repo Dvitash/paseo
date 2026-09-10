@@ -1785,8 +1785,6 @@ export const en = {
     openConversation: "Open conversation",
     showMore: "+{{count}} more",
     showLess: "Show less",
-    completedSummaryOne: "1 completed",
-    completedSummaryMany: "{{count}} completed",
     recentActions: "Recent actions",
     noRecentActions: "No recent actions",
     latestMessage: "Latest message",

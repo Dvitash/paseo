@@ -1825,8 +1825,6 @@ export const fr: TranslationResources = {
     openConversation: "Ouvrir la conversation",
     showMore: "+{{count}} de plus",
     showLess: "Afficher moins",
-    completedSummaryOne: "1 terminé",
-    completedSummaryMany: "{{count}} terminés",
     recentActions: "Actions récentes",
     noRecentActions: "Aucune action récente",
     latestMessage: "Dernier message",

@@ -222,7 +222,7 @@ describe("SubagentsTrack browser component tests", () => {
     ).toBeNull();
   });
 
-  it("summarizes settled completed subagents in quiet summary and expands on click", () => {
+  it("hides completed subagents entirely, showing only active rows", () => {
     const rows: SubagentRow[] = [
       createRow({ id: "active-1", title: "Active Worker", status: "running" }),
       createRow({ id: "comp-1", title: "Done Worker", status: "idle" }),
@@ -236,29 +236,19 @@ describe("SubagentsTrack browser component tests", () => {
         onOpenSubagent={vi.fn()}
         onOpenProviderSubagent={vi.fn()}
         onArchiveSubagent={vi.fn()}
-        completedPauseMs={0}
       />,
     );
 
     // Active row is visible directly
     expect(document.querySelector('[data-testid="subagents-track-row-active-1"]')).not.toBeNull();
 
-    // Completed rows are in quiet summary
+    // Completed rows are hidden entirely, with no summary to expand
     expect(document.querySelector('[data-testid="subagents-track-row-comp-1"]')).toBeNull();
     expect(document.querySelector('[data-testid="subagents-track-row-comp-2"]')).toBeNull();
-
-    const summary = document.querySelector('[data-testid="subagents-track-completed-summary"]');
-    expect(summary).not.toBeNull();
-    expect(summary?.textContent).toContain("2 completed");
-
-    // Click summary to expand completed rows
-    click(summary as Element);
-
-    expect(document.querySelector('[data-testid="subagents-track-row-comp-1"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="subagents-track-row-comp-2"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="subagents-track-completed-summary"]')).toBeNull();
   });
 
-  it("never collapses failed or attention subagents into completed summary", () => {
+  it("hides failed subagents and keeps attention rows visible", () => {
     const rows: SubagentRow[] = [
       createRow({ id: "failed-1", title: "Failed Worker", status: "error" }),
       createRow({
@@ -277,18 +267,14 @@ describe("SubagentsTrack browser component tests", () => {
         onOpenSubagent={vi.fn()}
         onOpenProviderSubagent={vi.fn()}
         onArchiveSubagent={vi.fn()}
-        completedPauseMs={0}
       />,
     );
 
-    // Failed rows are hidden entirely; attention rows stay prominently visible
+    // Failed and completed rows are hidden entirely; attention rows stay visible
     expect(document.querySelector('[data-testid="subagents-track-row-failed-1"]')).toBeNull();
-    expect(document.querySelector('[data-testid="subagents-track-row-att-1"]')).not.toBeNull();
-
-    // Only the true done worker is summarized
     expect(document.querySelector('[data-testid="subagents-track-row-done-1"]')).toBeNull();
-    const summary = document.querySelector('[data-testid="subagents-track-completed-summary"]');
-    expect(summary?.textContent).toContain("1 completed");
+    expect(document.querySelector('[data-testid="subagents-track-row-att-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="subagents-track-completed-summary"]')).toBeNull();
   });
 
   it("renders bulk archive finished action when finished subagents exist", () => {

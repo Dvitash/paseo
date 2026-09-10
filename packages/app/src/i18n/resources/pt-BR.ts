@@ -1807,8 +1807,6 @@ export const ptBR: TranslationResources = {
     openConversation: "Abrir conversa",
     showMore: "+{{count}} mais",
     showLess: "Mostrar menos",
-    completedSummaryOne: "1 concluído",
-    completedSummaryMany: "{{count}} concluídos",
     recentActions: "Ações recentes",
     noRecentActions: "Nenhuma ação recente",
     latestMessage: "Última mensagem",

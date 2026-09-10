@@ -1785,8 +1785,6 @@ export const ko: TranslationResources = {
     openConversation: "대화 열기",
     showMore: "{{count}}개 더보기",
     showLess: "간략히 보기",
-    completedSummaryOne: "1개 완료됨",
-    completedSummaryMany: "{{count}}개 완료됨",
     recentActions: "최근 작업",
     noRecentActions: "최근 작업 없음",
     latestMessage: "최근 메시지",

@@ -39,7 +39,7 @@ export interface SeededCrossWorkspaceSubagentPair {
 
 export async function seedParentWithSubagent(
   workspace: Pick<SeededWorkspace, "client" | "repoPath" | "workspaceId">,
-  input: { parentTitle: string; childTitle: string },
+  input: { parentTitle: string; childTitle: string; keepRunning?: boolean },
 ): Promise<SeededSubagentPair> {
   const parent = await workspace.client.createAgent({
     provider: "mock",
@@ -56,10 +56,18 @@ export async function seedParentWithSubagent(
     title: input.childTitle,
     modeId: "load-test",
     model: "ten-second-stream",
+    ...(input.keepRunning ? { initialPrompt: "stay running" } : {}),
     labels: {
       [PARENT_AGENT_ID_LABEL]: parent.id,
     },
   });
+  if (input.keepRunning) {
+    await workspace.client.waitForAgentUpsert(
+      child.id,
+      (snapshot) => snapshot.status === "running",
+      15_000,
+    );
+  }
 
   return {
     parent: {
@@ -147,10 +155,6 @@ export async function openSubagentsTrack(page: Page): Promise<void> {
 export async function expectSubagentRowVisible(page: Page, childId: string): Promise<void> {
   const row = page.getByTestId(`subagents-track-row-${childId}`);
   if ((await row.count()) === 0) {
-    const summary = page.getByTestId("subagents-track-completed-summary");
-    if ((await summary.count()) > 0 && (await summary.isVisible())) {
-      await summary.click();
-    }
     const overflow = page.getByTestId("subagents-track-overflow-toggle");
     if ((await overflow.count()) > 0 && (await overflow.isVisible())) {
       await overflow.click();

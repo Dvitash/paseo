@@ -8,7 +8,6 @@ import {
   expectManagedSubagentArchived,
   expectManagedSubagentUnarchived,
   expectSubagentRowGone,
-  expectSubagentRowVisible,
   holdManagedSubagentArchiveRequest,
   openSubagentsTrack,
   rejectNextManagedSubagentArchiveRequest,
@@ -39,7 +38,8 @@ test.describe("Archive finished subagents", () => {
     const archiveGate = await holdManagedSubagentArchiveRequest(page, agents.child.id);
     await openAgentRoute(page, { workspaceId: agents.workspaceId, agentId: agents.parent.id });
     await openSubagentsTrack(page);
-    await expectSubagentRowVisible(page, agents.child.id);
+    // The idle child is finished, so it is hidden from the list; only the archive action remains.
+    await expectSubagentRowGone(page, agents.child.id);
 
     await archiveFinishedSubagents(page);
     await archiveGate.waitForRequest();
@@ -64,12 +64,13 @@ test.describe("Archive finished subagents", () => {
     const rejection = await rejectNextManagedSubagentArchiveRequest(page, agents.child.id);
     await openAgentRoute(page, { workspaceId: agents.workspaceId, agentId: agents.parent.id });
     await openSubagentsTrack(page);
-    await expectSubagentRowVisible(page, agents.child.id);
+    // The idle child is finished, so it is hidden from the list; only the archive action remains.
+    await expectSubagentRowGone(page, agents.child.id);
 
     await archiveFinishedSubagents(page);
     await rejection.waitForRejection();
 
-    await expectSubagentRowVisible(page, agents.child.id);
+    await expectSubagentRowGone(page, agents.child.id);
     await expectArchiveFinishedRetry(page, 1, 1);
     await archiveFinishedSubagents(page);
 

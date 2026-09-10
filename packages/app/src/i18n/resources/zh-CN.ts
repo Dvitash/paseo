@@ -1754,8 +1754,6 @@ export const zhCN: TranslationResources = {
     openConversation: "打开对话",
     showMore: "还有 {{count}} 个",
     showLess: "收起",
-    completedSummaryOne: "1 个已完成",
-    completedSummaryMany: "{{count}} 个已完成",
     recentActions: "近期操作",
     noRecentActions: "暂无操作",
     latestMessage: "最新消息",

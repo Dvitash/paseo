@@ -10,7 +10,7 @@ import {
 } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { Archive, CheckCircle2, ChevronDown, MessageSquare, Unlink } from "lucide-react-native";
+import { Archive, ChevronDown, MessageSquare, Unlink } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { getProviderIcon } from "@/components/provider-icons";
 import { useRetainedPanelActive } from "@/components/retained-panel";
@@ -32,8 +32,7 @@ import {
   findLatestAssistantMessageText,
   getLatestToolCallOrThought,
   getRecentActions,
-  isSubagentCompleted,
-  isSubagentDead,
+  isSubagentActiveOrAttention,
   sortSubagentRows,
   type RecentSubagentAction,
 } from "./track-presentation";
@@ -42,7 +41,6 @@ import type { ArchiveFinishedStatus } from "./use-archive-finished";
 const ThemedArchive = withUnistyles(Archive);
 const ThemedUnlink = withUnistyles(Unlink);
 const ThemedChevronDown = withUnistyles(ChevronDown);
-const ThemedCheckCircle2 = withUnistyles(CheckCircle2);
 
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -53,8 +51,6 @@ const ACCESSIBILITY_EXPANDED = { expanded: true } as const;
 const ACCESSIBILITY_COLLAPSED = { expanded: false } as const;
 const EMPTY_STREAM_ITEMS: readonly StreamItem[] = [];
 
-type TimeoutHandle = ReturnType<typeof setTimeout>;
-
 export interface SubagentsTrackProps {
   serverId: string;
   rows: SubagentRow[];
@@ -64,7 +60,6 @@ export interface SubagentsTrackProps {
   onArchiveFinished?: () => void;
   archiveFinishedStatus?: ArchiveFinishedStatus;
   onDetachSubagent?: (id: string) => void;
-  completedPauseMs?: number;
 }
 
 const IDLE_ARCHIVE_FINISHED_STATUS: ArchiveFinishedStatus = { kind: "idle" };
@@ -102,78 +97,6 @@ function resolveSubagentStartedAt(row: SubagentRow): Date {
   return row.createdAt;
 }
 
-function useSettledCompletedRows(
-  rows: readonly SubagentRow[],
-  completedPauseMs = 3000,
-): Set<string> {
-  const isPanelActive = useRetainedPanelActive();
-  const [settledIds, setSettledIds] = useState<Set<string>>(() => {
-    if (completedPauseMs === 0) {
-      const initialSettled = new Set<string>();
-      for (const row of rows) {
-        if (isSubagentCompleted(row)) {
-          initialSettled.add(row.id);
-        }
-      }
-      return initialSettled;
-    }
-    return new Set<string>();
-  });
-
-  const timerRef = useRef<Map<string, TimeoutHandle>>(new Map());
-
-  useEffect(() => {
-    if (!isPanelActive) return;
-    const currentCompleted = new Set<string>();
-    for (const row of rows) {
-      if (isSubagentCompleted(row)) {
-        currentCompleted.add(row.id);
-        if (completedPauseMs === 0) {
-          setSettledIds((prev) => (prev.has(row.id) ? prev : new Set(prev).add(row.id)));
-        } else if (!settledIds.has(row.id) && !timerRef.current.has(row.id)) {
-          const timer = setTimeout(() => {
-            timerRef.current.delete(row.id);
-            setSettledIds((prev) => new Set(prev).add(row.id));
-          }, completedPauseMs);
-          timerRef.current.set(row.id, timer);
-        }
-      } else {
-        const timer = timerRef.current.get(row.id);
-        if (timer) {
-          clearTimeout(timer);
-          timerRef.current.delete(row.id);
-        }
-        if (settledIds.has(row.id)) {
-          setSettledIds((prev) => {
-            const next = new Set(prev);
-            next.delete(row.id);
-            return next;
-          });
-        }
-      }
-    }
-
-    for (const [id, timer] of timerRef.current) {
-      if (!currentCompleted.has(id)) {
-        clearTimeout(timer);
-        timerRef.current.delete(id);
-      }
-    }
-  }, [rows, completedPauseMs, isPanelActive, settledIds]);
-
-  useEffect(() => {
-    const timerMap = timerRef.current;
-    return () => {
-      for (const timer of timerMap.values()) {
-        clearTimeout(timer);
-      }
-      timerMap.clear();
-    };
-  }, []);
-
-  return settledIds;
-}
-
 export function SubagentsTrack({
   serverId,
   rows,
@@ -183,22 +106,18 @@ export function SubagentsTrack({
   onArchiveFinished,
   archiveFinishedStatus = IDLE_ARCHIVE_FINISHED_STATUS,
   onDetachSubagent,
-  completedPauseMs = 3000,
 }: SubagentsTrackProps): ReactElement | null {
   const { t } = useTranslation();
   const sourceId = useId();
   const isPanelActive = useRetainedPanelActive();
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [isOverflowExpanded, setIsOverflowExpanded] = useState(false);
-  const [showCompleted, setShowCompleted] = useState(false);
   const [hydrationErrors, setHydrationErrors] = useState<Record<string, string>>({});
 
   const isArchivingFinished = archiveFinishedStatus.kind === "archiving";
   const isArchiveFinishedFailed = archiveFinishedStatus.kind === "failed";
   const finishedCount = countFinishedSubagents(rows);
   const showArchiveFinished = finishedCount > 0 || isArchivingFinished || isArchiveFinishedFailed;
-
-  const settledCompletedIds = useSettledCompletedRows(rows, completedPauseMs);
 
   const agentStreamTail = useSessionStore((state) => state.sessions[serverId]?.agentStreamTail);
   const agentStreamHead = useSessionStore((state) => state.sessions[serverId]?.agentStreamHead);
@@ -217,30 +136,7 @@ export function SubagentsTrack({
 
   const sortedRows = useMemo(() => sortSubagentRows(rows), [rows]);
 
-  const activeOrUnsettledRows = useMemo(
-    () =>
-      sortedRows.filter(
-        (row) =>
-          !isSubagentDead(row) && (!isSubagentCompleted(row) || !settledCompletedIds.has(row.id)),
-      ),
-    [sortedRows, settledCompletedIds],
-  );
-
-  const settledCompletedRows = useMemo(
-    () =>
-      sortedRows.filter(
-        (row) =>
-          !isSubagentDead(row) && isSubagentCompleted(row) && settledCompletedIds.has(row.id),
-      ),
-    [sortedRows, settledCompletedIds],
-  );
-
-  const visibleRows = useMemo(() => {
-    if (showCompleted) {
-      return [...activeOrUnsettledRows, ...settledCompletedRows];
-    }
-    return activeOrUnsettledRows;
-  }, [activeOrUnsettledRows, settledCompletedRows, showCompleted]);
+  const visibleRows = useMemo(() => sortedRows.filter(isSubagentActiveOrAttention), [sortedRows]);
 
   const hasOverflow = visibleRows.length > DEFAULT_VISIBLE_COUNT;
   const displayedRows = useMemo(() => {
@@ -349,8 +245,6 @@ export function SubagentsTrack({
 
   const handleToggleOverflow = useCallback(() => setIsOverflowExpanded((prev) => !prev), []);
 
-  const handleToggleShowCompleted = useCallback(() => setShowCompleted((prev) => !prev), []);
-
   const handleRetryHydration = useCallback(
     (row: SubagentRow) => {
       if (row.kind === "provider") {
@@ -362,15 +256,11 @@ export function SubagentsTrack({
     [hydrateProviderRow, viewedTimelineSync],
   );
 
-  if (rows.length === 0 && !isArchivingFinished && !isArchiveFinishedFailed) {
+  if (visibleRows.length === 0 && !(showArchiveFinished && onArchiveFinished)) {
     return null;
   }
 
   const pill = buildSubagentPillPresentation(t, rows);
-  const completedSummaryLabel =
-    settledCompletedRows.length === 1
-      ? t("subagents.completedSummaryOne")
-      : t("subagents.completedSummaryMany", { count: settledCompletedRows.length });
 
   return (
     <View style={styles.card} testID="subagents-track-header-panel">
@@ -436,26 +326,6 @@ export function SubagentsTrack({
               ? t("subagents.showLess")
               : t("subagents.showMore", { count: overflowCount })}
           </Text>
-        </Pressable>
-      ) : null}
-
-      {settledCompletedRows.length > 0 ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={showCompleted ? t("subagents.showLess") : completedSummaryLabel}
-          testID="subagents-track-completed-summary"
-          onPress={handleToggleShowCompleted}
-          style={styles.completedSummaryRow}
-        >
-          <View style={styles.completedSummaryLeft}>
-            <ThemedCheckCircle2 size={13} uniProps={foregroundMutedColorMapping} />
-            <Text style={styles.completedSummaryText}>{completedSummaryLabel}</Text>
-          </View>
-          <ThemedChevronDown
-            size={13}
-            uniProps={foregroundMutedColorMapping}
-            style={showCompleted ? styles.chevronOpen : styles.chevronClosed}
-          />
         </Pressable>
       ) : null}
     </View>
@@ -1075,23 +945,6 @@ const styles = StyleSheet.create((theme) => ({
   overflowToggleText: {
     fontSize: theme.fontSize.sm,
     fontWeight: "500",
-    color: theme.colors.foregroundMuted,
-  },
-  completedSummaryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[1.5],
-    backgroundColor: theme.colors.surface0,
-  },
-  completedSummaryLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1.5],
-  },
-  completedSummaryText: {
-    fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
   },
 }));

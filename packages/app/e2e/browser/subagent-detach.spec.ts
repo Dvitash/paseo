@@ -26,6 +26,7 @@ test.describe("Subagent detach", () => {
     const agents = await seedParentWithSubagent(workspace, {
       parentTitle: "Detach parent",
       childTitle: "Detached child",
+      keepRunning: true,
     });
 
     await openAgentRoute(page, {

@@ -1805,8 +1805,6 @@ export const ru: TranslationResources = {
     openConversation: "Открыть диалог",
     showMore: "еще +{{count}}",
     showLess: "Показать меньше",
-    completedSummaryOne: "1 завершен",
-    completedSummaryMany: "{{count}} завершено",
     recentActions: "Недавние действия",
     noRecentActions: "Нет недавних действий",
     latestMessage: "Последнее сообщение",

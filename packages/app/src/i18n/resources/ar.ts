@@ -1775,8 +1775,6 @@ export const ar: TranslationResources = {
     openConversation: "فتح المحادثة",
     showMore: "+{{count}} المزيد",
     showLess: "إظهار أقل",
-    completedSummaryOne: "1 مكتمل",
-    completedSummaryMany: "{{count}} مكتمل",
     recentActions: "الإجراءات الأخيرة",
     noRecentActions: "لا توجد إجراءات حديثة",
     latestMessage: "آخر رسالة",
