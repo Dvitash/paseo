@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
-import { getHubPresentation, isHubToolName, unwrapTaskResult } from "./hub";
+import { i18n } from "@/i18n/i18next";
+import { formatHubTitle, getHubPresentation, isHubToolName, unwrapTaskResult } from "./hub";
 
+const t = i18n.t.bind(i18n);
 describe("isHubToolName", () => {
   it("matches exact 'hub' and 'functions.hub'", () => {
     expect(isHubToolName("hub")).toBe(true);
@@ -822,7 +824,10 @@ TaskScout is now idle`,
       expect(presentation).toEqual({
         summary: "inbox",
         blocks: [],
+        op: "inbox",
+        status: "running",
       });
+      expect(formatHubTitle(presentation, t)).toBe("Inbox");
     });
 
     it("failed inbox isError true text 'Hub disconnected' stays visible", () => {
@@ -844,9 +849,15 @@ TaskScout is now idle`,
             meta: null,
             text: "Hub disconnected",
             format: "prose",
+            status: "failed",
           },
         ],
+        op: "inbox",
+        target: undefined,
+        status: "failed",
+        isProcess: false,
       });
+      expect(formatHubTitle(presentation, t)).toBe("Inbox");
     });
 
     it("running cancel ids with no output does not claim Cancelled", () => {
@@ -865,9 +876,14 @@ TaskScout is now idle`,
             meta: null,
             text: "",
             format: "prose",
+            status: "running",
           },
         ],
+        op: "cancel",
+        target: "bg-1, bg-2",
+        status: "running",
       });
+      expect(formatHubTitle(presentation, t)).toBe("Cancelling bg-1, bg-2");
     });
 
     it("failed process start preserves failure not success", () => {
@@ -894,9 +910,15 @@ TaskScout is now idle`,
             meta: null,
             text: "Failed to spawn process: ENOENT",
             format: "prose",
+            status: "failed",
           },
         ],
+        op: "start",
+        target: "web-server",
+        status: "failed",
+        isProcess: true,
       });
+      expect(formatHubTitle(presentation, t)).toBe("Failed to start web-server");
     });
 
     it("raw logs preserve leading whitespace and trailing newline", () => {
@@ -925,12 +947,217 @@ TaskScout is now idle`,
             meta: "state: ready",
             text: rawLogs,
             format: "code",
+            status: "ready",
           },
         ],
+        op: "logs",
+        target: "web-server",
+        status: "completed",
+        isProcess: true,
+        daemonState: "ready",
       });
       expect(presentation?.blocks[0].text).toBe(rawLogs);
       expect(presentation?.blocks[0].text.startsWith("   ")).toBe(true);
       expect(presentation?.blocks[0].text.endsWith("\n")).toBe(true);
+      expect(formatHubTitle(presentation, t)).toBe("Logs from web-server");
+    });
+  });
+
+  describe("formatHubTitle and preview metadata", () => {
+    it("formats peer send headlines and strips internal boilerplate from preview", () => {
+      const completedDetail: ToolCallDetail = {
+        type: "unknown",
+        input: { op: "send", to: "OverlayGuard", message: "Hello", await: false },
+        output: {
+          details: { op: "send", receipts: [{ to: "OverlayGuard", outcome: "injected" }] },
+          content: [{ type: "text", text: "Delivered to 1 peer(s):\n- OverlayGuard: injected" }],
+        },
+      };
+      const completed = getHubPresentation("hub", completedDetail);
+      expect(formatHubTitle(completed, t)).toBe("Message sent to OverlayGuard");
+      expect(completed?.blocks[0].previewHeading).toBeNull();
+      expect(completed?.blocks[0].meta).toContain("await: false"); // preserved in full details!
+      expect(completed?.blocks[0].previewMeta ?? "").not.toContain("await: false"); // dropped from preview!
+      expect(completed?.blocks[1].omitFromPreview).toBe(true); // duplicate receipt dropped!
+
+      const runningDetail: ToolCallDetail = {
+        type: "unknown",
+        input: { op: "send", to: "OverlayGuard", message: "Hello" },
+        output: null,
+      };
+      const running = getHubPresentation("hub", runningDetail, "running");
+      expect(formatHubTitle(running, t)).toBe("Sending message to OverlayGuard");
+
+      const failedDetail: ToolCallDetail = {
+        type: "unknown",
+        input: { op: "send", to: "OverlayGuard", message: "Hello" },
+        output: {
+          isError: true,
+          content: [{ type: "text", text: "Peer not found" }],
+        },
+      };
+      const failed = getHubPresentation("hub", failedDetail);
+      expect(formatHubTitle(failed, t)).toBe("Failed to send message to OverlayGuard");
+    });
+
+    it("formats process send headlines and strips pid from preview", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: { op: "send", name: "web-server", keys: ["CTRL_C"] },
+        output: {
+          details: {
+            op: "send",
+            daemon: { name: "web-server", state: "ready", pid: 4120 },
+          },
+          content: [{ type: "text", text: "Sent input to web-server: ready pid=4120" }],
+        },
+      };
+      const presentation = getHubPresentation("hub", detail);
+      expect(formatHubTitle(presentation, t)).toBe("Input sent to web-server");
+      expect(presentation?.blocks[0].previewHeading).toBeNull();
+      expect(presentation?.blocks[1].omitFromPreview).toBe(true);
+    });
+
+    it("formats process start, stop, restart, describe, and logs headlines", () => {
+      const startPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "start", name: "web-server", application: "bun", args: ["run", "dev"] },
+        output: { details: { daemon: { name: "web-server", state: "ready", pid: 123 } } },
+      });
+      expect(formatHubTitle(startPres, t)).toBe("Started web-server");
+
+      const stopPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "stop", name: "web-server" },
+        output: { content: [{ type: "text", text: "Stopped" }] },
+      });
+      expect(formatHubTitle(stopPres, t)).toBe("Stopped web-server");
+
+      const restartPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "restart", name: "web-server" },
+        output: { content: [{ type: "text", text: "Restarted" }] },
+      });
+      expect(formatHubTitle(restartPres, t)).toBe("Restarted web-server");
+
+      const describePres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "describe", name: "web-server" },
+        output: { content: [{ type: "text", text: "Details" }] },
+      });
+      expect(formatHubTitle(describePres, t)).toBe("Process web-server");
+
+      const logsPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "logs", name: "web-server" },
+        output: {
+          content: [{ type: "text", text: "log lines" }],
+          details: { cursor: 1042, daemon: { pid: 4120 } },
+        },
+      });
+      expect(formatHubTitle(logsPres, t)).toBe("Logs from web-server");
+      expect(logsPres?.blocks[0].previewMeta).toBeUndefined();
+    });
+
+    it("formats wait headlines and handles running wait with label equal ID", () => {
+      const runningWaitDetail: ToolCallDetail = {
+        type: "unknown",
+        input: { op: "wait", ids: ["OverlayGuard"] },
+        output: {
+          details: {
+            op: "wait",
+            jobs: [
+              {
+                id: "OverlayGuard",
+                label: "OverlayGuard",
+                status: "running",
+                durationMs: 45000,
+                resolvedModel: "claude-3-5-sonnet",
+                type: "task",
+              },
+            ],
+          },
+        },
+      };
+      const presentation = getHubPresentation("hub", runningWaitDetail, "running");
+      expect(formatHubTitle(presentation, t)).toBe("Waiting for OverlayGuard");
+      expect(presentation?.blocks[0].heading).toBe("OverlayGuard");
+      expect(presentation?.blocks[0].isNoResultYet).toBe(true);
+      expect(presentation?.blocks[0].previewMeta).toBeNull(); // duration is in block.duration!
+      expect(presentation?.blocks[0].duration).toBe("45s");
+      expect(presentation?.blocks[0].meta).toBe("task · running · 45s · claude-3-5-sonnet"); // preserved in full details!
+
+      const completedWaitDetail: ToolCallDetail = {
+        type: "unknown",
+        input: { op: "wait", ids: ["OverlayGuard"] },
+        output: {
+          details: {
+            op: "wait",
+            jobs: [
+              {
+                id: "OverlayGuard",
+                label: "OverlayGuard",
+                status: "completed",
+                durationMs: 45000,
+                resultText: "Guarded successfully",
+              },
+            ],
+          },
+        },
+      };
+      const completedWait = getHubPresentation("hub", completedWaitDetail);
+      expect(formatHubTitle(completedWait, t)).toBe("Waited for OverlayGuard");
+    });
+
+    it("formats jobs, inbox, list, ps, and cancel headlines", () => {
+      const jobsPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "jobs" },
+        output: { details: { jobs: [] } },
+      });
+      expect(formatHubTitle(jobsPres, t)).toBe("Background jobs");
+
+      const inboxPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "inbox" },
+        output: { details: { inbox: [] } },
+      });
+      expect(formatHubTitle(inboxPres, t)).toBe("Inbox");
+
+      const inboxPeekPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "inbox", peek: true },
+        output: { details: { inbox: [] } },
+      });
+      expect(formatHubTitle(inboxPeekPres, t)).toBe("Inbox (peek)");
+
+      const listPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "list" },
+        output: { details: { peers: [] } },
+      });
+      expect(formatHubTitle(listPres, t)).toBe("Agents");
+
+      const listFilteredPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "list", status: "running" },
+        output: { details: { peers: [] } },
+      });
+      expect(formatHubTitle(listFilteredPres, t)).toBe("Agents (running)");
+
+      const psPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "ps" },
+        output: { details: { daemons: [] } },
+      });
+      expect(formatHubTitle(psPres, t)).toBe("Processes");
+
+      const cancelPres = getHubPresentation("hub", {
+        type: "unknown",
+        input: { op: "cancel", ids: ["Job1"] },
+        output: { content: [{ type: "text", text: "Cancelled" }] },
+      });
+      expect(formatHubTitle(cancelPres, t)).toBe("Cancelled Job1");
     });
   });
 });

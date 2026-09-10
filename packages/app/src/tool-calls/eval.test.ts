@@ -424,8 +424,16 @@ describe("getEvalPresentation", () => {
             language: "py",
             code: "1 / 0",
             output: "ZeroDivisionError: division by zero",
+            error: {
+              message: "ZeroDivisionError: division by zero",
+              details: "ZeroDivisionError: division by zero",
+            },
           },
         ],
+        error: {
+          message: "ZeroDivisionError: division by zero",
+          details: "ZeroDivisionError: division by zero",
+        },
       });
     });
 
@@ -453,8 +461,16 @@ describe("getEvalPresentation", () => {
             language: "js",
             code: "unknownFunc()",
             output: "ReferenceError: unknownFunc is not defined",
+            error: {
+              message: "ReferenceError: unknownFunc is not defined",
+              details: "ReferenceError: unknownFunc is not defined",
+            },
           },
         ],
+        error: {
+          message: "ReferenceError: unknownFunc is not defined",
+          details: "ReferenceError: unknownFunc is not defined",
+        },
       });
     });
 
@@ -505,6 +521,32 @@ describe("getEvalPresentation", () => {
   });
 
   describe("JSON-encoded inputs and outputs", () => {
+    it.each([
+      { language: "py", code: 'text = "first\\nsecond"\nprint(text)' },
+      { language: "js", code: 'const text = "first\\nsecond";\nconsole.log(text);' },
+    ])("decodes $language line breaks without unescaping source literals", ({ language, code }) => {
+      for (const input of [{ language, code }, JSON.stringify({ language, code })]) {
+        const presentation = getEvalPresentation("eval", {
+          type: "unknown",
+          input,
+          output: null,
+        });
+        expect(presentation?.cells[0].code).toBe(code);
+        expect(presentation?.cells[0].code.split("\n")).toHaveLength(2);
+      }
+    });
+
+    it("does not guess that literal backslash-n characters need another decoding pass", () => {
+      const code = String.raw`import time\ntime.sleep(1)`;
+      const presentation = getEvalPresentation("eval", {
+        type: "unknown",
+        input: JSON.stringify({ language: "py", code }),
+        output: null,
+      });
+      expect(presentation?.cells[0].code).toBe(code);
+      expect(presentation?.cells[0].code).not.toContain("\n");
+    });
+
     it("handles JSON-string encoded input and output", () => {
       const detail: ToolCallDetail = {
         type: "unknown",
@@ -622,6 +664,353 @@ describe("getEvalPresentation", () => {
 
       const presentation = getEvalPresentation("eval", detail);
       expect(presentation?.cells[0].output).toBe("");
+    });
+  });
+
+  describe("normalized error handling and provider errors", () => {
+    it("accepts provider error as optional third argument and attaches normalized metadata", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "js",
+          code: "const x = undefinedVariable.val;",
+        },
+        output: "",
+      };
+
+      const rawProviderError =
+        "ReferenceError: undefinedVariable is not defined\n    at eval (<anonymous>:1:11)";
+      const presentation = getEvalPresentation("eval", detail, rawProviderError);
+
+      expect(presentation).not.toBeNull();
+      expect(presentation?.error).toEqual({
+        message: "ReferenceError: undefinedVariable is not defined",
+        details: rawProviderError,
+      });
+      expect(presentation?.cells[0].error).toEqual({
+        message: "ReferenceError: undefinedVariable is not defined",
+        details: rawProviderError,
+      });
+    });
+
+    it("normalizes nested screenshot error from Error: { ... } at <anonymous> without embedding opaque JSON", () => {
+      const nestedPayload = `Error: {"ok":false,"bridge":"ok","error":"user_code:1: Paid pass: DoubleCoins\\nuser_code:1 (at end of input)","output":[]}\n    at <anonymous> (js-cell-example.js:6:16)`;
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "js",
+          code: "checkPass()",
+        },
+        output: "",
+      };
+
+      const presentation = getEvalPresentation("eval", detail, nestedPayload);
+      expect(presentation).not.toBeNull();
+      expect(presentation?.cells[0].output).toBe("");
+      expect(presentation?.cells[0].error).toEqual({
+        message: "Paid pass: DoubleCoins",
+        details:
+          "user_code:1: Paid pass: DoubleCoins\nuser_code:1 (at end of input)\n    at <anonymous> (js-cell-example.js:6:16)",
+      });
+      expect(presentation?.error).toEqual({
+        message: "Paid pass: DoubleCoins",
+        details:
+          "user_code:1: Paid pass: DoubleCoins\nuser_code:1 (at end of input)\n    at <anonymous> (js-cell-example.js:6:16)",
+      });
+    });
+
+    it("normalizes stringified content envelope wrapping nested screenshot error", () => {
+      const nestedPayload = `Error: {"ok":false,"bridge":"ok","error":"user_code:1: Paid pass: DoubleCoins\\nuser_code:1 (at end of input)","output":[]}\n    at <anonymous> (js-cell-example.js:6:16)`;
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "js",
+          code: "checkPass()",
+        },
+        output: JSON.stringify({
+          content: [
+            {
+              type: "text",
+              text: nestedPayload,
+            },
+          ],
+          isError: true,
+        }),
+      };
+
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation).not.toBeNull();
+      expect(presentation?.cells[0].output).toBe("");
+      expect(presentation?.cells[0].error?.message).toBe("Paid pass: DoubleCoins");
+      expect(presentation?.cells[0].error?.details).toContain(
+        "user_code:1: Paid pass: DoubleCoins",
+      );
+      expect(presentation?.cells[0].error?.details).toContain(
+        "    at <anonymous> (js-cell-example.js:6:16)",
+      );
+      expect(presentation?.error?.message).toBe("Paid pass: DoubleCoins");
+    });
+
+    it("assigns failure to correct cell in multi-cell evaluation while preserving normal outputs", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "py",
+          code: "# multiple cells",
+        },
+        output: {
+          details: {
+            cells: [
+              {
+                index: 0,
+                code: "print('step 1: ok')",
+                output: "step 1: ok\n",
+              },
+              {
+                index: 1,
+                code: "1 / 0",
+                output: "ZeroDivisionError: division by zero",
+                error: "ZeroDivisionError: division by zero",
+              },
+              {
+                index: 2,
+                code: "print('step 3: skipped')",
+                output: "",
+              },
+            ],
+          },
+        },
+      };
+
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation).not.toBeNull();
+      expect(presentation?.cells).toHaveLength(3);
+
+      // Cell 0: Success, output preserved, no error
+      expect(presentation?.cells[0].output).toBe("step 1: ok\n");
+      expect(presentation?.cells[0].error).toBeUndefined();
+
+      // Cell 1: Failure assigned to this cell
+      expect(presentation?.cells[1].output).toBe("ZeroDivisionError: division by zero");
+      expect(presentation?.cells[1].error).toEqual({
+        message: "ZeroDivisionError: division by zero",
+        details: "ZeroDivisionError: division by zero",
+      });
+
+      // Cell 2: No output, no error
+      expect(presentation?.cells[2].output).toBe("");
+      expect(presentation?.cells[2].error).toBeUndefined();
+
+      // Presentation aggregate error
+      expect(presentation?.error).toEqual({
+        message: "ZeroDivisionError: division by zero",
+        details: "ZeroDivisionError: division by zero",
+      });
+    });
+
+    it("propagates provider error in multi-cell eval to the failing cell", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "js",
+          code: "// multi-cell",
+        },
+        output: {
+          details: {
+            cells: [
+              {
+                index: 0,
+                code: "console.log('init')",
+                output: "init\n",
+              },
+              {
+                index: 1,
+                status: "failed",
+                code: "throw new Error('boom')",
+                output: "",
+              },
+            ],
+          },
+        },
+      };
+
+      const providerError = "Error: boom\n    at runner.js:10:5";
+      const presentation = getEvalPresentation("eval", detail, providerError);
+
+      expect(presentation).not.toBeNull();
+      expect(presentation?.cells[0].error).toBeUndefined();
+      expect(presentation?.cells[0].output).toBe("init\n");
+
+      expect(presentation?.cells[1].error).toEqual({
+        message: "boom",
+        details: providerError,
+      });
+      expect(presentation?.error).toEqual({
+        message: "boom",
+        details: providerError,
+      });
+    });
+
+    it("handles boolean error flag alone without rendering true or [object Object]", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "js",
+          code: "doSomething()",
+        },
+        output: {
+          isError: true,
+        },
+      };
+
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation).not.toBeNull();
+      expect(presentation?.cells[0].output).toBe("");
+      expect(presentation?.cells[0].error).toEqual({
+        message: "Evaluation failed",
+        details: "Evaluation failed",
+      });
+      expect(presentation?.error).toEqual({
+        message: "Evaluation failed",
+        details: "Evaluation failed",
+      });
+    });
+
+    it("does not treat error: false as a failure", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: {
+          language: "js",
+          code: "console.log('done')",
+        },
+        output: {
+          output: "done\n",
+          error: false,
+        },
+      };
+
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation).not.toBeNull();
+      expect(presentation?.cells[0].output).toBe("done\n");
+      expect(presentation?.cells[0].error).toBeUndefined();
+      expect(presentation?.error).toBeUndefined();
+    });
+
+    it("preserves literal 'true' and 'false' stdout without treating them as errors", () => {
+      const detailTrue: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "js", code: "console.log(true)" },
+        output: "true\n",
+      };
+      const presentationTrue = getEvalPresentation("eval", detailTrue);
+      expect(presentationTrue?.cells[0].output).toBe("true\n");
+      expect(presentationTrue?.cells[0].error).toBeUndefined();
+      expect(presentationTrue?.error).toBeUndefined();
+
+      const detailFalse: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "js", code: "console.log(false)" },
+        output: "false\n",
+      };
+      const presentationFalse = getEvalPresentation("eval", detailFalse);
+      expect(presentationFalse?.cells[0].output).toBe("false\n");
+      expect(presentationFalse?.cells[0].error).toBeUndefined();
+      expect(presentationFalse?.error).toBeUndefined();
+    });
+
+    it("does not classify successful printed Error stack string as failure", () => {
+      const printedStack = "Error: printed message\n    at customLogger (logger.js:5:12)";
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "js", code: "console.log(stack)" },
+        output: printedStack,
+      };
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation?.cells[0].output).toBe(printedStack);
+      expect(presentation?.cells[0].error).toBeUndefined();
+      expect(presentation?.error).toBeUndefined();
+    });
+
+    it("does not classify successful JSON containing error or ok fields as failure", () => {
+      const successJson = '{"ok":true,"error":null,"count":1}';
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "js", code: "console.log(JSON.stringify(res))" },
+        output: successJson,
+      };
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation?.cells[0].output).toBe(successJson);
+      expect(presentation?.cells[0].error).toBeUndefined();
+      expect(presentation?.error).toBeUndefined();
+    });
+
+    it("uses useful message from cell output when cell.error is boolean true", () => {
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "py", code: "1 / 0" },
+        output: {
+          details: {
+            cells: [
+              {
+                index: 0,
+                code: "1 / 0",
+                output: "ZeroDivisionError: division by zero\n",
+                error: true,
+              },
+            ],
+          },
+        },
+      };
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation?.cells[0].error).toEqual({
+        message: "ZeroDivisionError: division by zero",
+        details: "ZeroDivisionError: division by zero\n",
+      });
+      expect(presentation?.error?.message).toBe("ZeroDivisionError: division by zero");
+    });
+
+    it("retains prior stdout in error details when error envelope has output array", () => {
+      const nestedWithStdout = `Error: {"ok":false,"bridge":"ok","error":"user_code:1: Paid pass: DoubleCoins\\nuser_code:1 (at end of input)","output":["Verifying pass...\\n"]}\n    at <anonymous> (test.js:1:1)`;
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "js", code: "check()" },
+        output: nestedWithStdout,
+      };
+      const presentation = getEvalPresentation("eval", detail, true);
+      expect(presentation?.cells[0].error?.message).toBe("Paid pass: DoubleCoins");
+      expect(presentation?.cells[0].error?.details).toContain("Verifying pass...\n");
+      expect(presentation?.cells[0].error?.details).toContain(
+        "user_code:1: Paid pass: DoubleCoins",
+      );
+      expect(presentation?.cells[0].error?.details).toContain("    at <anonymous> (test.js:1:1)");
+    });
+
+    it("recurses through wrapped JSON context when cell.error is boolean true", () => {
+      const wrappedJson = `Error: {"ok":false,"bridge":"ok","error":"user_code:1: Paid pass: DoubleCoins\\nuser_code:1 (at end of input)","output":[]}\n    at <anonymous> (js-cell-example.js:6:16)`;
+      const detail: ToolCallDetail = {
+        type: "unknown",
+        input: { language: "js", code: "check()" },
+        output: {
+          details: {
+            cells: [
+              {
+                index: 0,
+                code: "check()",
+                output: wrappedJson,
+                error: true,
+              },
+            ],
+          },
+        },
+      };
+
+      const presentation = getEvalPresentation("eval", detail);
+      expect(presentation?.cells[0].output).toBe("");
+      expect(presentation?.cells[0].error).toEqual({
+        message: "Paid pass: DoubleCoins",
+        details:
+          "user_code:1: Paid pass: DoubleCoins\nuser_code:1 (at end of input)\n    at <anonymous> (js-cell-example.js:6:16)",
+      });
     });
   });
 });

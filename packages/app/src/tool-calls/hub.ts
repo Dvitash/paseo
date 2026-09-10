@@ -1,6 +1,17 @@
+import type { TFunction } from "i18next";
 import { z } from "zod";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { normalizeToolName } from "@getpaseo/protocol/tool-name-normalization";
+
+export type HubBlockStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "idle"
+  | "delivered"
+  | "ready"
+  | "stopped"
+  | "canceled";
 
 export interface HubBlock {
   id: string;
@@ -8,16 +19,127 @@ export interface HubBlock {
   meta: string | null;
   text: string;
   format: "prose" | "code";
+  status?: string | null;
+  duration?: string | null;
+  previewHeading?: string | null;
+  previewMeta?: string | null;
+  previewText?: string | null;
+  isNoResultYet?: boolean;
+  omitFromPreview?: boolean;
 }
+
 export interface HubPresentation {
   summary: string;
   blocks: HubBlock[];
+  op?: string;
+  target?: string;
+  status?: "running" | "completed" | "failed" | "canceled" | "idle";
+  isProcess?: boolean;
+  receiptOutcome?: string | null;
+  daemonState?: string | null;
+}
+
+interface TitleKeyConfig {
+  running: { target: string; bare: string };
+  completed: { target: string; bare: string };
+  failed: { target: string; bare: string };
+}
+
+const PROCESS_TITLE_KEYS: Record<string, TitleKeyConfig> = {
+  send: {
+    running: { target: "hub.title.sendingInputTo", bare: "hub.title.sendingInput" },
+    completed: { target: "hub.title.inputSentTo", bare: "hub.title.inputSent" },
+    failed: { target: "hub.title.sendInputFailedTo", bare: "hub.title.sendInputFailed" },
+  },
+  start: {
+    running: { target: "hub.title.starting", bare: "hub.title.processStarting" },
+    completed: { target: "hub.title.started", bare: "hub.title.processStarted" },
+    failed: { target: "hub.title.startFailed", bare: "hub.title.processStartFailed" },
+  },
+  stop: {
+    running: { target: "hub.title.stopping", bare: "hub.title.processStopping" },
+    completed: { target: "hub.title.stopped", bare: "hub.title.processStopped" },
+    failed: { target: "hub.title.stopFailed", bare: "hub.title.processStopFailed" },
+  },
+  restart: {
+    running: { target: "hub.title.restarting", bare: "hub.title.processRestarting" },
+    completed: { target: "hub.title.restarted", bare: "hub.title.processRestarted" },
+    failed: { target: "hub.title.restartFailed", bare: "hub.title.processRestartFailed" },
+  },
+  describe: {
+    running: { target: "hub.title.inspecting", bare: "hub.title.processInspecting" },
+    completed: { target: "hub.title.described", bare: "hub.title.processDescribed" },
+    failed: { target: "hub.title.describeFailed", bare: "hub.title.processDescribeFailed" },
+  },
+  logs: {
+    running: { target: "hub.title.fetchingLogs", bare: "hub.title.processFetchingLogs" },
+    completed: { target: "hub.title.logs", bare: "hub.title.processLogs" },
+    failed: { target: "hub.title.logsFailed", bare: "hub.title.processLogsFailed" },
+  },
+};
+
+const PEER_TITLE_KEYS: Record<string, TitleKeyConfig> = {
+  send: {
+    running: { target: "hub.title.sendingTo", bare: "hub.title.sending" },
+    completed: { target: "hub.title.sentTo", bare: "hub.title.sent" },
+    failed: { target: "hub.title.sendFailedTo", bare: "hub.title.sendFailed" },
+  },
+  wait: {
+    running: { target: "hub.title.waitingFor", bare: "hub.title.waiting" },
+    completed: { target: "hub.title.waitedFor", bare: "hub.title.waited" },
+    failed: { target: "hub.title.waitFailedFor", bare: "hub.title.waitFailed" },
+  },
+  cancel: {
+    running: { target: "hub.title.cancelling", bare: "hub.title.cancellingJobs" },
+    completed: { target: "hub.title.cancelled", bare: "hub.title.jobsCancelled" },
+    failed: { target: "hub.title.cancelFailedFor", bare: "hub.title.cancelFailed" },
+  },
+};
+
+function resolveTitleState(hub: HubPresentation): "failed" | "running" | "completed" {
+  if (hub.status === "failed") return "failed";
+  if (hub.blocks.length === 1 && hub.blocks[0].id === "hub-error") return "failed";
+  if (hub.status === "running") return "running";
+  return "completed";
+}
+
+export function formatHubTitle(hub: HubPresentation | null | undefined, t: TFunction): string {
+  if (!hub) return "";
+  const op = hub.op ?? "";
+  const target = hub.target ?? "";
+  const state = resolveTitleState(hub);
+
+  const table = hub.isProcess ? PROCESS_TITLE_KEYS : PEER_TITLE_KEYS;
+  const config = table[op];
+  if (config) {
+    const keys = config[state];
+    const key = target ? keys.target : keys.bare;
+    if (target) {
+      return t(key, { target });
+    }
+    return t(key);
+  }
+
+  if (op === "jobs") return t("hub.title.jobs");
+  if (op === "inbox") {
+    if (hub.summary.includes("peek")) return t("hub.title.inboxPeek");
+    return t("hub.title.inbox");
+  }
+  if (op === "list") {
+    if (target) return t("hub.title.agentsFiltered", { status: target });
+    return t("hub.title.agents");
+  }
+  if (op === "ps") return t("hub.title.processes");
+
+  if (target) return `${op || "hub"} · ${target}`;
+  return op ? `hub · ${op}` : hub.summary || "hub";
 }
 
 export function hasHubContent(hub: HubPresentation | null): boolean {
   if (!hub) return false;
   return hub.blocks.some((block) => Boolean(block.heading || block.meta || block.text));
 }
+
 const StringArraySchema = z.array(z.string()).catch([]);
 
 const HubInputSchema = z
@@ -173,7 +295,8 @@ function formatDuration(ms: number | undefined): string | null {
   if (sec < 60) return `${sec}s`;
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  if (s > 0) return `${m}m ${s}s`;
+  return `${m}m`;
 }
 
 function formatTimestamp(ts: number | undefined): string | null {
@@ -220,116 +343,359 @@ function formatHubFields(
   return text || null;
 }
 
+function resolveActionState(
+  isFailed: boolean,
+  isRunning: boolean,
+): "running" | "completed" | "failed" {
+  if (isFailed) return "failed";
+  if (isRunning) return "running";
+  return "completed";
+}
+
+function isOutputRunning(output: ParsedOutput, toolStatus?: string): boolean {
+  if (toolStatus === "running" || toolStatus === "executing") return true;
+  return !output.contentText && !output.details && !output.isError;
+}
+
+function isProcessFailed(
+  output: ParsedOutput,
+  daemon: z.infer<typeof DaemonSchema>,
+  toolStatus?: string,
+): boolean {
+  if (output.isError) return true;
+  if (daemon.state === "failed") return true;
+  if (daemon.exitCode !== undefined && daemon.exitCode !== 0) return true;
+  return toolStatus === "failed";
+}
+
+function buildProcessSend(
+  target: string,
+  request: NormalizedInput,
+  daemon: z.infer<typeof DaemonSchema>,
+  actionState: "running" | "completed" | "failed",
+  output: ParsedOutput,
+): HubPresentation {
+  const text = [request.text, request.keys?.join(" "), request.signal].filter(Boolean).join("\n");
+  const meta = formatHubFields({ enter: request.enter });
+  let sendStatus: string | null = actionState;
+  if (actionState === "completed") {
+    sendStatus = daemon.state ?? "delivered";
+  }
+
+  const blocks: HubBlock[] = [
+    {
+      id: "send-in",
+      heading: target || null,
+      previewHeading: null,
+      meta,
+      text,
+      format: "code",
+      status: sendStatus,
+    },
+  ];
+  if (output.contentText) {
+    blocks.push({
+      id: "send-out",
+      heading: null,
+      meta: daemon.state ?? null,
+      text: output.contentText,
+      format: "code",
+      omitFromPreview: true,
+    });
+  }
+  return {
+    summary: `send · ${target}`,
+    blocks,
+    op: "send",
+    target: target || undefined,
+    status: actionState,
+    isProcess: true,
+    daemonState: daemon.state ?? null,
+  };
+}
+
+function buildProcessCommandBlock(
+  op: string,
+  _target: string,
+  spec: z.infer<typeof SpecSchema>,
+  request: NormalizedInput,
+  daemonState?: string | null,
+  actionState?: string,
+): HubBlock | null {
+  const application = spec.application ?? request.application;
+  const args = spec.args ?? request.args ?? [];
+  const command = [application, ...args].filter(Boolean).join(" ");
+  if (!command) return null;
+
+  let blockStatus: string | null = null;
+  if (daemonState) {
+    blockStatus = daemonState;
+  } else if (actionState !== "completed") {
+    blockStatus = actionState ?? null;
+  }
+
+  return {
+    id: `${op}-cmd`,
+    heading: null,
+    previewHeading: null,
+    meta: formatHubFields({ cwd: spec.cwd ?? request.cwd }),
+    text: command,
+    format: "code",
+    status: blockStatus,
+  };
+}
+
+function buildProcessOutputBlock(
+  op: string,
+  _target: string,
+  outputText: string,
+  details: NormalizedDetails,
+  daemon: z.infer<typeof DaemonSchema>,
+  request: NormalizedInput,
+  hasCommand: boolean,
+  actionState: string,
+): HubBlock {
+  const state = daemon.state ?? details.state;
+  const detailMeta = formatHubFields({
+    state,
+    pid: daemon.pid,
+    exit: daemon.exitCode,
+    output: daemon.outputBytes,
+    cursor: details.cursor,
+    for: request.for,
+    pattern: request.pattern,
+    grep: request.grep,
+  });
+
+  let blockStatus: string | null = null;
+  if (state) {
+    blockStatus = state;
+  } else if (actionState !== "completed") {
+    blockStatus = actionState;
+  }
+
+  return {
+    id: `${op}-out`,
+    heading: null,
+    meta: detailMeta,
+    text: outputText,
+    format: "code",
+    status: blockStatus,
+    ...(hasCommand && op === "start" ? { omitFromPreview: true } : {}),
+  };
+}
+
 function buildProcessPresentation(
   op: string,
   input: NormalizedInput | null,
   output: ParsedOutput,
+  toolStatus?: string,
 ): HubPresentation {
   const request = input ?? HubInputSchema.parse({});
   const details: NormalizedDetails = output.details ?? {};
   const daemon = details.daemon ?? DaemonSchema.parse({});
   const spec = details.spec ?? SpecSchema.parse({});
   const target = request.name ?? spec.name ?? daemon.name ?? "";
-  const blocks: HubBlock[] = [];
+
+  const isFailed = isProcessFailed(output, daemon, toolStatus);
+  const isRunning = isOutputRunning(output, toolStatus);
+  const actionState = resolveActionState(isFailed, isRunning);
 
   if (op === "send") {
-    const text = [request.text, request.keys?.join(" "), request.signal].filter(Boolean).join("\n");
-    const meta = formatHubFields({ enter: request.enter });
-    blocks.push({ id: "send-in", heading: target, meta, text, format: "code" });
-    if (output.contentText) {
-      blocks.push({
-        id: "send-out",
-        heading: null,
-        meta: daemon.state ?? null,
-        text: output.contentText,
-        format: "code",
-      });
-    }
-    return { summary: `send · ${target}`, blocks };
+    return buildProcessSend(target, request, daemon, actionState, output);
   }
 
-  const application = spec.application ?? request.application;
-  const args = spec.args ?? request.args ?? [];
-  const command = [application, ...args].filter(Boolean).join(" ");
-  if (command) {
-    const meta = formatHubFields({ cwd: spec.cwd ?? request.cwd });
-    blocks.push({ id: `${op}-cmd`, heading: null, meta, text: command, format: "code" });
+  const blocks: HubBlock[] = [];
+  const cmdBlock = buildProcessCommandBlock(op, target, spec, request, daemon.state, actionState);
+  if (cmdBlock) {
+    blocks.push(cmdBlock);
   }
   if (output.contentText) {
-    const meta = formatHubFields({
-      state: daemon.state ?? details.state,
-      pid: daemon.pid,
-      exit: daemon.exitCode,
-      output: daemon.outputBytes,
-      cursor: details.cursor,
-      for: request.for,
-      pattern: request.pattern,
-      grep: request.grep,
-    });
-    blocks.push({ id: `${op}-out`, heading: null, meta, text: output.contentText, format: "code" });
+    blocks.push(
+      buildProcessOutputBlock(
+        op,
+        target,
+        output.contentText,
+        details,
+        daemon,
+        request,
+        Boolean(cmdBlock),
+        actionState,
+      ),
+    );
   }
-  return { summary: `${op} · ${target}`, blocks };
+
+  return {
+    summary: `${op} · ${target}`,
+    blocks,
+    op,
+    target: target || undefined,
+    status: actionState,
+    isProcess: true,
+    daemonState: daemon.state ?? details.state ?? null,
+  };
 }
 
-function buildPeerSend(input: NormalizedInput | null, output: ParsedOutput): HubPresentation {
+function isPeerSendFailed(
+  output: ParsedOutput,
+  outcome?: string | null,
+  toolStatus?: string,
+): boolean {
+  if (output.isError) return true;
+  if (outcome === "failed" || outcome === "rejected") return true;
+  return toolStatus === "failed";
+}
+
+function resolvePeerSendStatus(
+  isFailed: boolean,
+  isRunning: boolean,
+  outcome?: string | null,
+): string {
+  if (isFailed) return "failed";
+  if (isRunning) return "running";
+  if (outcome) return outcome;
+  return "delivered";
+}
+
+function buildPeerReceiptBlocks(
+  target: string,
+  receipts: Array<z.infer<typeof ReceiptSchema>>,
+  contentText: string,
+): HubBlock[] {
+  const outcome = receipts[0]?.outcome ?? null;
+  if (contentText) {
+    return [
+      {
+        id: "send-delivery",
+        heading: null,
+        meta: outcome,
+        text: contentText,
+        format: "prose",
+        omitFromPreview: true,
+      },
+    ];
+  }
+  if (receipts.length > 0) {
+    const text = receipts
+      .map((r) => [r.to ?? target, r.outcome].filter(Boolean).join(": "))
+      .join("\n");
+    return [
+      {
+        id: "send-receipts",
+        heading: null,
+        meta: outcome,
+        text,
+        format: "prose",
+        omitFromPreview: true,
+      },
+    ];
+  }
+  return [];
+}
+
+function buildPeerSend(
+  input: NormalizedInput | null,
+  output: ParsedOutput,
+  toolStatus?: string,
+): HubPresentation {
   const request = input ?? HubInputSchema.parse({});
   const receipts = output.details?.receipts ?? [];
   const target = request.to ?? receipts[0]?.to ?? "";
   const blocks: HubBlock[] = [];
-  if (request.message !== undefined) {
-    const meta = formatHubFields({ replyTo: request.replyTo, await: request.await });
-    blocks.push({ id: "send-msg", heading: target, meta, text: request.message, format: "prose" });
-  }
+
   const receiptOutcome = receipts[0]?.outcome ?? null;
-  if (output.contentText) {
-    blocks.push({
-      id: "send-delivery",
-      heading: null,
-      meta: receiptOutcome,
-      text: output.contentText,
-      format: "prose",
+  const isFailed = isPeerSendFailed(output, receiptOutcome, toolStatus);
+  const isRunning = isOutputRunning(output, toolStatus);
+  const actionState = resolveActionState(isFailed, isRunning);
+  const statusLabel = resolvePeerSendStatus(isFailed, isRunning, receiptOutcome);
+
+  if (request.message !== undefined) {
+    const detailMeta = formatHubFields({
+      replyTo: request.replyTo,
+      await: request.await,
     });
-  } else if (receipts.length > 0) {
-    const text = receipts
-      .map((receipt) => [receipt.to ?? target, receipt.outcome].filter(Boolean).join(": "))
-      .join("\n");
+    const previewMeta = formatHubFields({
+      replyTo: request.replyTo,
+      await: request.await === true ? true : undefined,
+    });
     blocks.push({
-      id: "send-receipts",
-      heading: null,
-      meta: receiptOutcome,
-      text,
+      id: "send-msg",
+      heading: target || null,
+      previewHeading: null,
+      meta: detailMeta,
+      previewMeta,
+      text: request.message,
       format: "prose",
+      status: statusLabel,
     });
   }
-  return { summary: `send → ${target}`, blocks };
+
+  blocks.push(...buildPeerReceiptBlocks(target, receipts, output.contentText));
+
+  return {
+    summary: `send → ${target}`,
+    blocks,
+    op: "send",
+    target: target || undefined,
+    status: actionState,
+    isProcess: false,
+    receiptOutcome: receiptOutcome ?? undefined,
+  };
+}
+
+function buildSingleJobBlock(job: z.infer<typeof JobSchema>): HubBlock {
+  const duration = formatDuration(job.durationMs);
+  const meta = [job.type, job.status, duration, job.resolvedModel].filter(Boolean).join(" · ");
+  const heading = job.label && job.label !== job.id ? `${job.id} (${job.label})` : job.id;
+  const isRunning = job.status === "running" || job.status === "executing";
+  const hasNoResult = isRunning && (!job.label || job.label === job.id) && !job.resultText;
+
+  let text = "";
+  if (job.resultText) {
+    text = unwrapTaskResult(job.resultText);
+  } else if (job.label && job.label !== job.id) {
+    text = job.label;
+  } else {
+    text = job.label ?? job.status ?? "";
+  }
+
+  return {
+    id: `job-${job.id}`,
+    heading,
+    meta: meta || null,
+    previewMeta: null,
+    text,
+    format: "prose",
+    status: job.status ?? null,
+    duration: duration || null,
+    isNoResultYet: hasNoResult,
+  };
+}
+
+function buildSingleAgentBlock(ag: z.infer<typeof AgentSchema>): HubBlock {
+  const age = formatDuration(ag.ageMs);
+  const meta = [ag.parentId ? `parent: ${ag.parentId}` : null, age ? `age: ${age}` : null]
+    .filter(Boolean)
+    .join(" · ");
+  return {
+    id: `agent-${ag.id}`,
+    heading: ag.id,
+    meta: meta || null,
+    previewMeta: null,
+    text: ag.activity ?? "",
+    format: "prose",
+    status: "running",
+    duration: age || null,
+  };
 }
 
 function buildJobBlocks(output: ParsedOutput): HubBlock[] {
   const blocks: HubBlock[] = [];
-  const jobs = output.details?.jobs ?? [];
-  for (const job of jobs) {
-    const meta = [job.type, job.status, formatDuration(job.durationMs), job.resolvedModel]
-      .filter(Boolean)
-      .join(" · ");
-    const heading = job.label && job.label !== job.id ? `${job.id} (${job.label})` : job.id;
-    const text = job.resultText
-      ? unwrapTaskResult(job.resultText)
-      : (job.label ?? job.status ?? "");
-    blocks.push({ id: `job-${job.id}`, heading, meta: meta || null, text, format: "prose" });
+  for (const job of output.details?.jobs ?? []) {
+    blocks.push(buildSingleJobBlock(job));
   }
-  const agents = output.details?.agents ?? [];
-  for (const ag of agents) {
-    const age = formatDuration(ag.ageMs);
-    const meta = [ag.parentId ? `parent: ${ag.parentId}` : null, age ? `age: ${age}` : null]
-      .filter(Boolean)
-      .join(" · ");
-    blocks.push({
-      id: `agent-${ag.id}`,
-      heading: ag.id,
-      meta: meta || null,
-      text: ag.activity ?? "",
-      format: "prose",
-    });
+  for (const ag of output.details?.agents ?? []) {
+    blocks.push(buildSingleAgentBlock(ag));
   }
   if (!blocks.length && output.contentText) {
     blocks.push({
@@ -385,12 +751,15 @@ function buildRosterPresentation(
     ]
       .filter(Boolean)
       .join(" · ");
+    const previewMeta = peer.unread ? `${peer.unread} unread` : null;
     return {
       id: `peer-${peer.id}`,
       heading: peer.id,
       meta: meta || null,
+      previewMeta,
       text: peer.activity ?? "",
       format: "prose",
+      status: peer.status ?? null,
     };
   });
   const counts = output.details?.counts;
@@ -412,7 +781,12 @@ function buildRosterPresentation(
       format: "prose",
     });
   }
-  return { summary: input?.status ? `list · ${input.status}` : "list", blocks };
+  return {
+    summary: input?.status ? `list · ${input.status}` : "list",
+    blocks,
+    op: "list",
+    target: input?.status || undefined,
+  };
 }
 
 function buildProcessList(output: ParsedOutput): HubPresentation {
@@ -431,6 +805,7 @@ function buildProcessList(output: ParsedOutput): HubPresentation {
       meta: meta || null,
       text: daemon.id ?? "",
       format: "code",
+      status: daemon.state ?? null,
     });
   }
   if (blocks.length === 0 && output.contentText) {
@@ -442,81 +817,158 @@ function buildProcessList(output: ParsedOutput): HubPresentation {
       format: "code",
     });
   }
-  return { summary: "ps", blocks };
+  return { summary: "ps", blocks, op: "ps" };
+}
+
+function isWaitFailed(output: ParsedOutput, blocks: HubBlock[], toolStatus?: string): boolean {
+  if (output.isError) return true;
+  if (blocks.some((b) => b.status === "failed")) return true;
+  return toolStatus === "failed";
 }
 
 function buildWaitPresentation(
   input: NormalizedInput | null,
   output: ParsedOutput,
+  toolStatus?: string,
 ): HubPresentation {
   const isProcess = Boolean(
     input?.name || (output.details?.daemon && !output.details?.jobs?.length),
   );
-  if (isProcess) return buildProcessPresentation("wait", input, output);
+  if (isProcess) return buildProcessPresentation("wait", input, output, toolStatus);
+
   let target = input?.from ?? "";
   if (input?.ids?.length) target = input.ids.join(", ");
-  return { summary: target ? `wait · ${target}` : "wait", blocks: buildJobBlocks(output) };
+  const blocks = buildJobBlocks(output);
+  if (blocks.length === 1 && blocks[0].heading === target) {
+    blocks[0].previewHeading = null;
+  }
+
+  const isFailed = isWaitFailed(output, blocks, toolStatus);
+  const isRunning =
+    isOutputRunning(output, toolStatus) || blocks.some((b) => b.status === "running");
+  const actionState = resolveActionState(isFailed, isRunning);
+
+  return {
+    summary: target ? `wait · ${target}` : "wait",
+    blocks,
+    op: "wait",
+    target: target || undefined,
+    status: actionState,
+    isProcess: false,
+  };
 }
 
 function buildSendPresentation(
   input: NormalizedInput | null,
   output: ParsedOutput,
+  toolStatus?: string,
 ): HubPresentation {
   const isProcess = Boolean(input?.name || output.details?.daemon);
-  return isProcess ? buildProcessPresentation("send", input, output) : buildPeerSend(input, output);
+  return isProcess
+    ? buildProcessPresentation("send", input, output, toolStatus)
+    : buildPeerSend(input, output, toolStatus);
+}
+
+function isProcessOp(op: string): boolean {
+  return op === "start" || op === "stop" || op === "restart" || op === "describe" || op === "logs";
+}
+
+function buildStandardHubOp(
+  op: string,
+  input: NormalizedInput | null,
+  output: ParsedOutput,
+  status?: string,
+): HubPresentation | null {
+  if (op === "send") return buildSendPresentation(input, output, status);
+  if (isProcessOp(op)) return buildProcessPresentation(op, input, output, status);
+  if (op === "wait") return buildWaitPresentation(input, output, status);
+  return null;
+}
+
+function buildBackgroundHubOp(
+  op: string,
+  input: NormalizedInput | null,
+  output: ParsedOutput,
+  actionState: "running" | "completed" | "failed",
+): HubPresentation | null {
+  if (op === "jobs") {
+    return { summary: "jobs", blocks: buildJobBlocks(output), op: "jobs", status: actionState };
+  }
+  if (op === "inbox") {
+    return { ...buildInboxPresentation(input, output), op: "inbox", status: actionState };
+  }
+  if (op === "list") {
+    return {
+      ...buildRosterPresentation(input, output),
+      op: "list",
+      target: input?.status || undefined,
+      status: actionState,
+    };
+  }
+  if (op === "ps") {
+    return { ...buildProcessList(output), op: "ps", status: actionState };
+  }
+  if (op === "cancel") {
+    const target = (input?.ids ?? []).join(", ");
+    return {
+      summary: ["cancel", ...(input?.ids ?? [])].join(" · "),
+      blocks: [
+        {
+          id: "cancel",
+          heading: null,
+          meta: null,
+          text: output.contentText,
+          format: "prose",
+          status: actionState,
+        },
+      ],
+      op: "cancel",
+      target: target || undefined,
+      status: actionState,
+    };
+  }
+  return null;
 }
 
 function buildHubOperation(
   op: string,
   input: NormalizedInput | null,
   output: ParsedOutput,
+  status?: string,
 ): HubPresentation | null {
-  switch (op) {
-    case "send":
-      return buildSendPresentation(input, output);
-    case "start":
-    case "stop":
-    case "restart":
-    case "describe":
-    case "logs":
-      return buildProcessPresentation(op, input, output);
-    case "wait":
-      return buildWaitPresentation(input, output);
-    case "jobs":
-      return { summary: "jobs", blocks: buildJobBlocks(output) };
-    case "inbox":
-      return buildInboxPresentation(input, output);
-    case "list":
-      return buildRosterPresentation(input, output);
-    case "ps":
-      return buildProcessList(output);
-    case "cancel":
-      return {
-        summary: ["cancel", ...(input?.ids ?? [])].join(" · "),
-        blocks: [
-          { id: "cancel", heading: null, meta: null, text: output.contentText, format: "prose" },
-        ],
-      };
-    default:
-      if (!output.contentText) return null;
-      return {
-        summary: op ? `hub · ${op}` : "hub",
-        blocks: [
-          {
-            id: "hub-output",
-            heading: null,
-            meta: null,
-            text: output.contentText,
-            format: "prose",
-          },
-        ],
-      };
-  }
+  const isFailed = output.isError || status === "failed";
+  const isRunning = isOutputRunning(output, status);
+  const actionState = resolveActionState(isFailed, isRunning);
+
+  const standard = buildStandardHubOp(op, input, output, status);
+  if (standard) return standard;
+
+  const background = buildBackgroundHubOp(op, input, output, actionState);
+  if (background) return background;
+
+  if (!output.contentText) return null;
+  return {
+    summary: op ? `hub · ${op}` : "hub",
+    blocks: [
+      {
+        id: "hub-output",
+        heading: null,
+        meta: null,
+        text: output.contentText,
+        format: "prose",
+        status: actionState,
+      },
+    ],
+    op,
+    target: input?.name ?? input?.to ?? undefined,
+    status: actionState,
+  };
 }
 
 export function getHubPresentation(
   toolName: string | undefined,
   detail: ToolCallDetail | undefined,
+  status?: string,
 ): HubPresentation | null {
   if (!isHubToolName(toolName) || detail?.type !== "unknown") return null;
 
@@ -525,14 +977,27 @@ export function getHubPresentation(
   const op = input?.op.toLowerCase() || output.details?.op?.toLowerCase() || "";
 
   if (!input && !output.contentText && !output.details) return null;
-  if (output.isError) {
+  const isFailed = output.isError || status === "failed";
+  if (isFailed) {
+    const target = input?.name ?? input?.to;
     return {
-      summary: [op, input?.name ?? input?.to].filter(Boolean).join(" · "),
+      summary: [op, target].filter(Boolean).join(" · "),
       blocks: [
-        { id: "hub-error", heading: null, meta: null, text: output.contentText, format: "prose" },
+        {
+          id: "hub-error",
+          heading: null,
+          meta: null,
+          text: output.contentText,
+          format: "prose",
+          status: "failed",
+        },
       ],
+      op,
+      target: target || undefined,
+      status: "failed",
+      isProcess: Boolean(input?.name),
     };
   }
 
-  return buildHubOperation(op, input, output);
+  return buildHubOperation(op, input, output, status);
 }

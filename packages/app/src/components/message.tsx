@@ -62,6 +62,7 @@ import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { buildToolCallPresentation } from "@/tool-calls/presentation";
 import { ToolCallPreview } from "@/tool-calls/activity-content";
+import { formatHubTitle } from "@/tool-calls/hub";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { getMarkdownListMarker, getMarkdownListSpacing } from "@/utils/markdown-list";
 import { markdownNodeContainsType } from "@/utils/markdown-ast";
@@ -3051,6 +3052,7 @@ export const ToolCall = memo(function ToolCall({
   forceInline = false,
   maxDetailHeight = 400,
 }: ToolCallProps) {
+  const { t } = useTranslation();
   const { openToolCall } = useToolCallSheet();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded ?? false);
 
@@ -3084,6 +3086,12 @@ export const ToolCall = memo(function ToolCall({
       }),
     [toolName, status, error, effectiveDetail, metadata, cwd],
   );
+  const { displayName, summary } = useMemo(() => {
+    if (presentation.hub) {
+      return { displayName: formatHubTitle(presentation.hub, t), summary: undefined };
+    }
+    return { displayName: presentation.displayName, summary: presentation.summary };
+  }, [presentation.hub, presentation.displayName, presentation.summary, t]);
   const handleOpenFile = useMemo(() => {
     const openFilePath = presentation.openFilePath;
     if (!openFilePath || !onOpenFilePath) {
@@ -3096,8 +3104,8 @@ export const ToolCall = memo(function ToolCall({
     if (!shouldRenderInline) {
       openToolCall({
         toolName,
-        displayName: presentation.displayName,
-        summary: presentation.summary,
+        displayName,
+        summary,
         detail: effectiveDetail,
         errorText: presentation.errorText,
         icon: presentation.icon,
@@ -3110,8 +3118,8 @@ export const ToolCall = memo(function ToolCall({
     shouldRenderInline,
     openToolCall,
     toolName,
-    presentation.displayName,
-    presentation.summary,
+    displayName,
+    summary,
     presentation.errorText,
     presentation.icon,
     presentation.isLoadingDetails,
@@ -3209,8 +3217,8 @@ export const ToolCall = memo(function ToolCall({
   return (
     <ExpandableBadge
       testID="tool-call-badge"
-      label={presentation.displayName}
-      secondaryLabel={presentation.summary}
+      label={displayName}
+      secondaryLabel={summary}
       icon={presentation.icon}
       isExpanded={shouldRenderInline && isExpanded}
       onToggle={presentation.canOpenDetails ? handleToggle : undefined}

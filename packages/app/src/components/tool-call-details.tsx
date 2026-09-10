@@ -797,26 +797,22 @@ export function ToolCallDetailsContent({
   const resolvedMaxHeight = fillAvailableHeight ? undefined : (maxHeight ?? 300);
   const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight);
   const diffLines = useDiffLines(detail);
-  const evaluation = useMemo(() => getEvalPresentation(toolName, detail), [toolName, detail]);
+  const evaluation = useMemo(
+    () => getEvalPresentation(toolName, detail, errorText),
+    [toolName, detail, errorText],
+  );
   const hub = useMemo(() => getHubPresentation(toolName, detail), [toolName, detail]);
 
   let sections: ReactNode[];
   if (evaluation) {
-    sections = [
-      <EvalContent
-        key="eval"
-        evaluation={evaluation}
-        maxHeight={resolvedMaxHeight}
-        errorText={errorText}
-      />,
-    ];
+    sections = [<EvalContent key="eval" evaluation={evaluation} maxHeight={resolvedMaxHeight} />];
   } else if (hub && hasHubContent(hub)) {
     sections = [<HubContent key="hub" hub={hub} maxHeight={resolvedMaxHeight} />];
   } else {
     sections = buildDetailSections(toolName, detail, diffLines, ds, t);
   }
 
-  if (errorText) {
+  if (errorText && !evaluation) {
     sections.push(<ErrorSection key="error" errorText={errorText} ds={ds} />);
   }
 

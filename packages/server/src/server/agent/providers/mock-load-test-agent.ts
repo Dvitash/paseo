@@ -272,6 +272,13 @@ export function parseToolActivityPreviewsPrompt(
   };
 }
 
+export const ONE_LINE_JS_EVAL_TITLE = "Process DoubleCoins Purchase";
+export const ONE_LINE_JS_EVAL_SENTINEL = "COMPLETED_EVAL_SENTINEL_OUTPUT_END";
+export const ONE_LINE_JS_EVAL_TOKEN =
+  "PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+export const ONE_LINE_JS_EVAL_ACTIONABLE_ERROR = "Paid pass: DoubleCoins";
+export const ONE_LINE_JS_EVAL_STACK_FRAME = "js-cell-example.js:6:16";
+
 export const HUB_ACTIVITY_PREVIEWS_PROMPT = "replay hub activity previews";
 
 export interface HubActivityPreviewsRequest {
@@ -1288,6 +1295,19 @@ export class MockLoadTestAgentSession implements AgentSession {
     ].join("\n");
     const jsCode = "const config = unknownEnvironment.getConfig();\nconsole.log(config);";
     const jsError = "ReferenceError: unknownEnvironment is not defined";
+    const oneLineJsCode =
+      'const transactionToken = "PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"; function verifyTransaction(receipt) { const { user, passId, quantity } = receipt; const metadata = { pass: passId, count: quantity, timestamp: Date.now(), audit: { source: "game_store", verified: true, tags: ["iap", "coins", "premium"] } }; return { valid: true, user, metadata }; } const pendingReceipt = { user: "player_9942", passId: "DoubleCoins", quantity: 2 }; const processedRecord = verifyTransaction(pendingReceipt); console.log("COMPLETED_EVAL_SENTINEL_OUTPUT_END");';
+    const wrappedRawError =
+      'Error: {"ok":false,"bridge":"ok","error":"user_code:1: Paid pass: DoubleCoins\\nuser_code:1 (at end of input)","output":[]}\n    at <anonymous> (js-cell-example.js:6:16)';
+    const jsonStringifiedContentEnvelope = JSON.stringify({
+      content: [
+        {
+          type: "text",
+          text: wrappedRawError,
+        },
+      ],
+      isError: true,
+    });
 
     const steps: Array<() => void> = [
       // 0: Running eval (Python input code with language/title; running unknown detail including code, output: null)
@@ -1472,7 +1492,50 @@ export class MockLoadTestAgentSession implements AgentSession {
           }),
         );
       },
-      // 7: Unrelated unknown and read tool (header-only)
+      // 7: Failed one-line JS eval with long unbroken token and wrapped JSON error envelope
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:eval:wrapped-failure-js`,
+            name: "eval",
+            status: "failed",
+            error: jsonStringifiedContentEnvelope,
+            detail: {
+              type: "unknown",
+              input: {
+                language: "javascript",
+                title: ONE_LINE_JS_EVAL_TITLE,
+                code: oneLineJsCode,
+              },
+              output: {
+                details: {
+                  language: "javascript",
+                  title: ONE_LINE_JS_EVAL_TITLE,
+                  cells: [
+                    {
+                      id: "cell-0",
+                      title: ONE_LINE_JS_EVAL_TITLE,
+                      language: "javascript",
+                      code: oneLineJsCode,
+                      output: jsonStringifiedContentEnvelope,
+                      error: jsonStringifiedContentEnvelope,
+                    },
+                  ],
+                },
+                error: jsonStringifiedContentEnvelope,
+                content: [
+                  {
+                    type: "text",
+                    text: wrappedRawError,
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 8: Unrelated unknown and read tool (header-only)
       () => {
         this.emitTimeline(
           turn.turnId,
@@ -1501,7 +1564,7 @@ export class MockLoadTestAgentSession implements AgentSession {
           }),
         );
       },
-      // 8: Finish turn
+      // 9: Finish turn
       () => {
         this.finishTurnWithText(turn, "Replay tool activity previews complete.");
       },
@@ -1909,7 +1972,35 @@ export class MockLoadTestAgentSession implements AgentSession {
           }),
         );
       },
-      // 9: Finish turn
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:wait-peer`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: { op: "wait", ids: ["OverlayGuard"] },
+              output: {
+                content: [{ type: "text", text: "OverlayGuard is still running" }],
+                details: {
+                  jobs: [
+                    {
+                      id: "OverlayGuard",
+                      type: "task",
+                      label: "OverlayGuard",
+                      status: "running",
+                      durationMs: 233000,
+                      resolvedModel: "google-antigravity/gemini-3.8-flash:high",
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        );
+      },
       () => {
         this.finishTurnWithText(turn, "Replay hub activity previews complete.");
       },

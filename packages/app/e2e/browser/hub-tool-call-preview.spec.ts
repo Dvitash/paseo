@@ -85,10 +85,10 @@ test.describe("Hub tool call previews in activity stream", () => {
       await openAgentRoute(page, agent);
       await expectComposerVisible(page);
 
-      // 1. Peer Send: unexpanded message and delivery receipt visible without JSON
+      // 1. Peer Send: unexpanded message and delivery receipt visible without JSON or internal metadata
       const sendPeerBadge = page
         .getByTestId("tool-call-badge")
-        .filter({ hasText: /send/i })
+        .filter({ hasText: /Message sent to Worker|send/i })
         .filter({ hasText: /Worker/i })
         .first();
       await expect(sendPeerBadge).toBeVisible({ timeout: 15_000 });
@@ -105,11 +105,12 @@ test.describe("Hub tool call previews in activity stream", () => {
       const sendPeerText = await sendPeerPreview.innerText();
       expect(sendPeerText).not.toContain('"op":');
       expect(sendPeerText).not.toContain('"receipts":');
+      expect(sendPeerText).not.toContain("await: false");
       await sendPeerBadge.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath("hub-message-desktop.png") });
 
       // 2. Empty Inbox: empty state text visible without JSON
-      const inboxBadge = page.getByTestId("tool-call-badge").filter({ hasText: /inbox/i }).first();
+      const inboxBadge = page.getByTestId("tool-call-badge").filter({ hasText: /Inbox/i }).first();
       await expect(inboxBadge).toBeVisible();
       const inboxPreview = inboxBadge.getByTestId("tool-call-preview");
       await expect(inboxPreview).toBeVisible();
@@ -118,10 +119,10 @@ test.describe("Hub tool call previews in activity stream", () => {
       const inboxText = await inboxPreview.innerText();
       expect(inboxText).not.toContain('"inbox":');
 
-      // 3. Peer Roster (list): peer details visible without JSON
+      // 3. Peer Roster (list): peer details visible without JSON or internal parent ID
       const listBadge = page
         .getByTestId("tool-call-badge")
-        .filter({ hasText: /list|roster/i })
+        .filter({ hasText: /Agents|list|roster/i })
         .first();
       await expect(listBadge).toBeVisible();
       const listPreview = listBadge.getByTestId("tool-call-preview");
@@ -130,9 +131,13 @@ test.describe("Hub tool call previews in activity stream", () => {
 
       const listText = await listPreview.innerText();
       expect(listText).not.toContain('"peers":');
+      expect(listText).not.toContain("parent: Main");
 
-      // 4. Completed Jobs (jobs): resultText visible without JSON
-      const jobsBadge = page.getByTestId("tool-call-badge").filter({ hasText: /jobs/i }).first();
+      // 4. Completed Jobs (jobs): resultText visible without JSON or tiny model slug
+      const jobsBadge = page
+        .getByTestId("tool-call-badge")
+        .filter({ hasText: /Background jobs|jobs/i })
+        .first();
       await expect(jobsBadge).toBeVisible();
       const jobsPreview = jobsBadge.getByTestId("tool-call-preview");
       await expect(jobsPreview).toBeVisible();
@@ -142,11 +147,12 @@ test.describe("Hub tool call previews in activity stream", () => {
 
       const jobsText = await jobsPreview.innerText();
       expect(jobsText).not.toContain('"resultText":');
+      expect(jobsText).not.toContain("claude-3-5-sonnet");
 
-      // 5. Process Start: daemon metadata visible without JSON
+      // 5. Process Start: daemon metadata visible without JSON or pid dump in preview
       const startBadge = page
         .getByTestId("tool-call-badge")
-        .filter({ hasText: /start/i })
+        .filter({ hasText: /Started web-server|start/i })
         .filter({ hasText: /web-server/i })
         .first();
       await expect(startBadge).toBeVisible();
@@ -160,7 +166,7 @@ test.describe("Hub tool call previews in activity stream", () => {
       // 6. Process Logs: multiline log lines unexpanded, full expansion reveals sentinel
       const logsBadge = page
         .getByTestId("tool-call-badge")
-        .filter({ hasText: /logs/i })
+        .filter({ hasText: /Logs from web-server|logs/i })
         .filter({ hasText: /web-server/i })
         .first();
       await expect(logsBadge).toBeVisible();
@@ -173,6 +179,7 @@ test.describe("Hub tool call previews in activity stream", () => {
 
       const logsText = await logsPreview.innerText();
       expect(logsText).not.toContain('"cursor":');
+      expect(logsText).not.toContain("state:");
 
       // In preview, trailing sentinel is clipped
       await expect(logsBadge.getByText("LOG_SENTINEL_SERVER_READY_OK")).not.toBeVisible();
@@ -195,7 +202,7 @@ test.describe("Hub tool call previews in activity stream", () => {
       // 7. Process Send: keys CTRL_C and target web-server visible
       const sendProcessBadge = page
         .getByTestId("tool-call-badge")
-        .filter({ hasText: /send/i })
+        .filter({ hasText: /Input sent to web-server|send/i })
         .filter({ hasText: /web-server/i })
         .first();
       await expect(sendProcessBadge).toBeVisible();
@@ -203,6 +210,40 @@ test.describe("Hub tool call previews in activity stream", () => {
       await expect(sendProcessPreview).toBeVisible();
       await expect(sendProcessBadge.getByText(/CTRL_C|web-server/i).first()).toBeVisible();
 
+      // 8. Wait (OverlayGuard): title 'Waiting for OverlayGuard', 'Running', '3m 53s', and 'No result yet' visible without expansion
+      const waitBadge = page
+        .getByTestId("tool-call-badge")
+        .filter({ hasText: /Waiting for OverlayGuard|wait/i })
+        .filter({ hasText: /OverlayGuard/i })
+        .first();
+      await expect(waitBadge).toBeVisible();
+      const waitHeader = waitBadge.locator('[role="button"]').first();
+      await expect(waitHeader).toHaveAttribute("aria-expanded", "false");
+
+      const waitPreview = waitBadge.getByTestId("tool-call-preview");
+      await expect(waitPreview).toBeVisible();
+
+      // Title 'Waiting for OverlayGuard'
+      await expect(waitBadge.getByText(/Waiting for OverlayGuard/i).first()).toBeVisible();
+      // Status pill 'Running'
+      await expect(waitBadge.getByText(/Running/i).first()).toBeVisible();
+      // Duration '3m 53s'
+      await expect(waitBadge.getByText("3m 53s")).toBeVisible();
+      // Body 'No result yet'
+      await expect(waitBadge.getByText("No result yet")).toBeVisible();
+
+      // Target not repeated in body and model slug absent from preview
+      const waitPreviewText = await waitPreview.innerText();
+      expect(waitPreviewText).not.toContain("google-antigravity");
+      expect(waitPreviewText).not.toContain("gemini-3.8-flash");
+      const bodyLines = waitPreviewText
+        .split("\n")
+        .filter((line) => line.trim() === "OverlayGuard");
+      expect(bodyLines).toHaveLength(0);
+      expect((await waitBadge.innerText()).match(/OverlayGuard/g)).toHaveLength(1);
+
+      await waitBadge.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath("hub-wait-desktop.png") });
       // Desktop screenshot attached to testInfo
       await testInfo.attach("hub-tool-call-preview-desktop", {
         body: await page.screenshot({
@@ -240,10 +281,9 @@ test.describe("Hub tool call previews in activity stream", () => {
       // On compact layout: peer send badge renders preview in timeline
       const sendBadge = page
         .getByTestId("tool-call-badge")
-        .filter({ hasText: /send/i })
+        .filter({ hasText: /Message sent to Worker|send/i })
         .filter({ hasText: /Worker/i })
         .first();
-      await expect(sendBadge).toBeVisible({ timeout: 15_000 });
       await expect(sendBadge.getByTestId("tool-call-preview")).toBeVisible();
 
       // Clicking header opens bottom sheet rather than expanding inline

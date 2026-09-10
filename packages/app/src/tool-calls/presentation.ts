@@ -80,8 +80,8 @@ export function buildToolCallPresentation(
     error: input.error,
   });
   const hasDetails = Boolean(input.error) || hasMeaningfulToolCallDetail(input.detail);
-  const evaluation = getEvalPresentation(input.toolName, input.detail);
-  const hub = getHubPresentation(input.toolName, input.detail);
+  const evaluation = getEvalPresentation(input.toolName, input.detail, input.error);
+  const hub = getHubPresentation(input.toolName, input.detail, input.status);
 
   return {
     displayName: displayModel.displayName,

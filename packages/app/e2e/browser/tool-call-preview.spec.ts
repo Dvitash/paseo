@@ -151,7 +151,118 @@ test.describe("Tool call previews in activity stream", () => {
         failedEvalBadge.getByText("ReferenceError: unknownEnvironment is not defined"),
       ).toHaveCount(1);
 
-      // 6. Unrelated unknown and read tools: header-only, no tool-call-preview
+      // Verify reference error is still shown only once when expanded
+      await failedEvalHeader.click();
+      await expect(failedEvalHeader).toHaveAttribute("aria-expanded", "true");
+      await expect(
+        failedEvalBadge.getByText("ReferenceError: unknownEnvironment is not defined"),
+      ).toHaveCount(1);
+      await failedEvalHeader.click();
+      await expect(failedEvalHeader).toHaveAttribute("aria-expanded", "false");
+
+      // 6. One-line JS eval failure with wrapped JSON envelope error and long unbroken token
+      const doubleCoinsBadge = page
+        .getByTestId("tool-call-badge")
+        .filter({ hasText: "Process DoubleCoins Purchase" });
+      await expect(doubleCoinsBadge).toBeVisible();
+      const doubleCoinsHeader = doubleCoinsBadge.locator('[role="button"]').first();
+      await expect(doubleCoinsHeader).toHaveAttribute("aria-expanded", "false");
+
+      // A. Actionable error visible in tool-eval-error without expanding, no raw envelope wrappers or stack
+      const evalErrorPreview = doubleCoinsBadge.getByTestId("tool-eval-error");
+      await expect(evalErrorPreview).toBeVisible();
+      await expect(evalErrorPreview).toContainText("Paid pass: DoubleCoins");
+      const previewErrorText = await evalErrorPreview.innerText();
+      expect(previewErrorText).not.toContain('"content":');
+      expect(previewErrorText).not.toContain('"ok":');
+      expect(previewErrorText).not.toContain('{"ok":false');
+      expect(previewErrorText).not.toContain('"bridge":');
+      expect(previewErrorText).not.toContain("js-cell-example.js:6:16");
+
+      // B. Code is formatted into multiple logical lines while preserving string tokens
+      const previewCodeBlock = doubleCoinsBadge.getByTestId("tool-eval-code").first();
+      await expect(previewCodeBlock).toBeVisible();
+      await expect
+        .poll(async () => (await previewCodeBlock.innerText()).split("\n").filter(Boolean).length)
+        .toBeGreaterThanOrEqual(5);
+      const previewCodeText = await previewCodeBlock.innerText();
+      const previewCodeLines = previewCodeText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      expect(previewCodeLines.length).toBeGreaterThanOrEqual(5);
+      expect(previewCodeText).toContain("function verifyTransaction(receipt)");
+      expect(previewCodeText).toContain(
+        "PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz",
+      );
+
+      // C. Formatted source clipped preview: sentinel at line 23 is NOT visible in preview (clipped after 8 lines)
+      expect(previewCodeText).not.toContain("COMPLETED_EVAL_SENTINEL_OUTPUT_END");
+      await expect(
+        doubleCoinsBadge.getByText("COMPLETED_EVAL_SENTINEL_OUTPUT_END"),
+      ).not.toBeVisible();
+
+      // D. Test visual long-line wrapping using measured DOM width/scrollWidth and bounding rects
+      const codeContainerBox = await previewCodeBlock.boundingBox();
+      expect(codeContainerBox).not.toBeNull();
+      const previewWrappingMetrics = await previewCodeBlock.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      }));
+      expect(previewWrappingMetrics.scrollWidth).toBeLessThanOrEqual(
+        previewWrappingMetrics.clientWidth + 4,
+      );
+
+      const longTokenElement = doubleCoinsBadge.getByText(
+        /PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING/,
+      );
+      await expect(longTokenElement).toBeVisible();
+      const longTokenBox = await longTokenElement.boundingBox();
+      expect(longTokenBox).not.toBeNull();
+      expect(longTokenBox!.width).toBeLessThanOrEqual(codeContainerBox!.width + 4);
+
+      // E. Expand badge to full details: clipped preview expands fully and full error exposes stack info
+      await doubleCoinsHeader.click();
+      await expect(doubleCoinsHeader).toHaveAttribute("aria-expanded", "true");
+      await expect(doubleCoinsBadge.getByTestId("tool-call-preview")).toHaveCount(0);
+
+      // Full code is visible including the end sentinel
+      await expect(doubleCoinsBadge.getByText("COMPLETED_EVAL_SENTINEL_OUTPUT_END")).toBeVisible();
+
+      // Full error exposes original stack information
+      const expandedError = doubleCoinsBadge.getByTestId("tool-eval-error");
+      await expect(expandedError).toBeVisible();
+      await expect(expandedError).toContainText("Paid pass: DoubleCoins");
+      await expect(expandedError).toContainText("js-cell-example.js:6:16");
+      const expandedErrorText = await expandedError.innerText();
+      expect(expandedErrorText).not.toContain('"content":');
+      expect(expandedErrorText).not.toContain('{"ok":false');
+
+      // Visual wrapping in expanded view
+      const expandedCodeBlock = doubleCoinsBadge.getByTestId("tool-eval-code").first();
+      await expect(expandedCodeBlock).toBeVisible();
+      const expandedWrappingMetrics = await expandedCodeBlock.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      }));
+      expect(expandedWrappingMetrics.scrollWidth).toBeLessThanOrEqual(
+        expandedWrappingMetrics.clientWidth + 4,
+      );
+
+      // Capture desktop screenshot of the expanded failure and code
+      await doubleCoinsBadge.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath("double-coins-eval-desktop.png") });
+      await testInfo.attach("double-coins-eval-desktop", {
+        body: await page.screenshot({ path: testInfo.outputPath("double-coins-eval-desktop.png") }),
+        contentType: "image/png",
+      });
+
+      // Restore to preview state
+      await doubleCoinsHeader.click();
+      await expect(doubleCoinsHeader).toHaveAttribute("aria-expanded", "false");
+      await expect(doubleCoinsBadge.getByTestId("tool-call-preview")).toBeVisible();
+
+      // 7. Unrelated unknown and read tools: header-only, no tool-call-preview
       const unknownBadge = page.getByTestId("tool-call-badge").filter({ hasText: "Custom lookup" });
       await expect(unknownBadge).toBeVisible();
       await expect(unknownBadge.getByTestId("tool-call-preview")).toHaveCount(0);
@@ -223,6 +334,112 @@ test.describe("Tool call previews in activity stream", () => {
       // Close the bottom sheet
       await sheetCloseButton.click();
       await expect(sheetCloseButton).not.toBeVisible();
+
+      // Existing failed JS eval (Inspect Environment) reference error shown once on compact
+      const compactFailedEvalBadge = page
+        .getByTestId("tool-call-badge")
+        .filter({ hasText: "Inspect Environment" });
+      await expect(compactFailedEvalBadge).toBeVisible();
+      await expect(
+        compactFailedEvalBadge.getByText("ReferenceError: unknownEnvironment is not defined"),
+      ).toHaveCount(1);
+
+      // Failed one-line JS eval with wrapped error on compact layout (390px viewport)
+      const compactDoubleCoinsBadge = page
+        .getByTestId("tool-call-badge")
+        .filter({ hasText: "Process DoubleCoins Purchase" });
+      await expect(compactDoubleCoinsBadge).toBeVisible();
+      await expect(compactDoubleCoinsBadge.getByTestId("tool-call-preview")).toBeVisible();
+
+      // Timeline preview shows actionable error without expanding and no raw JSON wrappers
+      const compactError = compactDoubleCoinsBadge.getByTestId("tool-eval-error");
+      await expect(compactError).toBeVisible();
+      await expect(compactError).toContainText("Paid pass: DoubleCoins");
+      const compactErrorText = await compactError.innerText();
+      expect(compactErrorText).not.toContain('"content":');
+      expect(compactErrorText).not.toContain('"ok":');
+      expect(compactErrorText).not.toContain('{"ok":false');
+      expect(compactErrorText).not.toContain("js-cell-example.js:6:16");
+
+      // Code is formatted into multiple logical lines while preserving string tokens
+      const compactCodeBlock = compactDoubleCoinsBadge.getByTestId("tool-eval-code").first();
+      await expect(compactCodeBlock).toBeVisible();
+      await expect
+        .poll(async () => (await compactCodeBlock.innerText()).split("\n").filter(Boolean).length)
+        .toBeGreaterThanOrEqual(5);
+      const compactCodeText = await compactCodeBlock.innerText();
+      const compactCodeLines = compactCodeText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      expect(compactCodeLines.length).toBeGreaterThanOrEqual(5);
+      expect(compactCodeText).toContain("function verifyTransaction(receipt)");
+      expect(compactCodeText).toContain(
+        "PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz",
+      );
+
+      // Sentinel is clipped in timeline preview
+      expect(compactCodeText).not.toContain("COMPLETED_EVAL_SENTINEL_OUTPUT_END");
+      await expect(
+        compactDoubleCoinsBadge.getByText("COMPLETED_EVAL_SENTINEL_OUTPUT_END"),
+      ).not.toBeVisible();
+
+      // Visual long-line wrapping on narrow compact layout (390px viewport)
+      const compactCodeBox = await compactCodeBlock.boundingBox();
+      expect(compactCodeBox).not.toBeNull();
+      const compactMetrics = await compactCodeBlock.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      }));
+      expect(compactMetrics.scrollWidth).toBeLessThanOrEqual(compactMetrics.clientWidth + 4);
+
+      const compactTokenEl = compactDoubleCoinsBadge.getByText(
+        /PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING/,
+      );
+      await expect(compactTokenEl).toBeVisible();
+      const compactTokenBox = await compactTokenEl.boundingBox();
+      expect(compactTokenBox).not.toBeNull();
+      expect(compactTokenBox!.width).toBeLessThanOrEqual(compactCodeBox!.width + 4);
+
+      // Clicking header opens bottom sheet on compact layout
+      const compactHeader = compactDoubleCoinsBadge.locator('[role="button"]').first();
+      await compactHeader.click();
+
+      // Bottom sheet is opened
+      const doubleCoinsSheetClose = page.getByTestId("tool-call-sheet-close");
+      await expect(doubleCoinsSheetClose).toBeVisible();
+
+      // Full code expands in bottom sheet with end sentinel visible
+      await expect(page.getByText("COMPLETED_EVAL_SENTINEL_OUTPUT_END")).toBeVisible();
+
+      // Full error exposes stack info inside bottom sheet
+      const sheetError = page.getByTestId("tool-eval-error").last();
+      await expect(sheetError).toBeVisible();
+      await expect(sheetError).toContainText("Paid pass: DoubleCoins");
+      await expect(sheetError).toContainText("js-cell-example.js:6:16");
+      const sheetErrorText = await sheetError.innerText();
+      expect(sheetErrorText).not.toContain('"content":');
+      expect(sheetErrorText).not.toContain('{"ok":false');
+
+      // Visual wrapping inside sheet
+      const sheetCodeBlock = page.getByTestId("tool-eval-code").last();
+      await expect(sheetCodeBlock).toBeVisible();
+      const sheetMetrics = await sheetCodeBlock.evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      }));
+      expect(sheetMetrics.scrollWidth).toBeLessThanOrEqual(sheetMetrics.clientWidth + 4);
+
+      // Capture compact screenshot before closing sheet
+      await page.screenshot({ path: testInfo.outputPath("double-coins-eval-compact.png") });
+      await testInfo.attach("double-coins-eval-compact", {
+        body: await page.screenshot({ path: testInfo.outputPath("double-coins-eval-compact.png") }),
+        contentType: "image/png",
+      });
+
+      // Close bottom sheet
+      await doubleCoinsSheetClose.click();
+      await expect(doubleCoinsSheetClose).not.toBeVisible();
 
       // Compact screenshot attached to testInfo
       await testInfo.attach("tool-call-preview-compact", {

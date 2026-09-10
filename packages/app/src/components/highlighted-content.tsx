@@ -17,11 +17,13 @@ interface HighlightedLinesProps {
   // 1-based line number of the first line; when set, a line-number gutter is
   // rendered (used by Read, which carries a server-normalized offset).
   startLine?: number;
+  wrap?: boolean;
 }
 
-function ContentLine({ line }: { line: KeyedLine }) {
+function ContentLine({ line, wrap }: { line: KeyedLine; wrap: boolean }) {
+  const textStyle = React.useMemo(() => [styles.lineText, wrap && styles.wrappedLineText], [wrap]);
   return (
-    <Text selectable style={styles.lineText}>
+    <Text selectable style={textStyle}>
       {line.tokens.length === 0
         ? ZERO_WIDTH
         : line.tokens.map(({ key, token }: KeyedToken) => (
@@ -37,15 +39,17 @@ const GutteredLine = React.memo(function GutteredLine({
   line,
   lineNumber,
   digits,
+  wrap,
 }: {
   line: KeyedLine;
   lineNumber: number;
   digits: number;
+  wrap: boolean;
 }) {
   return (
     <View style={styles.row}>
       <Text style={styles.gutterText}>{String(lineNumber).padStart(digits)} </Text>
-      <ContentLine line={line} />
+      <ContentLine line={line} wrap={wrap} />
     </View>
   );
 });
@@ -53,12 +57,12 @@ const GutteredLine = React.memo(function GutteredLine({
 // Renders pre-tokenized lines (from the shared highlight cache), optionally with
 // a line-number gutter. Callers decide whether to highlight at all, so the
 // expensive size-cap / unsupported-language fallback stays a single plain Text.
-export function HighlightedLines({ lines, startLine }: HighlightedLinesProps) {
+export function HighlightedLines({ lines, startLine, wrap = false }: HighlightedLinesProps) {
   if (startLine === undefined) {
     return (
       <View dataSet={CODE_SURFACE_DATASET}>
         {lines.map((line) => (
-          <ContentLine key={line.key} line={line} />
+          <ContentLine key={line.key} line={line} wrap={wrap} />
         ))}
       </View>
     );
@@ -69,7 +73,13 @@ export function HighlightedLines({ lines, startLine }: HighlightedLinesProps) {
   return (
     <View dataSet={CODE_SURFACE_DATASET}>
       {lines.map((line, index) => (
-        <GutteredLine key={line.key} line={line} lineNumber={startLine + index} digits={digits} />
+        <GutteredLine
+          key={line.key}
+          line={line}
+          lineNumber={startLine + index}
+          digits={digits}
+          wrap={wrap}
+        />
       ))}
     </View>
   );
@@ -100,5 +110,10 @@ const styles = StyleSheet.create((theme) => ({
           overflowWrap: "normal",
         }
       : null),
+  },
+  wrappedLineText: {
+    minWidth: 0,
+    flexShrink: 1,
+    ...(isWeb ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : null),
   },
 }));
