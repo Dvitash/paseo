@@ -90,6 +90,7 @@ import {
   type WebSocketRuntimeDiagnosticSnapshot,
 } from "./websocket/runtime-metrics.js";
 import { ProviderUsageService } from "../services/quota-fetcher/service.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { getProcessMemoryDiagnostics, getProcessUptimeSeconds } from "./process-diagnostics.js";
 import {
   CLIENT_SHUTDOWN_RPC_REASON,
@@ -600,6 +601,7 @@ export class VoiceAssistantWebSocketServer {
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
   private readonly providerUsageService: ProviderUsageService;
+  private readonly hostPerformanceSampler: HostPerformanceSampler;
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
   private readonly hubRelationships: HubRelationshipManagement | null;
@@ -741,6 +743,7 @@ export class VoiceAssistantWebSocketServer {
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
     });
+    this.hostPerformanceSampler = new HostPerformanceSampler();
 
     this.wss = this.createWebSocketServer(server, wsConfig, auth);
     this.startRuntimeMetricsInterval();
@@ -1482,6 +1485,7 @@ export class VoiceAssistantWebSocketServer {
       terminalManager: this.terminalManager,
       providerSnapshotManager: this.providerSnapshotManager,
       providerUsageService: this.providerUsageService,
+      hostPerformanceSampler: this.hostPerformanceSampler,
       hubExecutionAgents: options.hubExecutionAgents,
       hubRelationships: options.hubRelationships,
       serviceProxy: this.serviceProxy ?? undefined,
@@ -1683,6 +1687,7 @@ export class VoiceAssistantWebSocketServer {
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         sideChat: true,
+        hostPerformance: true,
         // COMPAT(modelTurnMetrics): added in v0.8.0; remove gate after 2027-03-09.
         modelTurnMetrics: true,
         agentRequestReceipts: true,

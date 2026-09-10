@@ -2341,6 +2341,10 @@ export const en = {
         title: "Chat outline",
         description: "Show an outline for jumping between prompts",
       },
+      hostPerformance: {
+        title: "Host performance",
+        description: "Show CPU, memory, and GPU metrics in the sidebar",
+      },
       sidebar: {
         title: "Sidebar",
         description: "Choose which items appear at the top of the sidebar and in what order",
@@ -2908,6 +2912,27 @@ export const en = {
         cancel: "Cancel",
       },
     },
+  },
+  hostPerformance: {
+    title: "Host performance",
+    cpu: "CPU",
+    memory: "Memory",
+    gpu: "GPU",
+    cores: "{{count}} cores",
+    ram: "RAM",
+    devices: "{{count}} devices",
+    busiestGpu: "Busiest GPU",
+    usedOf: "{{used}} / {{total}}",
+    stale: "Stale",
+    errorTitle: "Unable to load host performance",
+    hostUnavailable: "Connect to this host to see performance",
+    hostUpgradeRequired: "Update the host daemon to view performance metrics",
+    retry: "Retry",
+    noGpu: "No GPU detected",
+    gpuUnavailable: "GPU metrics unavailable",
+    memoryUnavailable: "Memory unavailable",
+    trendLastMinute: "Last 60 seconds",
+    selectHost: "Select host",
   },
 } as const;
 

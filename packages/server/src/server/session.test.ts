@@ -20,6 +20,7 @@ import {
   type FileTransferFrame,
 } from "@getpaseo/protocol/binary-frames/index";
 import { Session } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
@@ -330,6 +331,7 @@ interface SessionForTestOptions {
   pluginRuntime?: SessionOptions["pluginRuntime"];
   orchestrationSkills?: SessionOptions["orchestrationSkills"];
   workspaceLabelService?: WorkspaceLabelService;
+  hostPerformanceSampler?: HostPerformanceSampler;
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -435,6 +437,7 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     daemonRuntimeConfig: options.daemonRuntimeConfig,
     permissions: options.permissions ?? OWNER_PERMISSIONS,
     webPush: options.webPush,
+    hostPerformanceSampler: options.hostPerformanceSampler ?? new HostPerformanceSampler(),
   };
   return new Session(sessionOptions);
 }
@@ -5935,4 +5938,74 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("host.performance.get_snapshot.request returns snapshot response when sampler succeeds", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const snapshot = {
+    sample: {
+      sampledAt: 1773160000000,
+      cpu: { utilizationPercent: null, logicalCores: 8 },
+      memory: { usedBytes: 1000, totalBytes: 2000 },
+      gpus: { status: "none" as const },
+    },
+    history: [{ sampledAt: 1773160000000, cpuPercent: null, memoryPercent: 50, gpuPercent: null }],
+  };
+  const sampler = new HostPerformanceSampler({
+    now: () => 1773160000000,
+    read: async () => ({
+      cpu: { idle: 100, total: 400, logicalCores: 8 },
+      memory: { usedBytes: 1000, totalBytes: 2000 },
+      gpus: { status: "none" },
+    }),
+  });
+
+  const session = createSessionForTest({
+    messages,
+    hostPerformanceSampler: sampler,
+  });
+
+  await session.handleMessage({
+    type: "host.performance.get_snapshot.request",
+    requestId: "req-perf-ok",
+  });
+
+  const response = messages.find((m) => m.type === "host.performance.get_snapshot.response");
+  expect(response).toEqual({
+    type: "host.performance.get_snapshot.response",
+    payload: {
+      requestId: "req-perf-ok",
+      snapshot,
+    },
+  });
+});
+
+test("host.performance.get_snapshot.request emits correlated rpc_error on sampler failure", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const failingSampler = new HostPerformanceSampler({
+    read: async () => {
+      throw new Error("Sampler hardware failure");
+    },
+  });
+
+  const session = createSessionForTest({
+    messages,
+    hostPerformanceSampler: failingSampler,
+  });
+
+  await session.handleMessage({
+    type: "host.performance.get_snapshot.request",
+    requestId: "req-perf-err",
+  });
+
+  const errorMsg = messages.find((m) => m.type === "rpc_error");
+  expect(errorMsg).toEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "req-perf-err",
+      requestType: "host.performance.get_snapshot.request",
+      error: "Request failed: Sampler hardware failure",
+      code: "handler_error",
+    },
+  });
 });

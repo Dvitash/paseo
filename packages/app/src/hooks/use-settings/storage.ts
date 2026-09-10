@@ -92,6 +92,7 @@ export interface AppSettings {
   /** Desktop-only preferences for implicit opens into the ordinary side pane. */
   openInSidePane: OpenInSidePanePreferences;
   pullRequestOpenLocation: PullRequestOpenLocation;
+  showHostPerformance: boolean;
 }
 
 export type AppSettingsUpdate =
@@ -144,6 +145,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   vimKeybindings: false,
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
   pullRequestOpenLocation: "explorer",
+  showHostPerformance: true,
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -237,6 +239,7 @@ const StoredAppSettingsSchema = z
     compactToolCalls: z.boolean().optional().catch(undefined),
     chatOutlineEnabled: z.boolean().catch(true),
     vimKeybindings: z.boolean().catch(false),
+    showHostPerformance: z.boolean().catch(true),
     openInSidePane: z
       .object({
         explorerFiles: z.boolean().catch(false),

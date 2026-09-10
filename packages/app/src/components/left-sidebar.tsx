@@ -52,6 +52,7 @@ import { openHostOverview } from "@/navigation/settings-navigation";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarProviderUsageBar } from "@/provider-usage/sidebar-bar";
+import { SidebarHostPerformanceBar } from "@/host-performance/sidebar-bar";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
@@ -603,6 +604,7 @@ function MobileSidebar({
           />
         )}
 
+        <SidebarHostPerformanceBar visible={active} />
         <SidebarProviderUsageBar />
         <SidebarFooter
           theme={theme}
@@ -781,6 +783,7 @@ function DesktopSidebar({
 
         <SidebarCalloutSlot />
 
+        <SidebarHostPerformanceBar visible={active} />
         <SidebarProviderUsageBar />
         <SidebarFooter
           theme={theme}

@@ -2292,6 +2292,11 @@ export const fr: TranslationResources = {
         title: "Plan de la discussion",
         description: "Afficher un plan pour passer d’une requête à l’autre",
       },
+      hostPerformance: {
+        title: "Performances de l'hôte",
+        description:
+          "Afficher l'utilisation du processeur, de la mémoire et du GPU dans la barre latérale",
+      },
       sidebar: {
         title: "Barre latérale",
         description: "Choisissez les éléments affichés en haut de la barre latérale et leur ordre",
@@ -2870,5 +2875,26 @@ export const fr: TranslationResources = {
         cancel: "Annuler",
       },
     },
+  },
+  hostPerformance: {
+    title: "Performances de l'hôte",
+    cpu: "Processeur",
+    memory: "Mémoire",
+    gpu: "GPU",
+    cores: "{{count}} cœurs",
+    ram: "RAM",
+    devices: "{{count}} périphériques",
+    busiestGpu: "GPU le plus sollicité",
+    usedOf: "{{used}} / {{total}}",
+    stale: "Obsolète",
+    errorTitle: "Impossible de charger les performances de l'hôte",
+    hostUnavailable: "Connectez-vous à cet hôte pour voir les performances",
+    hostUpgradeRequired: "Mettez à jour le démon hôte pour afficher les métriques de performances",
+    retry: "Réessayer",
+    noGpu: "Aucun GPU détecté",
+    gpuUnavailable: "Métriques GPU indisponibles",
+    memoryUnavailable: "Mémoire indisponible",
+    trendLastMinute: "60 dernières secondes",
+    selectHost: "Sélectionner l'hôte",
   },
 };

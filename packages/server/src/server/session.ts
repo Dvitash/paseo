@@ -135,6 +135,7 @@ import {
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { getSideChatService, type SideChatService } from "./side/side-chat-service.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import {
   ImportSessionsRequestError,
   importProviderSession,
@@ -527,6 +528,7 @@ export interface SessionOptions {
   terminalManager: TerminalManager | null;
   providerSnapshotManager: ProviderSnapshotManager;
   providerUsageService: ProviderUsageService;
+  hostPerformanceSampler: HostPerformanceSampler;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
   serviceProxy?: ServiceProxySubsystem;
@@ -741,6 +743,7 @@ export class Session {
   private webPush: SessionWebPushRegistration | null = null;
   private readonly terminalManager: TerminalManager | null;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
+  private readonly hostPerformanceSampler: HostPerformanceSampler;
   private readonly serviceProxy: ServiceProxySubsystem | null;
   private readonly scriptRuntimeStore: WorkspaceScriptRuntimeStore | null;
   private readonly getDaemonTcpPort: (() => number | null) | null;
@@ -808,6 +811,7 @@ export class Session {
       terminalManager,
       providerSnapshotManager,
       providerUsageService,
+      hostPerformanceSampler,
       serviceProxy,
       scriptRuntimeStore,
       workspaceSetupSnapshots,
@@ -843,6 +847,7 @@ export class Session {
     this.agentRequests = options.agentRequests;
     this.projectIcons = new ProjectIconReader(paseoHome);
     this.worktreesRoot = worktreesRoot;
+    this.hostPerformanceSampler = hostPerformanceSampler;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
     this.unsubscribePluginChanges = this.subscribeToPluginChanges(pluginRuntime);
@@ -2546,6 +2551,8 @@ export class Session {
         return this.daemonSession.handleHubRelationshipRequest(msg);
       case "diagnostics.request":
         return this.daemonSession.handleDiagnosticsRequest(msg);
+      case "host.performance.get_snapshot.request":
+        return this.handleHostPerformanceGetSnapshotRequest(msg);
       case "daemon.update.request":
         return this.daemonSession.handleUpdateRequest(msg);
       case "set_daemon_config_request":
@@ -2564,6 +2571,18 @@ export class Session {
       default:
         return undefined;
     }
+  }
+  private async handleHostPerformanceGetSnapshotRequest(
+    msg: Extract<SessionInboundMessage, { type: "host.performance.get_snapshot.request" }>,
+  ): Promise<void> {
+    const snapshot = await this.hostPerformanceSampler.getSnapshot();
+    this.emit({
+      type: "host.performance.get_snapshot.response",
+      payload: {
+        requestId: msg.requestId,
+        snapshot,
+      },
+    });
   }
 
   // eslint-disable-next-line complexity

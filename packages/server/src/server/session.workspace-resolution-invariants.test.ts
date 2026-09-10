@@ -10,6 +10,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 
 import { Session, type SessionOptions } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { createNoopWorkspaceGitService } from "./test-utils/workspace-git-service-stub.js";
@@ -189,6 +190,7 @@ function createHarness(input: {
     tts: null,
     providerSnapshotManager: createProviderSnapshotManagerStub().manager,
     terminalManager: null,
+    hostPerformanceSampler: new HostPerformanceSampler(),
   });
 
   return { session, emitted, workspaces, projects };

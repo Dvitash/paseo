@@ -25,6 +25,7 @@ import {
   type ActiveTurnBehavior,
   type ServerInfoStatusPayload,
   type WebPushSubscription,
+  type HostPerformanceSnapshot,
 } from "@getpaseo/protocol/messages";
 import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
 import type {
@@ -5089,6 +5090,21 @@ export class DaemonClient {
         type: "provider.usage.list.request",
       },
     });
+  }
+
+  async getHostPerformanceSnapshot(options?: {
+    requestId?: string;
+    timeout?: number;
+  }): Promise<HostPerformanceSnapshot> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"host.performance.get_snapshot.response">({
+        requestId: options?.requestId,
+        timeout: options?.timeout,
+        message: {
+          type: "host.performance.get_snapshot.request",
+        },
+      });
+    return payload.snapshot;
   }
 
   async listCommands(options: ListCommandsOptions): Promise<ListCommandsPayload>;

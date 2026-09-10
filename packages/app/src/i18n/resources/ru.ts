@@ -2274,6 +2274,10 @@ export const ru: TranslationResources = {
         title: "Оглавление чата",
         description: "Показывать оглавление для перехода между запросами",
       },
+      hostPerformance: {
+        title: "Производительность хоста",
+        description: "Показывать использование процессора, памяти и GPU в боковом меню",
+      },
       sidebar: {
         title: "Боковая панель",
         description:
@@ -2853,5 +2857,26 @@ export const ru: TranslationResources = {
         cancel: "Отмена",
       },
     },
+  },
+  hostPerformance: {
+    title: "Производительность хоста",
+    cpu: "ЦП",
+    memory: "Память",
+    gpu: "GPU",
+    cores: "{{count}} ядер",
+    ram: "RAM",
+    devices: "{{count}} устройств",
+    busiestGpu: "Самый загруженный GPU",
+    usedOf: "{{used}} / {{total}}",
+    stale: "Устарело",
+    errorTitle: "Не удалось загрузить данные о производительности хоста",
+    hostUnavailable: "Подключитесь к этому хосту, чтобы увидеть производительность",
+    hostUpgradeRequired: "Обновите демон хоста для просмотра показателей производительности",
+    retry: "Повторить",
+    noGpu: "GPU не обнаружен",
+    gpuUnavailable: "Показатели GPU недоступны",
+    memoryUnavailable: "Память недоступна",
+    trendLastMinute: "Последние 60 секунд",
+    selectHost: "Выбрать хост",
   },
 };

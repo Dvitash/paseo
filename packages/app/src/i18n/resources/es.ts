@@ -2288,6 +2288,10 @@ export const es: TranslationResources = {
         title: "Esquema del chat",
         description: "Muestra un esquema para saltar entre instrucciones",
       },
+      hostPerformance: {
+        title: "Rendimiento del host",
+        description: "Mostrar el uso de CPU, memoria y GPU en la barra lateral",
+      },
       sidebar: {
         title: "Barra lateral",
         description:
@@ -2862,5 +2866,26 @@ export const es: TranslationResources = {
         cancel: "Cancelar",
       },
     },
+  },
+  hostPerformance: {
+    title: "Rendimiento del host",
+    cpu: "CPU",
+    memory: "Memoria",
+    gpu: "GPU",
+    cores: "{{count}} núcleos",
+    ram: "RAM",
+    devices: "{{count}} dispositivos",
+    busiestGpu: "GPU más ocupada",
+    usedOf: "{{used}} / {{total}}",
+    stale: "Desactualizado",
+    errorTitle: "No se puede cargar el rendimiento del host",
+    hostUnavailable: "Conéctate a este host para ver el rendimiento",
+    hostUpgradeRequired: "Actualiza el daemon del host para ver las métricas de rendimiento",
+    retry: "Reintentar",
+    noGpu: "No se detectó GPU",
+    gpuUnavailable: "Métricas de GPU no disponibles",
+    memoryUnavailable: "Memoria no disponible",
+    trendLastMinute: "Últimos 60 segundos",
+    selectHost: "Seleccionar host",
   },
 };

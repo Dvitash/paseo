@@ -260,6 +260,24 @@ function ChatOutlineRow({ value, onChange }: ChatOutlineRowProps) {
   );
 }
 
+interface HostPerformanceRowProps {
+  value: boolean;
+  onChange: (value: boolean) => void;
+}
+
+function HostPerformanceRow({ value, onChange }: HostPerformanceRowProps) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSwitch
+      label={t("settings.appearance.hostPerformance.title")}
+      hint={t("settings.appearance.hostPerformance.description")}
+      value={value}
+      onValueChange={onChange}
+      testID="settings-appearance-host-performance"
+    />
+  );
+}
+
 const TOOL_CALL_DETAIL_LEVELS: readonly AppSettings["toolCallDetailLevel"][] = [
   "detailed",
   "overview",
@@ -577,6 +595,13 @@ export function AppearanceSection() {
     [updateSettings],
   );
 
+  const handleHostPerformanceChange = useCallback(
+    (showHostPerformance: boolean) => {
+      void updateSettings({ showHostPerformance });
+    },
+    [updateSettings],
+  );
+
   const commitUiFontFamily = useCallback(
     (value: string) => {
       const sanitized = sanitizeFontFamily(value);
@@ -696,6 +721,10 @@ export function AppearanceSection() {
               onChange={handleChatOutlineChange}
             />
           ) : null}
+          <HostPerformanceRow
+            value={settings.showHostPerformance}
+            onChange={handleHostPerformanceChange}
+          />
         </SettingsCard>
       </SettingsSection>
       <SidebarNavSection />
