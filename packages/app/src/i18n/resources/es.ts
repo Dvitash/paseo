@@ -1924,6 +1924,7 @@ export const es: TranslationResources = {
     subAgentActivity: "Actividad de subagente",
     input: "Aporte",
     output: "Producción",
+    showMore: "Mostrar más",
   },
   toolCallGroup: {
     editedFiles: {

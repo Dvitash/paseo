@@ -61,6 +61,7 @@ import type { TaskActivity, TodoEntry, UserMessageImageAttachment } from "@/type
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { buildToolCallPresentation } from "@/tool-calls/presentation";
+import { ToolCallPreview } from "@/tool-calls/activity-content";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { getMarkdownListMarker, getMarkdownListSpacing } from "@/utils/markdown-list";
 import { markdownNodeContainsType } from "@/utils/markdown-ast";
@@ -2308,6 +2309,7 @@ interface ExpandableBadgeProps {
   onOpenFile?: () => void;
   onDetailHoverChange?: (hovered: boolean) => void;
   renderDetails?: () => ReactNode;
+  renderPreview?: () => ReactNode;
   isLoading?: boolean;
   isError?: boolean;
   isLastInSequence?: boolean;
@@ -2671,6 +2673,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   onOpenFile,
   onDetailHoverChange,
   renderDetails,
+  renderPreview,
   isLoading = false,
   isError = false,
   isLastInSequence = false,
@@ -2684,7 +2687,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   const [isPressed, setIsPressed] = useState(false);
   const isInteractive = Boolean(onToggle);
   const hasDetailContent = Boolean(renderDetails);
-  const detailContent = hasDetailContent && isExpanded ? renderDetails?.() : null;
+  const hasVisibleContent = isExpanded ? hasDetailContent : Boolean(renderPreview);
+  const detailContent = isExpanded ? renderDetails?.() : renderPreview?.();
   const detailWrapperRef = useRef<View | null>(null);
 
   const handleHoverIn = useCallback(() => setIsHovered(true), []);
@@ -2786,7 +2790,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
 
   useDetailWheelPropagationBlocker({
     detailWrapperRef,
-    enabled: !isNative && isExpanded && hasDetailContent,
+    enabled: isWeb && hasVisibleContent,
   });
 
   const shimmerLabelStyle = useMemo<StyleProp<TextStyle>>(
@@ -2845,10 +2849,12 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     () => [
       expandableBadgeStylesheet.pressable,
       isPressed && isInteractive ? expandableBadgeStylesheet.pressablePressed : null,
-      isExpanded && expandableBadgeStylesheet.pressableExpanded,
-      isExpanded && !borderlessWhenExpanded && expandableBadgeStylesheet.pressableExpandedAttached,
+      hasVisibleContent && expandableBadgeStylesheet.pressableExpanded,
+      hasVisibleContent &&
+        !borderlessWhenExpanded &&
+        expandableBadgeStylesheet.pressableExpandedAttached,
     ],
-    [borderlessWhenExpanded, isExpanded, isInteractive, isPressed],
+    [borderlessWhenExpanded, hasVisibleContent, isInteractive, isPressed],
   );
 
   const detailWrapperStyle = useMemo(
@@ -2860,8 +2866,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   );
 
   const accessibilityState = useMemo(
-    () => (isInteractive ? { expanded: isExpanded } : undefined),
-    [isExpanded, isInteractive],
+    () => ({ expanded: isInteractive ? isExpanded : undefined, busy: isLoading }),
+    [isExpanded, isInteractive, isLoading],
   );
 
   const isActive = isHovered || isExpanded;
@@ -2941,6 +2947,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
         {...pressHandlers}
         disabled={!isInteractive}
         accessibilityState={accessibilityState}
+        aria-expanded={accessibilityState.expanded}
+        aria-busy={accessibilityState.busy}
         style={pressableStyle}
       >
         <View style={expandableBadgeStylesheet.headerRow}>
@@ -3002,6 +3010,7 @@ function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: Expa
   if (previous.onOpenFile !== next.onOpenFile) return false;
   if (previous.onDetailHoverChange !== next.onDetailHoverChange) return false;
   if (previous.renderDetails !== next.renderDetails) return false;
+  if (previous.renderPreview !== next.renderPreview) return false;
   return true;
 }
 
@@ -3157,6 +3166,25 @@ export const ToolCall = memo(function ToolCall({
     maxDetailHeight,
   ]);
 
+  const renderPreview = useCallback(
+    () => (
+      <ToolCallPreview
+        detail={effectiveDetail}
+        evaluation={presentation.evaluation}
+        hub={presentation.hub}
+        errorText={presentation.errorText}
+        onShowMore={handleToggle}
+      />
+    ),
+    [
+      effectiveDetail,
+      presentation.evaluation,
+      presentation.hub,
+      presentation.errorText,
+      handleToggle,
+    ],
+  );
+
   if (presentation.isPlan && effectiveDetail?.type === "plan") {
     return (
       <PlanCard
@@ -3188,6 +3216,7 @@ export const ToolCall = memo(function ToolCall({
       onToggle={presentation.canOpenDetails ? handleToggle : undefined}
       onOpenFile={handleOpenFile}
       renderDetails={presentation.canOpenDetails && shouldRenderInline ? renderDetails : undefined}
+      renderPreview={presentation.hasPreview ? renderPreview : undefined}
       isLoading={status === "running" || status === "executing"}
       isError={status === "failed"}
       isLastInSequence={isLastInSequence}

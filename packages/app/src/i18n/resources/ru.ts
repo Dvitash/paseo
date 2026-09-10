@@ -1909,6 +1909,7 @@ export const ru: TranslationResources = {
     subAgentActivity: "Активность субагента",
     input: "Входные данные",
     output: "Выходные данные",
+    showMore: "Показать больше",
   },
   toolCallGroup: {
     editedFiles: {

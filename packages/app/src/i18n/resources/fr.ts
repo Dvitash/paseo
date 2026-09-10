@@ -1929,6 +1929,7 @@ export const fr: TranslationResources = {
     subAgentActivity: "Activité du sous-agent",
     input: "Saisir",
     output: "Sortir",
+    showMore: "Afficher plus",
   },
   toolCallGroup: {
     editedFiles: {

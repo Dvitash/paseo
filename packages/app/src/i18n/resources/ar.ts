@@ -1877,6 +1877,7 @@ export const ar: TranslationResources = {
     subAgentActivity: "نشاط الوكيل الفرعي",
     input: "مدخل",
     output: "الإخراج",
+    showMore: "عرض المزيد",
   },
   toolCallGroup: {
     editedFiles: {

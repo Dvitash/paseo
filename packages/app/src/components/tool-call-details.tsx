@@ -25,6 +25,10 @@ import { HighlightedLines } from "./highlighted-content";
 import { DiffViewer } from "./diff-viewer";
 import { getCodeInsets } from "./code-insets";
 import { isWeb } from "@/constants/platform";
+import { getEvalPresentation } from "@/tool-calls/eval";
+import { EvalContent } from "@/tool-calls/activity-content";
+import { getHubPresentation, hasHubContent } from "@/tool-calls/hub";
+import { HubContent } from "@/tool-calls/hub-content";
 
 const ScrollView = isWeb ? RNScrollView : GHScrollView;
 
@@ -713,6 +717,7 @@ function buildDetailSections(
             ds={ds}
             wrapInSectionFill={false}
             filePath={detail.filePath}
+            startLine={1}
           />
         ) : null}
       </View>,
@@ -792,8 +797,24 @@ export function ToolCallDetailsContent({
   const resolvedMaxHeight = fillAvailableHeight ? undefined : (maxHeight ?? 300);
   const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight);
   const diffLines = useDiffLines(detail);
+  const evaluation = useMemo(() => getEvalPresentation(toolName, detail), [toolName, detail]);
+  const hub = useMemo(() => getHubPresentation(toolName, detail), [toolName, detail]);
 
-  const sections: ReactNode[] = buildDetailSections(toolName, detail, diffLines, ds, t);
+  let sections: ReactNode[];
+  if (evaluation) {
+    sections = [
+      <EvalContent
+        key="eval"
+        evaluation={evaluation}
+        maxHeight={resolvedMaxHeight}
+        errorText={errorText}
+      />,
+    ];
+  } else if (hub && hasHubContent(hub)) {
+    sections = [<HubContent key="hub" hub={hub} maxHeight={resolvedMaxHeight} />];
+  } else {
+    sections = buildDetailSections(toolName, detail, diffLines, ds, t);
+  }
 
   if (errorText) {
     sections.push(<ErrorSection key="error" errorText={errorText} ds={ds} />);

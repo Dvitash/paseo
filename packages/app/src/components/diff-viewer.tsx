@@ -18,9 +18,10 @@ interface DiffViewerProps {
   maxHeight?: number;
   emptyLabel?: string;
   fillAvailableHeight?: boolean;
+  wrap?: boolean;
 }
 
-function DiffLineRow({ line }: { line: DiffLine }) {
+function DiffLineRow({ line, wrap }: { line: DiffLine; wrap: boolean }) {
   const lineContainerStyle = React.useMemo(
     () => [
       styles.line,
@@ -34,12 +35,13 @@ function DiffLineRow({ line }: { line: DiffLine }) {
   const plainLineTextStyle = React.useMemo(
     () => [
       styles.lineText,
+      wrap && styles.wrappedLineText,
       line.type === "header" && styles.headerText,
       line.type === "add" && styles.addText,
       line.type === "remove" && styles.removeText,
       line.type === "context" && styles.contextText,
     ],
-    [line.type],
+    [line.type, wrap],
   );
 
   const prefixStyle = React.useMemo(
@@ -50,11 +52,15 @@ function DiffLineRow({ line }: { line: DiffLine }) {
     ],
     [line.type],
   );
+  const lineTextStyle = React.useMemo(
+    () => [styles.lineText, wrap && styles.wrappedLineText],
+    [wrap],
+  );
 
   if (line.tokens) {
     return (
       <View style={lineContainerStyle}>
-        <Text style={styles.lineText}>
+        <Text style={lineTextStyle}>
           <Text style={prefixStyle}>{diffLinePrefix(line)}</Text>
           <DiffTokens tokens={line.tokens} />
         </Text>
@@ -65,7 +71,7 @@ function DiffLineRow({ line }: { line: DiffLine }) {
   return (
     <View style={lineContainerStyle}>
       {line.segments ? (
-        <Text style={styles.lineText}>
+        <Text style={lineTextStyle}>
           <Text style={line.type === "add" ? styles.addText : styles.removeText}>
             {line.content[0]}
           </Text>
@@ -122,6 +128,7 @@ export function DiffViewer({
   maxHeight,
   emptyLabel,
   fillAvailableHeight = false,
+  wrap = false,
 }: DiffViewerProps) {
   const { t } = useTranslation();
   const [scrollViewWidth, setScrollViewWidth] = React.useState(0);
@@ -143,9 +150,10 @@ export function DiffViewer({
   const linesContainerStyle = React.useMemo(
     () => [
       styles.linesContainer,
+      wrap && styles.wrappedLinesContainer,
       scrollViewWidth > 0 && inlineUnistylesStyle({ minWidth: scrollViewWidth }),
     ],
-    [scrollViewWidth],
+    [scrollViewWidth, wrap],
   );
   const keyedDiffLines = React.useMemo(
     () => diffLines.map((line, index) => ({ key: `${index}-${line.type}-${line.content}`, line })),
@@ -167,7 +175,7 @@ export function DiffViewer({
   const lines = (
     <View style={linesContainerStyle} dataSet={CODE_SURFACE_DATASET}>
       {keyedDiffLines.map(({ key, line }) => (
-        <DiffLineRow key={key} line={line} />
+        <DiffLineRow key={key} line={line} wrap={wrap} />
       ))}
     </View>
   );
@@ -191,7 +199,7 @@ export function DiffViewer({
       nestedScrollEnabled
       showsVerticalScrollIndicator
     >
-      {horizontalScroll}
+      {wrap ? lines : horizontalScroll}
     </ScrollView>
   );
 
@@ -219,6 +227,9 @@ const styles = StyleSheet.create((theme) => {
       alignSelf: "flex-start",
       padding: insets.padding,
     },
+    wrappedLinesContainer: {
+      alignSelf: "stretch",
+    },
     line: {
       minWidth: "100%",
       paddingHorizontal: 0,
@@ -234,6 +245,10 @@ const styles = StyleSheet.create((theme) => {
             overflowWrap: "normal",
           }
         : null),
+    },
+    wrappedLineText: {
+      flexShrink: 1,
+      ...(isWeb ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : null),
     },
     headerLine: {
       backgroundColor: theme.colors.surface1,

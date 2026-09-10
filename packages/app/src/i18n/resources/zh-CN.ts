@@ -1855,6 +1855,7 @@ export const zhCN: TranslationResources = {
     subAgentActivity: "Sub-agent 活动",
     input: "输入",
     output: "输出",
+    showMore: "显示更多",
   },
   toolCallGroup: {
     editedFiles: {

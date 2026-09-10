@@ -1896,6 +1896,7 @@ export const ja: TranslationResources = {
     subAgentActivity: "サブエージェントアクティビティ",
     input: "入力",
     output: "出力",
+    showMore: "もっと表示",
   },
   toolCallGroup: {
     editedFiles: {

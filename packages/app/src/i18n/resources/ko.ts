@@ -1888,6 +1888,7 @@ export const ko: TranslationResources = {
     subAgentActivity: "서브에이전트 활동",
     input: "입력",
     output: "출력",
+    showMore: "더 보기",
   },
   toolCallGroup: {
     editedFiles: {

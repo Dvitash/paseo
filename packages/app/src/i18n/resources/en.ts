@@ -1886,6 +1886,7 @@ export const en = {
     subAgentActivity: "Sub-agent activity",
     input: "Input",
     output: "Output",
+    showMore: "Show more",
   },
   toolCallGroup: {
     editedFiles: {

@@ -49,6 +49,8 @@ describe("tool-call presentation", () => {
       canOpenDetails: true,
       openFilePath: "/tmp/repo/src/index.ts",
       isPlan: false,
+      hasPreview: false,
+      evaluation: null,
     });
   });
 
@@ -90,5 +92,55 @@ describe("tool-call presentation", () => {
 
     expect(presentation.isPlan).toBe(true);
     expect(presentation.icon).toBe(fakeIcons.brain);
+  });
+
+  it.each<ToolCallDetail>([
+    { type: "write", filePath: "notes.txt", content: "A paragraph in progress." },
+    { type: "edit", filePath: "app.ts", oldString: "const n = 1;", newString: "const n = 2;" },
+  ])("previews authored content before expansion: $type", (detail) => {
+    const presentation = buildToolCallPresentation({
+      toolName: detail.type,
+      status: "running",
+      error: null,
+      detail,
+      resolveIcon: fakeResolveIcon,
+    });
+    expect(presentation.hasPreview).toBe(true);
+  });
+
+  it("uses the eval title and previews code while execution has no output", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "eval",
+      status: "running",
+      error: null,
+      detail: {
+        type: "unknown",
+        input: { language: "py", code: "print(42)", title: "Calculate the answer" },
+        output: null,
+      },
+      resolveIcon: fakeResolveIcon,
+    });
+    expect(presentation.summary).toBe("Calculate the answer");
+    expect(presentation.hasPreview).toBe(true);
+    expect(presentation.evaluation?.cells).toEqual([
+      {
+        id: "cell-0",
+        title: "Calculate the answer",
+        language: "py",
+        code: "print(42)",
+        output: "",
+      },
+    ]);
+  });
+
+  it("does not treat mounted tool arguments as an authored file preview", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "write",
+      status: "running",
+      error: null,
+      detail: { type: "write", filePath: "xd://some-tool", content: '{"args":"value"}' },
+      resolveIcon: fakeResolveIcon,
+    });
+    expect(presentation.hasPreview).toBe(false);
   });
 });

@@ -7,6 +7,8 @@ import {
   hasMeaningfulToolCallDetail,
   isPendingToolCallDetail,
 } from "@/utils/tool-call-detail-state";
+import { getEvalPresentation, type EvalPresentation } from "./eval";
+import { getHubPresentation, hasHubContent, type HubPresentation } from "./hub";
 
 type ToolCallStatus = "executing" | "running" | "completed" | "failed" | "canceled";
 export type ToolCallPresentationIcon = ComponentType<{ size?: number; color?: string }>;
@@ -31,6 +33,9 @@ export interface ToolCallPresentation {
   canOpenDetails: boolean;
   openFilePath: string | null;
   isPlan: boolean;
+  evaluation: EvalPresentation | null;
+  hub: HubPresentation | null;
+  hasPreview: boolean;
 }
 
 export type ToolCallIconResolver = (
@@ -44,6 +49,17 @@ function displayStatus(status: ToolCallStatus): ToolCallDisplayInput["status"] {
 
 function displayDetail(detail: ToolCallDetail | undefined): ToolCallDetail {
   return detail ?? { type: "unknown", input: null, output: null };
+}
+
+function hasFilePreview(detail: ToolCallDetail | undefined): boolean {
+  if (!detail) return false;
+  if (detail.type === "write") {
+    return !detail.filePath.startsWith("xd://") && Boolean(detail.content);
+  }
+  if (detail.type === "edit") {
+    return Boolean(detail.unifiedDiff || detail.oldString || detail.newString);
+  }
+  return false;
 }
 
 export function buildToolCallPresentation(
@@ -64,10 +80,12 @@ export function buildToolCallPresentation(
     error: input.error,
   });
   const hasDetails = Boolean(input.error) || hasMeaningfulToolCallDetail(input.detail);
+  const evaluation = getEvalPresentation(input.toolName, input.detail);
+  const hub = getHubPresentation(input.toolName, input.detail);
 
   return {
     displayName: displayModel.displayName,
-    summary: displayModel.summary,
+    summary: evaluation?.title ?? hub?.summary ?? displayModel.summary,
     errorText: displayModel.errorText,
     icon: input.resolveIcon(input.toolName, input.detail),
     isLoadingDetails,
@@ -75,5 +93,8 @@ export function buildToolCallPresentation(
     canOpenDetails: hasDetails || isLoadingDetails,
     openFilePath: extractToolCallFilePath(input.detail),
     isPlan: input.detail?.type === "plan",
+    evaluation,
+    hub,
+    hasPreview: evaluation !== null || hasHubContent(hub) || hasFilePreview(input.detail),
   };
 }
