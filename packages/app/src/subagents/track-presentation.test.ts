@@ -11,6 +11,7 @@ import {
   getRecentActions,
   isSubagentActiveOrAttention,
   isSubagentCompleted,
+  isSubagentDead,
   resolveRowLabel,
   sortSubagentRows,
 } from "./track-presentation";
@@ -344,6 +345,27 @@ describe("subagent classification and sorting", () => {
       isSubagentCompleted(row({ id: "attention", status: "idle", requiresAttention: true })),
     ).toBe(false);
     expect(isSubagentCompleted(row({ id: "idle", status: "idle" }))).toBe(true);
+  });
+
+  it("treats failed, canceled, and closed rows as dead", () => {
+    expect(isSubagentDead(row({ id: "failed", status: "error" }))).toBe(true);
+    expect(isSubagentDead(row({ id: "closed", status: "closed" }))).toBe(true);
+    expect(
+      isSubagentDead({
+        kind: "provider",
+        id: "canceled",
+        parentAgentId: "parent",
+        provider: "claude",
+        title: "canceled",
+        description: null,
+        subtitle: null,
+        status: "canceled",
+        requiresAttention: false,
+        createdAt: new Date("2026-04-20T00:00:00.000Z"),
+      }),
+    ).toBe(true);
+    expect(isSubagentDead(row({ id: "idle", status: "idle" }))).toBe(false);
+    expect(isSubagentDead(row({ id: "running", status: "running" }))).toBe(false);
   });
 
   it("sorts active/attention rows before completed rows, preserving createdAt order", () => {

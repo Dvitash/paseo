@@ -281,8 +281,8 @@ describe("SubagentsTrack browser component tests", () => {
       />,
     );
 
-    // Failed and attention rows stay prominently visible
-    expect(document.querySelector('[data-testid="subagents-track-row-failed-1"]')).not.toBeNull();
+    // Failed rows are hidden entirely; attention rows stay prominently visible
+    expect(document.querySelector('[data-testid="subagents-track-row-failed-1"]')).toBeNull();
     expect(document.querySelector('[data-testid="subagents-track-row-att-1"]')).not.toBeNull();
 
     // Only the true done worker is summarized

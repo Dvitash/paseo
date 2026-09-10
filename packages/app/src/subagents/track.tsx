@@ -33,6 +33,7 @@ import {
   getLatestToolCallOrThought,
   getRecentActions,
   isSubagentCompleted,
+  isSubagentDead,
   sortSubagentRows,
   type RecentSubagentAction,
 } from "./track-presentation";
@@ -217,12 +218,20 @@ export function SubagentsTrack({
   const sortedRows = useMemo(() => sortSubagentRows(rows), [rows]);
 
   const activeOrUnsettledRows = useMemo(
-    () => sortedRows.filter((row) => !isSubagentCompleted(row) || !settledCompletedIds.has(row.id)),
+    () =>
+      sortedRows.filter(
+        (row) =>
+          !isSubagentDead(row) && (!isSubagentCompleted(row) || !settledCompletedIds.has(row.id)),
+      ),
     [sortedRows, settledCompletedIds],
   );
 
   const settledCompletedRows = useMemo(
-    () => sortedRows.filter((row) => isSubagentCompleted(row) && settledCompletedIds.has(row.id)),
+    () =>
+      sortedRows.filter(
+        (row) =>
+          !isSubagentDead(row) && isSubagentCompleted(row) && settledCompletedIds.has(row.id),
+      ),
     [sortedRows, settledCompletedIds],
   );
 
