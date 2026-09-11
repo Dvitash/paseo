@@ -390,6 +390,7 @@ function DictationAdvancedRows({
         </View>
         <DropdownMenu>
           <DropdownTrigger
+            accessibilityRole="button"
             accessibilityLabel={`${t("settings.voice.dictation.provider.label")}: ${providerLabel}`}
             style={styles.trigger}
           >
