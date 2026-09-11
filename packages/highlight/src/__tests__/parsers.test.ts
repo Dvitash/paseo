@@ -34,7 +34,34 @@ describe("isLanguageSupported", () => {
   });
 
   it("returns false for files without extensions", () => {
-    expect(isLanguageSupported("Makefile")).toBe(false);
+    expect(isLanguageSupported("noext")).toBe(false);
+  });
+
+  it("resolves extensionless files by basename", () => {
+    expect(isLanguageSupported("Makefile")).toBe(true);
+    expect(isLanguageSupported("Dockerfile")).toBe(true);
+    expect(isLanguageSupported("Dockerfile.dev")).toBe(true);
+    expect(isLanguageSupported("CMakeLists.txt")).toBe(true);
+    expect(isLanguageSupported(".gitignore")).toBe(true);
+  });
+
+  it("supports legacy-mode languages", () => {
+    expect(isLanguageSupported("test.lua")).toBe(true);
+    expect(isLanguageSupported("test.luau")).toBe(true);
+    expect(isLanguageSupported("test.sh")).toBe(true);
+    expect(isLanguageSupported("test.rb")).toBe(true);
+    expect(isLanguageSupported("test.pl")).toBe(true);
+    expect(isLanguageSupported("test.sql")).toBe(true);
+    expect(isLanguageSupported("test.toml")).toBe(true);
+    expect(isLanguageSupported("test.diff")).toBe(true);
+    expect(isLanguageSupported("test.kt")).toBe(true);
+    expect(isLanguageSupported("test.groovy")).toBe(true);
+    expect(isLanguageSupported("test.hs")).toBe(true);
+    expect(isLanguageSupported("test.erl")).toBe(true);
+    expect(isLanguageSupported("test.clj")).toBe(true);
+    expect(isLanguageSupported("test.ps1")).toBe(true);
+    expect(isLanguageSupported("test.r")).toBe(true);
+    expect(isLanguageSupported("test.jl")).toBe(true);
   });
 
   it("handles nested paths", () => {

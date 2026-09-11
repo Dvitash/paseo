@@ -10,7 +10,11 @@ import { DiffViewer } from "@/components/diff-viewer";
 import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
 import { isWeb } from "@/constants/platform";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
-import { extensionFromPath, highlightToKeyedLines } from "@/utils/highlight-cache";
+import {
+  extensionFromPath,
+  highlightFileToKeyedLines,
+  highlightToKeyedLines,
+} from "@/utils/highlight-cache";
 import { highlightDiffLines } from "@/utils/diff-highlight";
 import { buildLineDiff, parseUnifiedDiff } from "@/utils/tool-call-parsers";
 import type { EvalCell, EvalPresentation } from "./eval";
@@ -22,21 +26,26 @@ import { useFormattedEvalCode } from "./use-formatted-eval-code";
 interface CodeContentProps {
   text: string;
   language: string | null;
+  filePath?: string | null;
   numbered?: boolean;
   wrap?: boolean;
   maxHeight?: number;
   testID?: string;
 }
-
 const CodeContent = memo(function CodeContent({
   text,
   language,
+  filePath,
   numbered = false,
   wrap = false,
   maxHeight,
   testID,
 }: CodeContentProps) {
-  const lines = useMemo(() => highlightToKeyedLines(text, language), [text, language]);
+  const lines = useMemo(
+    () =>
+      filePath ? highlightFileToKeyedLines(text, filePath) : highlightToKeyedLines(text, language),
+    [text, language, filePath],
+  );
   const heightStyle = maxHeight === undefined ? null : inlineUnistylesStyle({ maxHeight });
   const textStyle = useMemo(() => [styles.code, wrap && styles.wrappedCode], [wrap]);
   const content =
@@ -246,7 +255,14 @@ export const ToolCallPreview = memo(function ToolCallPreview({
     // Wrapped prose can exceed the visible height even when it is a single source line.
     truncated ||= wrap && content.text.length > 240;
     body = (
-      <CodeContent text={content.text} language={extension} numbered wrap={wrap} maxHeight={180} />
+      <CodeContent
+        text={content.text}
+        language={extension}
+        filePath={detail.filePath}
+        numbered
+        wrap={wrap}
+        maxHeight={180}
+      />
     );
   } else if (edit) {
     truncated ||= edit.truncated;
