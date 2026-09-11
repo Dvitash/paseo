@@ -22,11 +22,11 @@ export interface SidebarUsageGeometry {
   showsName: boolean;
 }
 
-// Each provider keeps roughly a third of a 2k screen's sidebar share; when the
-// row can't fit every provider at that width it wraps to 2 rows, then 3, and
-// so on — a provider is never dropped or hidden.
-export const MIN_PROVIDER_SLOT_WIDTH_PX = 300;
-const MIN_NAMED_SLOT_WIDTH_PX = 160;
+// The strip targets ~300px across on a 2k screen — five ~60px slots fit one
+// row at that width. Narrower containers wrap to 2 rows, then 3, and so on;
+// a provider is never dropped or hidden.
+const MIN_PROVIDER_SLOT_WIDTH_PX = 60;
+const MIN_NAMED_SLOT_WIDTH_PX = 120;
 
 export function resolveSidebarUsageGeometry(input: {
   slotCount: number;

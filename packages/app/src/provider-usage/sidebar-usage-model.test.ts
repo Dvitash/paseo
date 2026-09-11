@@ -192,49 +192,49 @@ describe("resolveSidebarProviderUsageSlots", () => {
 });
 
 describe("resolveSidebarUsageGeometry", () => {
-  it("wraps to additional rows instead of hiding providers", () => {
-    // 5 slots in 264px: only 1 fits at the 300px minimum -> 5 rows of 1.
+  it("fits the whole provider set in one row at ~300px, then wraps", () => {
+    // 5 slots in 264px: 4 fit at the 60px minimum -> 2 rows (3/2).
     expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 264 })).toEqual({
-      density: "spacious",
-      iconSize: 14,
-      slotsPerRow: 1,
-      rowCount: 5,
-      showsName: true,
-    });
-    // 5 slots in 640px: 2 per row -> 3 rows, balanced 2/2/1.
-    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 640 })).toEqual({
-      density: "spacious",
-      iconSize: 14,
-      slotsPerRow: 2,
-      rowCount: 3,
-      showsName: true,
-    });
-    // 5 slots in 950px: 3 per row -> 2 rows, balanced 3/2.
-    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 950 })).toEqual({
-      density: "spacious",
+      density: "compact",
       iconSize: 14,
       slotsPerRow: 3,
       rowCount: 2,
-      showsName: true,
+      showsName: false,
     });
-    // 5 slots in 1600px: all on one row.
-    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 1600 })).toEqual({
-      density: "spacious",
+    // 5 slots in 300px: all five fit one row.
+    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 300 })).toEqual({
+      density: "compact",
       iconSize: 14,
       slotsPerRow: 5,
       rowCount: 1,
-      showsName: true,
+      showsName: false,
+    });
+    // 5 slots in 150px: 2 per row -> 3 rows (2/2/1).
+    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 150 })).toEqual({
+      density: "compact",
+      iconSize: 14,
+      slotsPerRow: 2,
+      rowCount: 3,
+      showsName: false,
+    });
+    // 5 slots in 50px: 1 per row -> 5 rows.
+    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 50 })).toEqual({
+      density: "tight",
+      iconSize: 12,
+      slotsPerRow: 1,
+      rowCount: 5,
+      showsName: false,
     });
   });
 
-  it("drops the provider name before dropping the percentage", () => {
-    // 4 slots in 150px: 1 per row -> 4 rows of 150px each, too narrow for a name.
-    expect(resolveSidebarUsageGeometry({ slotCount: 4, availableWidth: 150 })).toEqual({
+  it("shows the provider name when a slot is wide enough", () => {
+    // 2 slots in 264px -> 132px slots, room for a name.
+    expect(resolveSidebarUsageGeometry({ slotCount: 2, availableWidth: 264 })).toEqual({
       density: "spacious",
       iconSize: 14,
-      slotsPerRow: 1,
-      rowCount: 4,
-      showsName: false,
+      slotsPerRow: 2,
+      rowCount: 1,
+      showsName: true,
     });
   });
 
@@ -242,11 +242,11 @@ describe("resolveSidebarUsageGeometry", () => {
     expect(resolveSidebarUsageGeometry({ slotCount: 2 })).toEqual({
       density: "spacious",
       iconSize: 14,
-      slotsPerRow: 1,
-      rowCount: 2,
+      slotsPerRow: 2,
+      rowCount: 1,
       showsName: true,
     });
-    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 0 }).rowCount).toBe(5);
+    expect(resolveSidebarUsageGeometry({ slotCount: 5, availableWidth: 0 }).rowCount).toBe(2);
   });
 });
 
