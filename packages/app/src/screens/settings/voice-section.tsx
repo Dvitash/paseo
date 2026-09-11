@@ -350,8 +350,14 @@ function DictationAdvancedRows({
   const languageInputRef = useRef<EditingTextInputHandle | null>(null);
 
   const rawProvider = dictation?.stt?.provider;
-  const provider: DictationProvider =
-    rawProvider === "openai" || rawProvider === "local" ? rawProvider : "local";
+  // Unknown providers from a newer daemon display raw and select nothing —
+  // never alias to a known value the user could then "save" over it.
+  const provider: DictationProvider | null =
+    rawProvider === "openai" || rawProvider === "local" ? rawProvider : null;
+  const providerLabel =
+    provider !== null
+      ? t(dictationProviderLabelKey(provider))
+      : (rawProvider ?? t(dictationProviderLabelKey("local")));
   const handleProviderChange = useCallback(
     (next: DictationProvider) => {
       void patch({ features: { dictation: { stt: { provider: next } } } });
@@ -384,14 +390,11 @@ function DictationAdvancedRows({
         </View>
         <DropdownMenu>
           <DropdownTrigger
-            accessibilityRole="button"
-            accessibilityLabel={`${t("settings.voice.dictation.provider.label")}: ${t(
-              dictationProviderLabelKey(provider),
-            )}`}
+            accessibilityLabel={`${t("settings.voice.dictation.provider.label")}: ${providerLabel}`}
             style={styles.trigger}
           >
             <Text style={styles.triggerText} numberOfLines={1}>
-              {t(dictationProviderLabelKey(provider))}
+              {providerLabel}
             </Text>
           </DropdownTrigger>
           <DropdownMenuContent side="bottom" align="end" width={240}>
