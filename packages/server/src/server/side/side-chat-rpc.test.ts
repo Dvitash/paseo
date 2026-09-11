@@ -6,7 +6,9 @@ import pino from "pino";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AgentManager } from "../agent/agent-manager.js";
 import type {
+  AgentCapabilityFlags,
   AgentClient,
+  AgentLaunchContext,
   AgentPersistenceHandle,
   AgentPromptInput,
   AgentProvider,
@@ -16,7 +18,10 @@ import type {
   AgentStreamEvent,
 } from "../agent/agent-sdk-types.js";
 import { AgentStorage } from "../agent/agent-storage.js";
-import { SIDE_READ_ONLY_LABEL } from "./provider-enforcement.js";
+import { ensureUnarchivedAgentLoaded } from "../agent/agent-loading.js";
+import { createPaseoToolCatalog } from "../agent/tools/paseo-tools.js";
+import type { ProviderSnapshotManager } from "../agent/provider-snapshot-manager.js";
+import { SIDE_MAIN_AGENT_ID_LABEL } from "./provider-enforcement.js";
 import { SideChatError, SideChatService } from "./side-chat-service.js";
 import { SideChatStore } from "./side-chat-store.js";
 
@@ -145,21 +150,30 @@ class TestAgentSession implements AgentSession {
 
   async close(): Promise<void> {}
 }
-
 class TestAgentClient implements AgentClient {
-  readonly capabilities = TEST_CAPABILITIES;
+  readonly capabilities: AgentCapabilityFlags;
   readonly createdConfigs: AgentSessionConfig[] = [];
+  readonly launchContexts: (AgentLaunchContext | undefined)[] = [];
   readonly sessions: TestAgentSession[] = [];
   sessionFactory?: (config: AgentSessionConfig) => TestAgentSession;
 
-  constructor(readonly provider: AgentProvider = "claude") {}
+  constructor(
+    readonly provider: AgentProvider = "claude",
+    capabilities: AgentCapabilityFlags = TEST_CAPABILITIES,
+  ) {
+    this.capabilities = capabilities;
+  }
 
   async isAvailable(): Promise<boolean> {
     return true;
   }
 
-  async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+  async createSession(
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+  ): Promise<AgentSession> {
     this.createdConfigs.push(config);
+    this.launchContexts.push(launchContext);
     const session = this.sessionFactory
       ? this.sessionFactory(config)
       : new TestAgentSession(config);
@@ -202,7 +216,10 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     storage = new AgentStorage(path.join(tmpDir, "agents"), logger);
     store = new SideChatStore(tmpDir, logger);
 
-    claudeClient = new TestAgentClient("claude");
+    claudeClient = new TestAgentClient("claude", {
+      ...TEST_CAPABILITIES,
+      supportsNativePaseoTools: true,
+    });
     codexClient = new TestAgentClient("codex");
     customUnsupportedClient = new TestAgentClient("custom-unsupported");
 
@@ -214,9 +231,21 @@ describe("SideChatService lifecycle and behavioral integration", () => {
       },
       registry: storage,
       logger,
+      mcpBaseUrl: "http://127.0.0.1:6767/mcp/agents",
+      paseoToolCatalogFactory: async (context) =>
+        createPaseoToolCatalog({
+          agentManager: manager,
+          agentStorage: storage,
+          providerSnapshotManager: {} as ProviderSnapshotManager,
+          paseoToolPolicy: context.paseoToolPolicy,
+          callerAgentId: context.callerAgentId,
+          logger,
+        }),
     });
 
-    service = new SideChatService(manager, store, logger);
+    service = new SideChatService(manager, store, logger, undefined, async () => ({
+      modeId: "bypassPermissions",
+    }));
 
     const mainAgent = await manager.createAgent(
       { provider: "claude", cwd: tmpDir, model: "claude-3-7-sonnet" },
@@ -264,7 +293,7 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     expect(snapshot.supportedProviders).not.toContain("custom-unsupported");
   });
 
-  test("first turn with streaming chunk assembly, read-only config, and steer proposal extraction", async () => {
+  test("first turn with streaming chunk assembly, tool-enabled config, and steer proposal extraction", async () => {
     claudeClient.sessionFactory = (config) => {
       const session = new TestAgentSession(config);
       session.turnScript = async (turnId, pushEvent) => {
@@ -313,7 +342,41 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     expect(sideAgent).not.toBeNull();
     expect(sideAgent?.internal).toBe(true);
     expect(sideAgent?.config.readOnly).toBe(true);
-    expect(sideAgent?.labels[SIDE_READ_ONLY_LABEL]).toBe("true");
+    expect(sideAgent?.config.durableInternal).toBe(true);
+    expect(sideAgent?.config.modeId).toBe("bypassPermissions");
+    expect(sideAgent?.config.paseoToolPolicy?.enabledTools).toContain("get_agent_status");
+    expect(sideAgent?.config.paseoToolPolicy?.enabledTools).not.toContain("send_agent_prompt");
+    expect(sideAgent?.labels[SIDE_MAIN_AGENT_ID_LABEL]).toBe(mainAgentId);
+
+    // Runtime delivery: the native-capable client receives the filtered
+    // catalog — read-only daemon tools present, mutating tools absent.
+    const sideLaunchContext = claudeClient.launchContexts.at(-1);
+    const sideTools = sideLaunchContext?.paseoTools;
+    expect(sideTools?.getTool("get_agent_status")).toBeDefined();
+    expect(sideTools?.getTool("list_agents")).toBeDefined();
+    expect(sideTools?.getTool("send_agent_prompt")).toBeUndefined();
+    expect(sideTools?.getTool("create_terminal")).toBeUndefined();
+    // Native delivery strips the internal MCP server from the launch config.
+    expect(claudeClient.createdConfigs.at(-1)?.mcpServers?.paseo).toBeUndefined();
+  });
+
+  test("MCP-only side provider receives the daemon MCP endpoint instead of native tools", async () => {
+    const codexMain = await manager.createAgent(
+      { provider: "codex", cwd: tmpDir, model: "codex-model" },
+      undefined,
+      { workspaceId: "ws-codex", initialTitle: "Codex Main" },
+    );
+
+    const snapshot = await service.send(codexMain.id, "status?", { wait: true });
+    expect(snapshot.status).toBe("idle");
+
+    const sideConfig = codexClient.createdConfigs.at(-1);
+    expect(sideConfig?.readOnly).toBe(true);
+    expect(sideConfig?.mcpServers?.paseo).toMatchObject({
+      type: "http",
+      url: expect.stringContaining("/mcp/agents?callerAgentId="),
+    });
+    expect(codexClient.launchContexts.at(-1)?.paseoTools).toBeUndefined();
   });
 
   test("second turn sends only new rows and main agent timeline remains untouched", async () => {
@@ -498,6 +561,72 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     expect(snapshot3.messages).toHaveLength(6);
   });
 
+  test("stale sideAgentId from a missing stored record self-heals into a fresh side", async () => {
+    // Give the main agent real timeline content so the recreated side's first
+    // prompt must carry the full context envelope.
+    await manager.appendTimelineItem(mainAgentId, {
+      type: "user_message",
+      text: "Build the status widget",
+    });
+    await manager.appendTimelineItem(mainAgentId, {
+      type: "assistant_message",
+      text: "Working on the status widget now.",
+    });
+
+    const first = await service.send(mainAgentId, "First question", { wait: true });
+    const staleSideId = first.sideAgentId;
+    expect(staleSideId).toBeDefined();
+
+    // Simulate a daemon restart where the side agent record is gone but the
+    // side-chat record still references it. Records live under
+    // agents/<project-dir>/<id>.json, and a fresh AgentStorage is required
+    // because the original instance caches records in memory.
+    await manager.archiveAgent(staleSideId!);
+    const agentsDir = path.join(tmpDir, "agents");
+    for (const entry of await fs.readdir(agentsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      await fs.rm(path.join(agentsDir, entry.name, `${staleSideId}.json`), { force: true });
+    }
+    const freshStorage = new AgentStorage(agentsDir, logger);
+    // Prove the record is truly gone so the loader hits "Agent not found",
+    // not the "Agent is archived" branch.
+    expect(await freshStorage.get(staleSideId!)).toBeNull();
+
+    const reloadedStore = new SideChatStore(tmpDir, logger);
+    const reloadedService = new SideChatService(manager, reloadedStore, logger, async (agentId) =>
+      ensureUnarchivedAgentLoaded(agentId, {
+        agentManager: manager,
+        agentStorage: freshStorage,
+        logger,
+      }),
+    );
+
+    const snapshot = await reloadedService.send(mainAgentId, "Are you still there?", {
+      wait: true,
+    });
+    expect(snapshot.status).toBe("idle");
+    expect(snapshot.sideAgentId).not.toBe(staleSideId);
+    expect(snapshot.sideAgentId).toBeDefined();
+    // Prior messages survive; the fresh side gets them as continuity context.
+    expect(snapshot.messages.length).toBeGreaterThanOrEqual(4);
+
+    // The recreated side must receive the full main-session context (not a
+    // delta against the stale checkpoint), including the trusted mainAgentId.
+    const newSideSession = claudeClient.sessions.at(-1)!;
+    const promptInput = newSideSession.startPrompts.at(-1)!;
+    const promptText =
+      typeof promptInput === "string"
+        ? promptInput
+        : promptInput
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("\n");
+    expect(promptText).toContain("main-session-context");
+    expect(promptText).toContain(mainAgentId);
+    expect(promptText).toContain("Working on the status widget now.");
+    expect(promptText).toContain("Earlier Side conversation for continuity:");
+  });
+
   test("supports explicit native provider selection on first turn for unsupported main provider and locks it", async () => {
     const unsupportedMain = await manager.createAgent(
       { provider: "custom-unsupported", cwd: tmpDir, model: "custom-model" },
@@ -565,7 +694,7 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     claudeClient.sessionFactory = (config) => {
       const session = new TestAgentSession(config);
       session.turnScript = async (turnId, pushEvent) => {
-        for (let i = 1; i <= 10; i++) {
+        for (let i = 1; i <= 26; i++) {
           pushEvent({
             type: "timeline",
             provider: session.provider,

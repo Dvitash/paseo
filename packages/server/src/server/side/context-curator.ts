@@ -67,6 +67,9 @@ export async function prepareSidePrompt(
     kind: isDelta ? "main-session-updates" : "main-session-context",
     reset: lastCheckpoint !== null && !isDelta,
     truncated,
+    // Trusted identity for daemon tools like get_agent_status — the linked
+    // main agent is not discoverable from list_agents alone.
+    mainAgentId,
     ...(originalRequest ? { originalRequest } : {}),
     activity,
   };

@@ -16,6 +16,20 @@ describe("provider Paseo-tool policy", () => {
     expect(ProviderOverrideSchema.parse({}).paseoTools).toBeUndefined();
   });
 
+  test("accepts the enabledTools allowlist and keeps old policy shapes parseable", () => {
+    // New shape: explicit allowlist.
+    expect(
+      ProviderPaseoToolsPolicySchema.parse({
+        enabledTools: ["list_agents", "get_agent_status"],
+      }),
+    ).toEqual({ enabledTools: ["list_agents", "get_agent_status"] });
+    // Old shapes written before enabledTools existed still parse unchanged.
+    expect(ProviderPaseoToolsPolicySchema.parse({ enabled: false })).toEqual({ enabled: false });
+    expect(ProviderPaseoToolsPolicySchema.parse({ disabledTools: ["create_agent"] })).toEqual({
+      disabledTools: ["create_agent"],
+    });
+  });
+
   test("accepts paseoTools on persisted provider overrides", () => {
     expect(
       ProviderOverrideSchema.parse({

@@ -62,23 +62,35 @@ export function attachAgentStoragePersistence(
   return unsubscribe;
 }
 
+const CONFIG_PASSTHROUGH_KEYS = [
+  "modeId",
+  "model",
+  "thinkingOptionId",
+  "featureValues",
+  "providerOptions",
+  "toolPolicy",
+  "systemPrompt",
+  "paseoToolPolicy",
+] as const satisfies readonly (keyof NonNullable<StoredAgentRecord["config"]>)[];
+
 export function buildConfigOverrides(record: StoredAgentRecord): Partial<AgentSessionConfig> {
   const cfg = record.config;
   const isReadOnly = cfg?.readOnly === true;
-  return stripInternalPaseoMcpServer({
+  const overrides: Partial<AgentSessionConfig> = {
     provider: record.provider,
     cwd: record.cwd,
-    modeId: cfg?.modeId ?? undefined,
-    model: cfg?.model ?? undefined,
-    thinkingOptionId: cfg?.thinkingOptionId ?? undefined,
-    featureValues: cfg?.featureValues ?? undefined,
-    providerOptions: cfg?.providerOptions ?? undefined,
-    toolPolicy: cfg?.toolPolicy ?? undefined,
-    systemPrompt: cfg?.systemPrompt ?? undefined,
     mcpServers: isReadOnly ? {} : (cfg?.mcpServers ?? undefined),
     readOnly: isReadOnly ? true : undefined,
+    durableInternal: cfg?.durableInternal === true ? true : undefined,
     internal: record.internal,
-  });
+  };
+  for (const key of CONFIG_PASSTHROUGH_KEYS) {
+    const value = cfg?.[key];
+    if (value !== null && value !== undefined) {
+      (overrides as Record<string, unknown>)[key] = value;
+    }
+  }
+  return stripInternalPaseoMcpServer(overrides as AgentSessionConfig);
 }
 
 export function buildSessionConfig(
@@ -102,6 +114,8 @@ export function buildSessionConfig(
     systemPrompt: overrides.systemPrompt,
     mcpServers: isReadOnly ? {} : overrides.mcpServers,
     readOnly: isReadOnly ? true : undefined,
+    durableInternal: overrides.durableInternal,
+    paseoToolPolicy: overrides.paseoToolPolicy,
     internal: overrides.internal,
   });
 }

@@ -58,6 +58,7 @@ import {
   type ToolCallTimelineItem,
 } from "../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../provider-session-import.js";
+import { keepOnlyInternalPaseoMcpServer } from "../runtime-mcp-config.js";
 import {
   raceProviderRefreshAbort,
   runProviderRefreshActivity,
@@ -1457,6 +1458,13 @@ export class OpenCodeAgentClient implements AgentClient {
       // Creating the first session for a directory is part of OpenCode coming up, so it
       // shares the server startup budget instead of a shorter one that fails agent
       // creation on contended cold starts.
+      const paseoToolPermissions = [...(launchContext?.paseoTools?.tools.keys() ?? [])].map(
+        (toolName) => ({
+          permission: `paseo_${toolName}`,
+          pattern: "*",
+          action: "allow" as const,
+        }),
+      );
       const readOnlyPermission = openCodeConfig.readOnly
         ? [
             { permission: "*", pattern: "*", action: "deny" as const },
@@ -1464,6 +1472,9 @@ export class OpenCodeAgentClient implements AgentClient {
             { permission: "glob", pattern: "*", action: "allow" as const },
             { permission: "grep", pattern: "*", action: "allow" as const },
             { permission: "list", pattern: "*", action: "allow" as const },
+            // Confined agents keep their policy-filtered read-only daemon
+            // tools (e.g. Side); the bridge executes them server-side.
+            ...paseoToolPermissions,
           ]
         : undefined;
 
@@ -1478,19 +1489,15 @@ export class OpenCodeAgentClient implements AgentClient {
         )}s`,
       );
 
-      if (response.error) {
-        throw new Error(`Failed to create OpenCode session: ${JSON.stringify(response.error)}`);
-      }
-
       const session = response.data;
       if (!session) {
         throw new Error("OpenCode session creation returned no data");
       }
 
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
-      const unbindBridge = openCodeConfig.readOnly
-        ? undefined
-        : this.bindBridgeSession(session.id, launchContext);
+      // The bridge is bound even for read-only sessions: its tools are the
+      // policy-filtered daemon surface and are allow-listed above.
+      const unbindBridge = this.bindBridgeSession(session.id, launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,
@@ -1527,7 +1534,15 @@ export class OpenCodeAgentClient implements AgentClient {
     const config: AgentSessionConfig = {
       ...metadata,
       ...overrides,
-      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
+      ...(isReadOnly
+        ? {
+            readOnly: true,
+            // Confined agents keep only the daemon's own MCP server so
+            // policy-filtered read-only daemon tools (e.g. Side) remain
+            // reachable.
+            mcpServers: keepOnlyInternalPaseoMcpServer(overrides?.mcpServers),
+          }
+        : {}),
       provider: "opencode",
       cwd,
     };
@@ -1545,14 +1560,23 @@ export class OpenCodeAgentClient implements AgentClient {
     });
 
     try {
-      await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
       if (openCodeConfig.readOnly) {
+        const paseoToolPermissions = [...(launchContext?.paseoTools?.tools.keys() ?? [])].map(
+          (toolName) => ({
+            permission: `paseo_${toolName}`,
+            pattern: "*",
+            action: "allow" as const,
+          }),
+        );
         const readOnlyPermission = [
           { permission: "*", pattern: "*", action: "deny" as const },
           { permission: "read", pattern: "*", action: "allow" as const },
           { permission: "glob", pattern: "*", action: "allow" as const },
           { permission: "grep", pattern: "*", action: "allow" as const },
           { permission: "list", pattern: "*", action: "allow" as const },
+          // Confined agents keep their policy-filtered read-only daemon
+          // tools (e.g. Side); the bridge executes them server-side.
+          ...paseoToolPermissions,
         ];
         const updateResponse = await client.session.update({
           sessionID: handle.sessionId,
@@ -1565,9 +1589,7 @@ export class OpenCodeAgentClient implements AgentClient {
           );
         }
       }
-      const unbindBridge = openCodeConfig.readOnly
-        ? undefined
-        : this.bindBridgeSession(handle.sessionId, launchContext);
+      const unbindBridge = this.bindBridgeSession(handle.sessionId, launchContext);
 
       return new OpenCodeAgentSession(
         openCodeConfig,

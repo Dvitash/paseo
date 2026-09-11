@@ -1860,6 +1860,7 @@ export const en = {
       untitledAgent: "Untitled Agent",
       inputPlaceholder: "Ask Side about this session...",
       send: "Send",
+      statusUpdate: "Status update",
       stop: "Stop",
       running: "Side agent is working...",
       proposedSteering: "Proposed Steering to Main",

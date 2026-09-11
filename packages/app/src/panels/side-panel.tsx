@@ -35,6 +35,7 @@ import type { Theme } from "@/styles/theme";
 import { isImeComposingKeyboardEvent } from "@/utils/keyboard-ime";
 import {
   SIDE_CHAT_TEST_IDS,
+  SIDE_STATUS_UPDATE_PROMPT,
   resolveEffectiveSideProvider,
   resolveSelectedMainAgent,
   type SelectedMainAgent,
@@ -220,27 +221,39 @@ function useSideComposer({
     ? supportedProviders.includes(mainAgentProvider)
     : true;
 
-  const handleSend = useCallback(async () => {
-    const text = draft.trim();
-    if (!text || !client || isSending) return;
-    const capturedAgentId = mainAgentId;
-    const options: SideChatSendOptions = {};
-    if (effectiveProvider) {
-      options.provider = effectiveProvider;
-    }
-    setIsSending(true);
-    setSendError(null);
-    try {
-      const nextSnapshot = await client.sendSideChat(capturedAgentId, text, options);
-      queryClient.setQueryData(queryKey, nextSnapshot);
-      setDraft("");
-      setResetKey((prev) => prev + 1);
-    } catch (err) {
-      setSendError(toErrorMessage(err));
-    } finally {
-      setIsSending(false);
-    }
-  }, [client, draft, effectiveProvider, isSending, mainAgentId, queryClient, queryKey]);
+  const sendMessage = useCallback(
+    async (text: string, options?: { clearDraft?: boolean }) => {
+      if (!text || !client || isSending) return;
+      const capturedAgentId = mainAgentId;
+      const sendOptions: SideChatSendOptions = {};
+      if (effectiveProvider) {
+        sendOptions.provider = effectiveProvider;
+      }
+      setIsSending(true);
+      setSendError(null);
+      try {
+        const nextSnapshot = await client.sendSideChat(capturedAgentId, text, sendOptions);
+        queryClient.setQueryData(queryKey, nextSnapshot);
+        if (options?.clearDraft) {
+          setDraft("");
+          setResetKey((prev) => prev + 1);
+        }
+      } catch (err) {
+        setSendError(toErrorMessage(err));
+      } finally {
+        setIsSending(false);
+      }
+    },
+    [client, effectiveProvider, isSending, mainAgentId, queryClient, queryKey],
+  );
+
+  const handleSend = useCallback(() => {
+    void sendMessage(draft.trim(), { clearDraft: true });
+  }, [draft, sendMessage]);
+
+  const handleStatusUpdate = useCallback(() => {
+    void sendMessage(SIDE_STATUS_UPDATE_PROMPT);
+  }, [sendMessage]);
 
   const handleStop = useCallback(async () => {
     if (!client || isStopping) return;
@@ -278,6 +291,7 @@ function useSideComposer({
     isMainProviderSupported,
     resetKey,
     handleSend,
+    handleStatusUpdate,
     handleStop,
     handleDraftChange,
     handleSelectProvider,
@@ -492,12 +506,12 @@ interface SideChatComposerBarProps {
   resetKey: number;
   onDraftChange: (text: string) => void;
   onSend: () => void;
+  onSendStatusUpdate: () => void;
 }
 
 type SideInputKeyPressEvent = NativeSyntheticEvent<
   TextInputKeyPressEventData & { shiftKey?: boolean; isComposing?: boolean; keyCode?: number }
 >;
-
 function SideChatComposerBar({
   draft,
   isSending,
@@ -507,9 +521,11 @@ function SideChatComposerBar({
   resetKey,
   onDraftChange,
   onSend,
+  onSendStatusUpdate,
 }: SideChatComposerBarProps) {
   const { t } = useTranslation();
   const sendDisabled = !draft.trim() || isSending || isRunning || !canSend;
+  const statusDisabled = isSending || isRunning || !canSend;
   const handleKeyPress = useCallback(
     (event: SideInputKeyPressEvent) => {
       if (
@@ -547,15 +563,26 @@ function SideChatComposerBar({
           multiline
           testID={SIDE_CHAT_TEST_IDS.input}
         />
-        <Button
-          size="sm"
-          disabled={sendDisabled}
-          loading={isSending}
-          onPress={onSend}
-          testID={SIDE_CHAT_TEST_IDS.sendButton}
-        >
-          {t("panels.side.send", { defaultValue: "Send" })}
-        </Button>
+        <View style={styles.composerActions}>
+          <Button
+            size="sm"
+            disabled={sendDisabled}
+            loading={isSending}
+            onPress={onSend}
+            testID={SIDE_CHAT_TEST_IDS.sendButton}
+          >
+            {t("panels.side.send", { defaultValue: "Send" })}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={statusDisabled}
+            onPress={onSendStatusUpdate}
+            testID={SIDE_CHAT_TEST_IDS.statusButton}
+          >
+            {t("panels.side.statusUpdate", { defaultValue: "Status update" })}
+          </Button>
+        </View>
       </View>
     </View>
   );
@@ -673,6 +700,7 @@ export function SideChatView({
         resetKey={composer.resetKey}
         onDraftChange={composer.handleDraftChange}
         onSend={composer.handleSend}
+        onSendStatusUpdate={composer.handleStatusUpdate}
       />
     </View>
   );
@@ -939,6 +967,11 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     color: theme.colors.destructive,
     flex: 1,
+  },
+  composerActions: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: theme.spacing[1],
   },
   errorText: {
     fontSize: theme.fontSize.sm,

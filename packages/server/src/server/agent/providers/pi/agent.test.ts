@@ -9,14 +9,18 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import pino from "pino";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import type { AgentSession, AgentSessionConfig, AgentStreamEvent } from "../../agent-sdk-types.js";
+import { createAgentMcpServer } from "../../mcp-server.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { describe, expect, onTestFinished, test } from "vitest";
 
-import type { AgentSession, AgentSessionConfig, AgentStreamEvent } from "../../agent-sdk-types.js";
 import {
   PiProviderParamsSchema,
   PiRpcAgentClient,
@@ -96,21 +100,50 @@ function readUtf8File(pathname: string): string {
 
 type PaseoExtensionListener = (event: unknown, context?: unknown) => unknown;
 
-async function loadPaseoExtensionListeners(
-  extensionPath: string,
-): Promise<Map<string, PaseoExtensionListener>> {
-  const listeners = new Map<string, PaseoExtensionListener>();
+interface LoadedPaseoExtension {
+  listeners: Map<string, PaseoExtensionListener>;
+  registeredTools: Array<{
+    name: string;
+    execute: (
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
+  }>;
+  activeTools: string[][];
+}
+
+async function loadPaseoExtension(extensionPath: string): Promise<LoadedPaseoExtension> {
+  const loaded: LoadedPaseoExtension = {
+    listeners: new Map(),
+    registeredTools: [],
+    activeTools: [],
+  };
+  // The extension file is generated at a runtime temp path, so a static import
+  // cannot work; this intentionally exercises the module loading boundary.
   const extension = (await import(pathToFileURL(extensionPath).href)) as {
     default: (piApi: {
       on: (event: string, listener: PaseoExtensionListener) => void;
       registerCommand: () => void;
+      registerTool: (tool: LoadedPaseoExtension["registeredTools"][number]) => void;
+      setActiveTools: (names: string[]) => void;
     }) => void;
   };
   extension.default({
-    on: (event, listener) => listeners.set(event, listener),
+    on: (event, listener) => loaded.listeners.set(event, listener),
     registerCommand: () => undefined,
+    registerTool: (tool) => loaded.registeredTools.push(tool),
+    setActiveTools: (names) => {
+      loaded.activeTools.push(names);
+    },
   });
-  return listeners;
+  return loaded;
+}
+
+async function loadPaseoExtensionListeners(
+  extensionPath: string,
+): Promise<Map<string, PaseoExtensionListener>> {
+  return (await loadPaseoExtension(extensionPath)).listeners;
 }
 
 async function applyPaseoExtensionSystemPrompt(
@@ -2695,6 +2728,8 @@ describe("PiRpcAgentClient", () => {
           url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
           auth: false,
           oauth: false,
+          directTools: true,
+          toolPrefix: "server",
         },
         localSecret: {
           command: "node",
@@ -2706,6 +2741,194 @@ describe("PiRpcAgentClient", () => {
 
     await session.close();
     expect(existsSync(configPath!)).toBe(false);
+  });
+
+  test("readOnly sessions bridge daemon tools through the trusted Paseo extension", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "paseo-pi-agent-"));
+    onTestFinished(() => rmSync(agentDir, { recursive: true, force: true }));
+    // A global MCP config exists but must not leak into the read-only launch.
+    writeFileSync(
+      path.join(agentDir, "mcp.json"),
+      JSON.stringify({
+        "mcp-servers": {
+          "brave-search": { url: "https://example.com/mcp/brave" },
+        },
+      }),
+    );
+    const pi = new FakePi();
+    const client = createClient(pi);
+
+    const session = await client.createSession(
+      createConfig({
+        readOnly: true,
+        mcpServers: {
+          paseo: {
+            type: "http",
+            url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+            headers: { Authorization: "Bearer test-token" },
+          },
+          localSecret: {
+            type: "stdio",
+            command: "node",
+            args: ["secret-server.js"],
+          },
+        },
+        paseoToolPolicy: { enabled: true, enabledTools: ["get_agent_status", "list_agents"] },
+      }),
+      { env: { PI_CODING_AGENT_DIR: agentDir } },
+    );
+
+    const actualLaunch = pi.recordedLaunches.at(-1)!;
+    expect(actualLaunch.readOnly).toBe(true);
+    // No MCP config is written: --no-extensions prevents the adapter from
+    // loading, so daemon tools arrive via the extension instead.
+    expect(actualLaunch.mcpConfigPath).toBeUndefined();
+    expect(actualLaunch.argv).not.toContain("--mcp-config");
+    // The paseo_<tool> names stay in --tools so Pi's allowed-tool filter admits
+    // the extension-registered tools.
+    expect(actualLaunch.argv).toEqual(
+      expect.arrayContaining([
+        "--tools",
+        "read,grep,find,ls,paseo_get_agent_status,paseo_list_agents",
+      ]),
+    );
+
+    const extensionPath = actualLaunch.extensionPaths?.[0];
+    // Drive the extension with a stubbed daemon endpoint over SSE.
+    const fetchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
+      fetchCalls.push({ url: String(url), body });
+      const payload =
+        body.method === "tools/list"
+          ? {
+              tools: [
+                {
+                  name: "get_agent_status",
+                  description: "Get agent status",
+                  inputSchema: { type: "object", properties: {} },
+                },
+              ],
+            }
+          : { content: [{ type: "text", text: "agent is idle" }], isError: false };
+      return new Response(
+        `data: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: payload })}\n\n`,
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      );
+    }) as typeof fetch;
+    let loaded: LoadedPaseoExtension;
+    let callResult: { content: Array<{ type: string; text?: string }>; details?: unknown };
+    try {
+      loaded = await loadPaseoExtension(extensionPath!);
+      await loaded.listeners.get("session_start")?.({}, {});
+
+      // tools/list fetched the daemon catalog; the allow-listed tool registered.
+      expect(fetchCalls[0]?.body.method).toBe("tools/list");
+      expect(loaded.registeredTools.map((tool) => tool.name)).toEqual(["paseo_get_agent_status"]);
+      expect(loaded.activeTools.at(-1)).toContain("paseo_get_agent_status");
+
+      // Executing the registered tool forwards a tools/call to the daemon.
+      callResult = await loaded.registeredTools[0]!.execute("call-1", {});
+      expect(fetchCalls[1]?.body.method).toBe("tools/call");
+      const callParams = fetchCalls[1]?.body.params as { name?: string } | undefined;
+      expect(callParams?.name).toBe("get_agent_status");
+      expect(callResult.content[0]?.text).toBe("agent is idle");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // The guard still blocks tools outside the allowlist.
+    const toolCallListener = loaded!.listeners.get("tool_call");
+    expect(toolCallListener!({ toolName: "paseo_get_agent_status", input: {} })).toBeUndefined();
+    expect(toolCallListener!({ toolName: "paseo_send_agent_prompt", input: {} })).toMatchObject({
+      block: true,
+    });
+
+    await session.close();
+  });
+
+  test("readOnly tool bridge works against the real stateless Agent MCP transport", async () => {
+    // Serve the real Agent MCP server over the real stateless transport — no
+    // fetch stub — so the extension's SSE parsing and JSON-RPC calls are
+    // exercised end to end.
+    const logger = pino({ level: "silent" });
+    const receivedAuth: string[] = [];
+    const handleMcpRequest = async (
+      req: import("node:http").IncomingMessage,
+      res: import("node:http").ServerResponse,
+    ) => {
+      receivedAuth.push(String(req.headers.authorization ?? ""));
+      const server = await createAgentMcpServer({
+        agentManager: {
+          getAgent: (id: string) =>
+            id === "agent-1" ? { id: "agent-1", cwd: "/tmp/x", provider: "pi", config: {} } : null,
+          listAgents: () => [],
+        } as never,
+        agentStorage: { list: async () => [], get: async () => null } as never,
+        providerSnapshotManager: { listRegisteredProviderIds: () => [] } as never,
+        paseoToolPolicy: { enabled: true, enabledTools: ["list_agents"] },
+        callerAgentId: "agent-1",
+        logger,
+      });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableDnsRebindingProtection: false,
+      });
+      await server.connect(transport);
+      res.on("close", () => {
+        void transport.close();
+        void server.close();
+      });
+      await transport.handleRequest(req, res);
+    };
+    const httpServer: Server = createServer((req, res) => {
+      const onError = () => {
+        if (!res.headersSent) res.statusCode = 500;
+        res.end();
+      };
+      handleMcpRequest(req, res).catch(onError);
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const closeHttpServer = () =>
+      new Promise<void>((resolve) => {
+        httpServer.close(() => resolve());
+      });
+    onTestFinished(closeHttpServer);
+    const { port } = httpServer.address() as AddressInfo;
+
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        readOnly: true,
+        mcpServers: {
+          paseo: {
+            type: "http",
+            url: `http://127.0.0.1:${port}/mcp/agents?callerAgentId=agent-1`,
+            headers: { Authorization: "Bearer test-capability-token" },
+          },
+        },
+        paseoToolPolicy: { enabled: true, enabledTools: ["list_agents"] },
+      }),
+    );
+
+    const extensionPath = pi.recordedLaunches.at(-1)!.extensionPaths![0]!;
+    const loaded = await loadPaseoExtension(extensionPath);
+    await loaded.listeners.get("session_start")?.({}, {});
+    expect(loaded.registeredTools.map((tool) => tool.name)).toEqual(["paseo_list_agents"]);
+    const result = await loaded.registeredTools[0]!.execute("call-1", {});
+    expect(result.details).toMatchObject({
+      isError: false,
+      structuredContent: { agents: [] },
+    });
+    // The bridge forwards the injected capability token on every request.
+    expect(receivedAuth).toEqual(["Bearer test-capability-token", "Bearer test-capability-token"]);
+
+    await session.close();
   });
 
   test("reports the path of a malformed Pi global MCP config", async () => {

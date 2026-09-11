@@ -1883,6 +1883,7 @@ export const ptBR: TranslationResources = {
       untitledAgent: "Agente sem título",
       inputPlaceholder: "Pergunte ao Side sobre esta sessão...",
       send: "Enviar",
+      statusUpdate: "Atualização de status",
       stop: "Parar",
       running: "O agente Side está trabalhando...",
       proposedSteering: "Direcionamento proposto para o principal",

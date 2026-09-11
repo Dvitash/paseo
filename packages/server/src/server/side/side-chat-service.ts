@@ -8,9 +8,8 @@ import { prepareSidePrompt } from "./context-curator.js";
 import {
   SUPPORTED_SIDE_PROVIDERS,
   SIDE_MAIN_AGENT_ID_LABEL,
-  SIDE_READ_ONLY_LABEL,
   buildSideProviderConfig,
-  verifySideReadOnlyIntegrity,
+  verifySideIntegrity,
 } from "./provider-enforcement.js";
 import { SideChatStore } from "./side-chat-store.js";
 import type { SideChatSnapshot, StoredSideChatRecord } from "./types.js";
@@ -43,20 +42,31 @@ export function getSideChatService(
   storage: AgentStorage,
   paseoHome: string,
   logger: Logger,
+  resolveCreateConfig?: SideCreateConfigResolver,
 ): SideChatService {
   let service = services.get(manager);
   if (!service) {
-    service = new SideChatService(manager, new SideChatStore(paseoHome), logger, (agentId) =>
-      ensureUnarchivedAgentLoaded(agentId, {
-        agentManager: manager,
-        agentStorage: storage,
-        logger,
-      }),
+    service = new SideChatService(
+      manager,
+      new SideChatStore(paseoHome),
+      logger,
+      (agentId) =>
+        ensureUnarchivedAgentLoaded(agentId, {
+          agentManager: manager,
+          agentStorage: storage,
+          logger,
+        }),
+      resolveCreateConfig,
     );
     services.set(manager, service);
   }
   return service;
 }
+
+export type SideCreateConfigResolver = (input: {
+  cwd: string;
+  provider: string;
+}) => Promise<{ modeId?: string; featureValues?: Record<string, unknown> }>;
 
 export class SideChatService {
   private readonly busy = new Set<string>();
@@ -68,12 +78,25 @@ export class SideChatService {
     private readonly store: SideChatStore,
     private readonly logger?: Logger,
     private readonly loadAgent?: (agentId: string) => Promise<ManagedAgent>,
+    private readonly resolveCreateConfig?: SideCreateConfigResolver,
   ) {}
 
   private async requireAgent(id: string): Promise<ManagedAgent> {
-    const agent = this.loadAgent ? await this.loadAgent(id) : this.agentManager.getAgent(id);
-    if (!agent) throw new SideChatError("agent_missing", `Agent '${id}' is unavailable.`);
-    return agent;
+    try {
+      const agent = this.loadAgent ? await this.loadAgent(id) : this.agentManager.getAgent(id);
+      if (!agent) throw new SideChatError("agent_missing", `Agent '${id}' is unavailable.`);
+      return agent;
+    } catch (error) {
+      if (error instanceof SideChatError) throw error;
+      // The storage-backed loader reports missing or archived records as plain
+      // Errors; normalize them so callers can distinguish a stale sideAgentId
+      // from a real load failure.
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith("Agent not found:") || message.startsWith("Agent is archived:")) {
+        throw new SideChatError("agent_missing", `Agent '${id}' is unavailable.`);
+      }
+      throw error;
+    }
   }
 
   async listSupportedProviders(): Promise<string[]> {
@@ -205,31 +228,27 @@ export class SideChatService {
         "provider_locked",
         "This Side conversation already has a provider and model.",
       );
-
-    let side: ManagedAgent;
-    if (record.sideAgentId) {
-      side = await this.requireAgent(record.sideAgentId);
-      verifySideReadOnlyIntegrity(side);
-    } else {
-      const config = buildSideProviderConfig({
-        provider: record.provider ?? main.provider,
-        cwd: main.cwd,
-        model: record.model ?? undefined,
-      });
-      side = await this.agentManager.createAgent(config, undefined, {
-        workspaceId: main.workspaceId,
-        labels: { [SIDE_READ_ONLY_LABEL]: "true", [SIDE_MAIN_AGENT_ID_LABEL]: mainAgentId },
-        initialTitle: `Side: ${main.config.title ?? mainAgentId}`,
-      });
-      record.sideAgentId = side.id;
-      record.model = side.config.model ?? record.model;
-      await this.store.save(record);
-    }
+    const { side, recreated } = await this.resolveSideAgent(main, record);
+    const promptText = recreated
+      ? [
+          "Earlier Side conversation for continuity:",
+          JSON.stringify(
+            record.messages.slice(-10).map((message) => ({
+              role: message.role,
+              text: message.text.slice(0, 1000),
+            })),
+          ),
+          "Current Side user request:",
+          userText,
+        ].join("\n\n")
+      : userText;
     const prepared = await prepareSidePrompt({
       mainAgentId,
       agentManager: this.agentManager,
-      lastCheckpoint: record.checkpoint,
-      userText,
+      // A recreated side has no memory of the old context window; the stale
+      // checkpoint would take the delta path and could emit only the user text.
+      lastCheckpoint: recreated ? null : record.checkpoint,
+      userText: promptText,
     });
     record.messages.push({ id: randomUUID(), role: "user", text: userText });
     record.status = "running";
@@ -248,6 +267,50 @@ export class SideChatService {
     return this.snapshot(record);
   }
 
+  private async resolveSideAgent(
+    main: ManagedAgent,
+    record: StoredSideChatRecord,
+  ): Promise<{ side: ManagedAgent; recreated: boolean }> {
+    let side: ManagedAgent | null = null;
+    let recreated = false;
+    if (record.sideAgentId) {
+      try {
+        side = await this.requireAgent(record.sideAgentId);
+      } catch (error) {
+        if (error instanceof SideChatError && error.code === "agent_missing") {
+          record.sideAgentId = null;
+          recreated = record.messages.length > 0;
+        } else {
+          throw error;
+        }
+      }
+    }
+    if (side) {
+      verifySideIntegrity(side);
+      return { side, recreated };
+    }
+    const provider = record.provider ?? main.provider;
+    const resolved = this.resolveCreateConfig
+      ? await this.resolveCreateConfig({ cwd: main.cwd, provider })
+      : {};
+    const config = buildSideProviderConfig({
+      provider,
+      cwd: main.cwd,
+      model: record.model ?? undefined,
+      modeId: resolved.modeId,
+      featureValues: resolved.featureValues,
+    });
+    side = await this.agentManager.createAgent(config, undefined, {
+      workspaceId: main.workspaceId,
+      labels: { [SIDE_MAIN_AGENT_ID_LABEL]: record.mainAgentId },
+      initialTitle: `Side: ${main.config.title ?? record.mainAgentId}`,
+    });
+    record.sideAgentId = side.id;
+    record.model = side.config.model ?? record.model;
+    await this.store.save(record);
+    return { side, recreated };
+  }
+
   private async execute(
     turn: ActiveSideTurn,
     sideId: string,
@@ -260,13 +323,13 @@ export class SideChatService {
     let started = false;
     const timeout = setTimeout(() => {
       turn.limitError =
-        "Side reached its two-minute response limit. Ask a narrower question to continue.";
+        "Side reached its five-minute response limit. Ask a narrower question to continue.";
       void this.agentManager
         .cancelAgentRun(sideId)
         .catch((error: unknown) =>
           this.logger?.error({ err: error }, "Side timeout cancellation failed"),
         );
-    }, 120_000);
+    }, 300_000);
     timeout.unref();
     try {
       const events = this.agentManager.streamAgent(sideId, prompt);
@@ -283,7 +346,7 @@ export class SideChatService {
           reply.text += event.item.text;
         }
         if (event.item.type === "tool_call") toolIds.add(event.item.callId);
-        const overBudget = toolIds.size > 8 || reply.text.length > 32_000;
+        const overBudget = toolIds.size > 24 || reply.text.length > 32_000;
         if (overBudget) {
           reply.text = reply.text.slice(0, 32_000);
           turn.limitError =

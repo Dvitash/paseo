@@ -342,6 +342,12 @@ function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentC
   if (config.readOnly !== undefined) {
     serializable.readOnly = config.readOnly;
   }
+  if (config.durableInternal !== undefined) {
+    serializable.durableInternal = config.durableInternal;
+  }
+  if (config.paseoToolPolicy !== undefined) {
+    serializable.paseoToolPolicy = config.paseoToolPolicy;
+  }
   return Object.keys(serializable).length ? serializable : null;
 }
 

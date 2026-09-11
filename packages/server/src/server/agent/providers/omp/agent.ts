@@ -2530,7 +2530,7 @@ export class OmpAgentClient implements AgentClient {
         protocolMode: "rpc-ui",
         model: config.model,
         thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
-        noSession: config.internal === true && !isReadOnly,
+        noSession: config.internal === true && !isReadOnly && config.durableInternal !== true,
         modeId: launchMode.modeId,
         extraArgs: launchMode.extraArgs,
         systemPrompt: composeSystemPromptParts(

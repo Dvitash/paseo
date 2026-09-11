@@ -6,6 +6,7 @@ import type {
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type { AgentProviderNotice, AgentTaskItem };
@@ -630,6 +631,17 @@ export interface AgentSessionConfig {
    * They are used for ephemeral system tasks like commit/PR generation.
    */
   internal?: boolean;
+  /**
+   * Internal agents are normally ephemeral and never persisted. Durable internal
+   * agents (e.g. Side chat) persist so they can be resumed after a restart.
+   */
+  durableInternal?: boolean;
+  /**
+   * Per-agent override for the daemon tool policy. When set, it replaces the
+   * provider-level policy resolved from daemon config. Persisted so the same
+   * restriction applies on resume.
+   */
+  paseoToolPolicy?: ProviderPaseoToolsPolicy;
   /**
    * When true, the agent is strictly read-only and immutable.
    * Central create/resume, modes, and tool configurations cannot widen this permission.

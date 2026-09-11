@@ -89,12 +89,14 @@ describe("Side context-curator", () => {
       kind: string;
       reset: boolean;
       truncated: boolean;
+      mainAgentId: string;
       originalRequest?: string;
       activity: string;
     };
     expect(parsedContext.kind).toBe("main-session-context");
     expect(parsedContext.reset).toBe(false);
     expect(parsedContext.truncated).toBe(false);
+    expect(parsedContext.mainAgentId).toBe("main-agent-1");
     expect(parsedContext.originalRequest).toBe("Please inspect src/index.ts");
     expect(parsedContext.activity).toContain("Please inspect src/index.ts");
     expect(parsedContext.activity).toContain("I have inspected the file.");

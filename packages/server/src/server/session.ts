@@ -1149,6 +1149,15 @@ export class Session {
       this.agentStorage,
       paseoHome,
       this.sessionLogger,
+      (input) =>
+        this.providerSnapshotManager.resolveCreateConfig({
+          cwd: input.cwd,
+          provider: input.provider,
+          requestedMode: undefined,
+          featureValues: undefined,
+          parent: null,
+          unattended: true,
+        }),
     );
     this.subscribeToAgentEvents();
     this.subscribeToRegistryMutations();

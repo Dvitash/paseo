@@ -1869,6 +1869,7 @@ export const ja: TranslationResources = {
       untitledAgent: "無題のエージェント",
       inputPlaceholder: "このセッションについて Side に質問...",
       send: "送信",
+      statusUpdate: "ステータス更新",
       stop: "停止",
       running: "Side エージェントが処理中...",
       proposedSteering: "メインへの提案指示",

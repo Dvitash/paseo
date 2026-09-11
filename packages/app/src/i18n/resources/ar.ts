@@ -1851,6 +1851,7 @@ export const ar: TranslationResources = {
       untitledAgent: "وكيل بدون عنوان",
       inputPlaceholder: "اسأل Side عن هذه الجلسة...",
       send: "إرسال",
+      statusUpdate: "تحديث الحالة",
       stop: "إيقاف",
       running: "وكيل Side يعمل...",
       proposedSteering: "توجيه مقترح إلى الرئيسي",

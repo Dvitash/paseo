@@ -1861,6 +1861,7 @@ export const ko: TranslationResources = {
       untitledAgent: "제목 없는 에이전트",
       inputPlaceholder: "이 세션에 대해 Side에 질문하기...",
       send: "전송",
+      statusUpdate: "상태 업데이트",
       stop: "중지",
       running: "Side 에이전트가 작업 중...",
       proposedSteering: "메인 에이전트 제안 지시",

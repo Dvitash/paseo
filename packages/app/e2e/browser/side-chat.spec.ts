@@ -96,6 +96,47 @@ test("Side is enabled by default and retains its conversation when reopened", as
   }
 });
 
+test("Side status button sends the fixed prompt and preserves a typed draft", async ({ page }) => {
+  const workspace = await seedMockAgentWorkspace({
+    repoPrefix: "side-chat-status-",
+    title: "Status main context",
+    model: "ten-second-stream",
+  });
+  try {
+    await openAgentRoute(page, workspace);
+    await waitForWorkspaceTabsVisible(page);
+    const sidebar = await ensureExplorerSidebar(page);
+    const sideTab = sidebar.getByRole("button", {
+      name: "Side chat linked to active agent",
+      exact: true,
+    });
+    await expect(sideTab).toBeVisible();
+    await sideTab.click();
+
+    const side = sidebar.getByTestId("side-chat-view");
+    await expect(side.getByTestId("side-panel-linked-header")).toContainText("Status main context");
+
+    const input = side.getByTestId("side-input");
+    await input.fill("draft I am still writing");
+    await side.getByTestId("side-status-button").click();
+
+    await expect(
+      side.getByText(
+        "Give me a status update on the main agent: what it is doing right now, what it just did, and what is next.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(side.getByTestId("side-running-indicator")).toBeVisible();
+    // The quick action must not consume the in-progress draft.
+    await expect(input).toHaveValue("draft I am still writing");
+
+    await side.getByTestId("side-stop-button").click();
+    await expect(side.getByTestId("side-running-indicator")).not.toBeVisible();
+  } finally {
+    await workspace.cleanup();
+  }
+});
+
 test("Side is available in the compact Explorer and stays linked when reopened", async ({
   page,
 }) => {

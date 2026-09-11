@@ -40,6 +40,7 @@ import {
 } from "../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../provider-session-import.js";
 import { runProviderRefreshActivity } from "../provider-refresh-deadline.js";
+import { keepOnlyInternalPaseoMcpServer } from "../runtime-mcp-config.js";
 import type { Logger } from "pino";
 
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
@@ -5129,14 +5130,21 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private buildCodexInnerConfig(): Record<string, unknown> | null {
     if (this.config.readOnly) {
-      const disabledMcpServers: Record<string, unknown> = {};
+      const mcpServers: Record<string, unknown> = {};
       for (const serverName of this.resolvedNativeMcpServers) {
-        disabledMcpServers[serverName] = { enabled: false, enabled_tools: [] };
+        mcpServers[serverName] = { enabled: false, enabled_tools: [] };
+      }
+      // Confined agents keep only the daemon's own MCP server so policy-
+      // filtered read-only daemon tools (e.g. Side) remain reachable.
+      for (const [name, serverConfig] of Object.entries(
+        keepOnlyInternalPaseoMcpServer(this.config.mcpServers),
+      )) {
+        mcpServers[name] = toCodexMcpConfig(serverConfig);
       }
       return {
         sandbox_mode: "read-only",
         approval_policy: "never",
-        mcp_servers: disabledMcpServers,
+        mcp_servers: mcpServers,
         web_search: "disabled",
         features: {
           apps: false,
@@ -7061,7 +7069,15 @@ export class CodexAppServerAgentClient implements AgentClient {
     const merged: AgentSessionConfig = {
       ...storedConfig,
       ...overrides,
-      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
+      ...(isReadOnly
+        ? {
+            readOnly: true,
+            // Confined agents keep only the daemon's own MCP server so
+            // policy-filtered read-only daemon tools (e.g. Side) remain
+            // reachable.
+            mcpServers: keepOnlyInternalPaseoMcpServer(overrides?.mcpServers),
+          }
+        : {}),
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
     };

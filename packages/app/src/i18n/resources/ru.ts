@@ -1882,6 +1882,7 @@ export const ru: TranslationResources = {
       untitledAgent: "Безымянный агент",
       inputPlaceholder: "Спросите Side об этой сессии...",
       send: "Отправить",
+      statusUpdate: "Обновление статуса",
       stop: "Остановить",
       running: "Агент Side работает...",
       proposedSteering: "Предлагаемое указание для основного агента",

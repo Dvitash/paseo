@@ -1897,6 +1897,7 @@ export const es: TranslationResources = {
       untitledAgent: "Agente sin título",
       inputPlaceholder: "Pregunta a Side sobre esta sesión...",
       send: "Enviar",
+      statusUpdate: "Actualización de estado",
       stop: "Detener",
       running: "El agente Side está trabajando...",
       proposedSteering: "Dirección propuesta hacia el principal",

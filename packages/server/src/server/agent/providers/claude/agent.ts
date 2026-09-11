@@ -140,6 +140,7 @@ import { withTimeout } from "../../../../utils/promise-timeout.js";
 import { terminateWithTreeKill } from "../../../../utils/tree-kill.js";
 import { execCommand } from "../../../../utils/spawn.js";
 import { composeSystemPromptParts } from "../../system-prompt.js";
+import { keepOnlyInternalPaseoMcpServer } from "../../runtime-mcp-config.js";
 
 const fsPromises = promises;
 const CLAUDE_SETTING_SOURCES: NonNullable<ClaudeOptions["settingSources"]> = [
@@ -1548,7 +1549,15 @@ export class ClaudeAgentClient implements AgentClient {
     const merged: Partial<AgentSessionConfig> = {
       ...metadata,
       ...overrides,
-      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
+      ...(isReadOnly
+        ? {
+            readOnly: true,
+            // Confined agents keep only the daemon's own MCP server so
+            // policy-filtered read-only daemon tools (e.g. Side) remain
+            // reachable.
+            mcpServers: keepOnlyInternalPaseoMcpServer(overrides?.mcpServers),
+          }
+        : {}),
     };
     if (!merged.cwd) {
       throw new Error("Claude resume requires the original working directory in metadata");
@@ -3345,7 +3354,9 @@ class ClaudeAgentSession implements AgentSession {
         allowDangerouslySkipPermissions: false,
         agents: undefined,
         settingSources: [],
-        mcpServers: {},
+        // Confined agents keep only the daemon's own MCP server so policy-
+        // filtered read-only daemon tools (e.g. Side) remain reachable.
+        mcpServers: keepOnlyInternalPaseoMcpServer(this.config.mcpServers),
       };
     }
     return {
@@ -3363,14 +3374,19 @@ class ClaudeAgentSession implements AgentSession {
   private applyReadOnlyOverrides(base: ClaudeOptions): ClaudeOptions {
     const baseSettings =
       typeof base.settings === "object" && base.settings !== null ? base.settings : {};
+    const paseoMcpServers = keepOnlyInternalPaseoMcpServer(base.mcpServers);
+    const hasPaseoTools = Object.keys(paseoMcpServers).length > 0;
     return {
       ...base,
       permissionMode: "plan",
       allowDangerouslySkipPermissions: false,
       strictMcpConfig: true,
-      mcpServers: {},
+      mcpServers: paseoMcpServers,
       settingSources: [],
       tools: ["Read", "Grep", "Glob"],
+      // MCP tools are not gated by `tools`; pre-approve the daemon server so
+      // its policy-filtered read-only tools run without a permission prompt.
+      ...(hasPaseoTools ? { allowedTools: [...(base.allowedTools ?? []), "mcp__paseo"] } : {}),
       disallowedTools: [
         ...(base.disallowedTools ?? []),
         "Write",

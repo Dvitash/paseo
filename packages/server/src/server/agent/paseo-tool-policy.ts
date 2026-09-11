@@ -21,6 +21,9 @@ export function isPaseoToolEnabled(
   if (!isPaseoToolPolicyEnabled(policy)) {
     return false;
   }
+  if (policy?.enabledTools !== undefined) {
+    return policy.enabledTools.includes(toolName);
+  }
   return !policy?.disabledTools?.includes(toolName);
 }
 

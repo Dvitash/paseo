@@ -1,4 +1,4 @@
-import type { AgentSessionConfig, McpServerConfig } from "./agent-sdk-types.js";
+import type { AgentSessionConfig } from "./agent-sdk-types.js";
 
 const PASEO_MCP_SERVER_NAME = "paseo";
 const PASEO_MCP_PATHNAME = "/mcp/agents";
@@ -24,6 +24,21 @@ export function stripInternalPaseoMcpServer(config: AgentSessionConfig): AgentSe
     delete next.mcpServers;
   }
   return next;
+}
+
+/**
+ * Read-only agents may not keep user-configured MCP servers, but the daemon's
+ * own injected server is allowed so confined agents (e.g. Side) can use their
+ * policy-filtered read-only daemon tools. Returns only the internal server
+ * entry, or an empty object when it is absent.
+ */
+export function keepOnlyInternalPaseoMcpServer<T extends { type?: string; url?: string }>(
+  mcpServers: Record<string, T> | undefined | null,
+): Record<string, T> {
+  const paseoServer = mcpServers?.[PASEO_MCP_SERVER_NAME];
+  return paseoServer && isInternalPaseoMcpServer(paseoServer)
+    ? { [PASEO_MCP_SERVER_NAME]: paseoServer }
+    : {};
 }
 
 export function withRuntimePaseoMcpServer(params: {
@@ -57,13 +72,13 @@ export function withRuntimePaseoMcpServer(params: {
   };
 }
 
-function isInternalPaseoMcpServer(config: McpServerConfig): boolean {
+export function isInternalPaseoMcpServer(config: { type?: string; url?: string }): boolean {
   if (config.type !== "http" && config.type !== "sse") {
     return false;
   }
 
   try {
-    return new URL(config.url).pathname === PASEO_MCP_PATHNAME;
+    return new URL(config.url ?? "").pathname === PASEO_MCP_PATHNAME;
   } catch {
     return false;
   }

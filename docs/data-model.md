@@ -106,16 +106,19 @@ Each agent is stored as a separate JSON file, grouped by project directory.
 
 ### Nested: SerializableConfig
 
-| Field              | Type                       | Description                  |
-| ------------------ | -------------------------- | ---------------------------- |
-| `title`            | `string?`                  | Configured title             |
-| `modeId`           | `string?`                  | Configured mode              |
-| `model`            | `string?`                  | Configured model             |
-| `thinkingOptionId` | `string?`                  | Thinking/reasoning level     |
-| `featureValues`    | `Record<string, unknown>?` | Feature preference overrides |
-| `extra`            | `Record<string, any>?`     | Provider-specific config     |
-| `systemPrompt`     | `string?`                  | Custom system prompt         |
-| `mcpServers`       | `Record<string, any>?`     | MCP server configurations    |
+| Field              | Type                        | Description                                              |
+| ------------------ | --------------------------- | -------------------------------------------------------- |
+| `title`            | `string?`                   | Configured title                                         |
+| `modeId`           | `string?`                   | Configured mode                                          |
+| `model`            | `string?`                   | Configured model                                         |
+| `thinkingOptionId` | `string?`                   | Thinking/reasoning level                                 |
+| `featureValues`    | `Record<string, unknown>?`  | Feature preference overrides                             |
+| `extra`            | `Record<string, any>?`      | Provider-specific config                                 |
+| `systemPrompt`     | `string?`                   | Custom system prompt                                     |
+| `mcpServers`       | `Record<string, any>?`      | MCP server configurations                                |
+| `readOnly`         | `boolean?`                  | Read-only confinement marker                             |
+| `durableInternal`  | `boolean?`                  | Persist internal agents (e.g. Side chat) across restarts |
+| `paseoToolPolicy`  | `ProviderPaseoToolsPolicy?` | Per-agent daemon tool policy override                    |
 
 ### Nested: RuntimeInfo
 

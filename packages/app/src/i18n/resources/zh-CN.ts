@@ -1829,6 +1829,7 @@ export const zhCN: TranslationResources = {
       untitledAgent: "未命名 Agent",
       inputPlaceholder: "向 Side 询问此会话的内容...",
       send: "发送",
+      statusUpdate: "状态更新",
       stop: "停止",
       running: "Side agent 正在处理...",
       proposedSteering: "建议发送至主 agent 的引导",
