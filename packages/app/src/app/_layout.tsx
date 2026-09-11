@@ -92,6 +92,7 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { resolveExplorerSidebarPresentation } from "@/workspace-tabs/explorer-sidebar";
 import { KeyboardShiftProvider } from "@/hooks/use-keyboard-shift-style";
 import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
+import { useStandalonePwaViewportHeal } from "@/hooks/use-standalone-pwa-viewport-heal";
 import { useOpenProject } from "@/hooks/use-open-project";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useStableEvent } from "@/hooks/use-stable-event";
@@ -486,6 +487,7 @@ function AppContainer({ children, chromeEnabled: chromeEnabledOverride }: AppCon
   });
   const usesCompactExplorerHost = explorerSidebarPresentation !== "pane";
   useCompactWebViewportZoomLock(isCompactLayout);
+  useStandalonePwaViewportHeal();
   const pathname = usePathname();
   const isWorkspaceRoute = parseHostWorkspaceRouteFromPathname(pathname) !== null;
   const isWorkspaceFocusModeEnabled = isWorkspaceRoute && isFocusModeEnabled;

@@ -6,6 +6,7 @@ import { seedWorkspace } from "../support/helpers/seed-client";
 import {
   expectMobileAgentSidebarHidden,
   expectMobileAgentSidebarVisible,
+  openMobileAgentSidebar,
 } from "../support/helpers/sidebar";
 import {
   expectTimelinePromptVisible,
@@ -131,6 +132,115 @@ test("mobile shell and composer follow viewport height changes without a bottom 
     await page.setViewportSize({ width: 390, height: 844 });
     await expectViewportFit(page, 844);
     await page.screenshot({ path: test.info().outputPath("mobile-shell.png") });
+  } finally {
+    await seeded.cleanup();
+  }
+});
+
+test("open sidebar panel and footer reach the viewport bottom", async ({ page }) => {
+  const seeded = await seedWorkspace({ repoPrefix: "mobile-sidebar-fit-" });
+  try {
+    await gotoWorkspace(page, seeded.workspaceId);
+    await openMobileAgentSidebar(page);
+    await expectMobileAgentSidebarVisible(page);
+    const boxes = await page.evaluate(() => {
+      const rect = (selector: string) => {
+        const element = document.querySelector(selector);
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom };
+      };
+      return {
+        viewport: window.innerHeight,
+        root: rect("#root"),
+        gestureHost: rect("#agent-list-gesture-host"),
+        footer: rect('[data-testid="sidebar-footer"]'),
+      };
+    });
+    expect(boxes.root).not.toBeNull();
+    expect(boxes.gestureHost).not.toBeNull();
+    expect(boxes.footer).not.toBeNull();
+    // The shell, the overlay host, and the sidebar footer must all reach the
+    // viewport bottom — a short root or an oversized bottom inset both leave a
+    // dead band below the sidebar.
+    expect(boxes.root!.bottom).toBe(boxes.viewport);
+    expect(boxes.gestureHost!.bottom).toBe(boxes.viewport);
+    expect(Math.abs(boxes.footer!.bottom - boxes.viewport)).toBeLessThanOrEqual(2);
+  } finally {
+    await seeded.cleanup();
+  }
+});
+
+test("ios-standalone viewport compensation is gated off in browser tabs", async ({ page }) => {
+  const seeded = await seedWorkspace({ repoPrefix: "mobile-standalone-gate-" });
+  try {
+    await gotoWorkspace(page, seeded.workspaceId);
+    const gate = await page.evaluate(() => {
+      const rules: CSSRule[] = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        try {
+          rules.push(...Array.from(sheet.cssRules));
+        } catch {
+          // Cross-origin sheets throw on cssRules access; skip them.
+        }
+      }
+      return {
+        hasClass: document.documentElement.classList.contains("ios-standalone"),
+        rulePresent: rules.some((rule) => rule.cssText.includes("safe-area-inset-top")),
+      };
+    });
+    // The compensation rule ships in the shell CSS but must stay inert outside
+    // an iOS installed PWA — Android standalone and desktop PWAs report
+    // correct viewport heights and would get an oversized shell.
+    expect(gate.rulePresent).toBe(true);
+    expect(gate.hasClass).toBe(false);
+  } finally {
+    await seeded.cleanup();
+  }
+});
+
+test("ios-standalone viewport compensation activates for installed iOS PWAs", async ({ page }) => {
+  // Stub an installed-iPhone environment before any document script runs so
+  // the inline detector in index.html adds the `ios-standalone` class.
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "userAgent", {
+      value:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+      configurable: true,
+    });
+    Object.defineProperty(window.navigator, "platform", {
+      value: "iPhone",
+      configurable: true,
+    });
+    Object.defineProperty(window.navigator, "maxTouchPoints", {
+      value: 5,
+      configurable: true,
+    });
+    Object.defineProperty(window.navigator, "standalone", {
+      value: true,
+      configurable: true,
+    });
+  });
+  const seeded = await seedWorkspace({ repoPrefix: "mobile-standalone-active-" });
+  try {
+    await gotoWorkspace(page, seeded.workspaceId);
+    // Inject a nonzero top inset through the test override variable, then
+    // confirm the compensated rule wins for html, body, and #root.
+    const measured = await page.evaluate(() => {
+      document.documentElement.style.setProperty("--paseo-safe-area-inset-top", "60px");
+      const height = (element: Element) => element.getBoundingClientRect().height;
+      return {
+        hasClass: document.documentElement.classList.contains("ios-standalone"),
+        viewport: window.innerHeight,
+        html: height(document.documentElement),
+        body: height(document.body),
+        root: height(document.getElementById("root")!),
+      };
+    });
+    expect(measured.hasClass).toBe(true);
+    expect(measured.html).toBe(measured.viewport + 60);
+    expect(measured.body).toBe(measured.viewport + 60);
+    expect(measured.root).toBe(measured.viewport + 60);
   } finally {
     await seeded.cleanup();
   }
