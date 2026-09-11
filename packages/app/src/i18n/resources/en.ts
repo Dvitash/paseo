@@ -1780,8 +1780,6 @@ export const en = {
     detachTooltip: "Detach subagent",
     archiveAction: "Archive {{label}}",
     archiveTooltip: "Archive subagent",
-    archiveFinishedAction: "Archive finished subagents",
-    archiveFinishedRetry: "Retry ({{failed}}/{{total}})",
     openConversation: "Open conversation",
     showMore: "+{{count}} more",
     showLess: "Show less",

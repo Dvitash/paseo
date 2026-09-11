@@ -1770,8 +1770,6 @@ export const ar: TranslationResources = {
     detachTooltip: "فصل الوكيل الفرعي",
     archiveAction: "أرشيف{{label}}",
     archiveTooltip: "أرشفة الوكيل الفرعي",
-    archiveFinishedAction: "أرشفة الوكلاء الفرعيين المكتملين",
-    archiveFinishedRetry: "إعادة المحاولة ({{failed}}/{{total}})",
     openConversation: "فتح المحادثة",
     showMore: "+{{count}} المزيد",
     showLess: "إظهار أقل",

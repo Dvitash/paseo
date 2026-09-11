@@ -4,7 +4,6 @@ import type { StreamItem, ToolCallItem } from "@/types/stream";
 import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import { deriveSidebarStateBucket, STATUS_BUCKET_ORDER } from "@/utils/sidebar-agent-state";
 import type { SubagentRow } from "./select";
-import { isFinishedSubagent } from "./archive-finished";
 import { providerSubagentLifecycleStatus } from "./provider-store";
 
 function presentationStatus(row: SubagentRow) {
@@ -103,10 +102,6 @@ function summarizeSubagentStatus(rows: readonly SubagentRow[]): SubagentStatusCo
   });
 }
 
-export function countFinishedSubagents(rows: readonly SubagentRow[]): number {
-  return rows.filter(isFinishedSubagent).length;
-}
-
 export function resolveRowLabel(title: string | null | undefined): string | null {
   if (typeof title !== "string") {
     return null;
@@ -125,11 +120,13 @@ export interface RecentSubagentAction {
 }
 
 export function isSubagentActiveOrAttention(row: SubagentRow): boolean {
-  if (row.requiresAttention) {
-    return true;
-  }
   if (row.kind === "paseo") {
-    return row.turn.phase === "open" || row.status === "running";
+    // Terminal rows are finished regardless of attention flags — a completed agent is marked
+    // requiresAttention with reason "finished", and failed rows carry it too.
+    if (row.status === "idle" || row.status === "error" || row.status === "closed") {
+      return false;
+    }
+    return row.turn.phase === "open" || row.status === "running" || row.requiresAttention === true;
   }
   return row.status === "running";
 }

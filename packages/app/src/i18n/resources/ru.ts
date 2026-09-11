@@ -1800,8 +1800,6 @@ export const ru: TranslationResources = {
     detachTooltip: "Отсоединить субагента",
     archiveAction: "Архивировать {{label}}",
     archiveTooltip: "Архивировать субагента",
-    archiveFinishedAction: "Архивировать завершенные субагенты",
-    archiveFinishedRetry: "Повторить ({{failed}}/{{total}})",
     openConversation: "Открыть диалог",
     showMore: "еще +{{count}}",
     showLess: "Показать меньше",

@@ -5,7 +5,6 @@ import type { StreamItem, ToolCallItem } from "@/types/stream";
 import {
   buildSubagentPillPresentation,
   buildSubagentRowPresentationData,
-  countFinishedSubagents,
   findLatestAssistantMessageText,
   getLatestToolCallOrThought,
   getRecentActions,
@@ -124,55 +123,6 @@ describe("buildSubagentPillPresentation", () => {
       segments: [{ bucket: null, text: "0 subagents" }],
       accessibilityLabel: "0 subagents",
     });
-  });
-});
-
-describe("countFinishedSubagents", () => {
-  it("counts eligible managed and terminal provider-owned children", () => {
-    const providerRows: SubagentRow[] = [
-      {
-        kind: "provider",
-        id: "native-running",
-        parentAgentId: "parent",
-        provider: "claude",
-        title: "running",
-        description: null,
-        subtitle: null,
-        status: "running",
-        requiresAttention: false,
-        createdAt: new Date("2026-04-20T00:00:00.000Z"),
-      },
-      {
-        kind: "provider",
-        id: "native-failed",
-        parentAgentId: "parent",
-        provider: "claude",
-        title: "failed",
-        description: null,
-        subtitle: null,
-        status: "failed",
-        requiresAttention: true,
-        createdAt: new Date("2026-04-20T00:00:01.000Z"),
-      },
-    ];
-
-    expect(
-      countFinishedSubagents([
-        row({ id: "managed-running", status: "running" }),
-        row({ id: "managed-idle", status: "idle" }),
-        ...providerRows,
-      ]),
-    ).toBe(2);
-  });
-
-  it("excludes running and initializing managed children", () => {
-    expect(
-      countFinishedSubagents([
-        row({ id: "running", status: "running" }),
-        row({ id: "initializing", status: "initializing" }),
-        row({ id: "finished", status: "idle" }),
-      ]),
-    ).toBe(1);
   });
 });
 
@@ -330,12 +280,25 @@ describe("provider-owned row subtitles", () => {
 describe("subagent classification and sorting", () => {
   it("classifies active and attention rows correctly", () => {
     expect(isSubagentActiveOrAttention(row({ id: "running", status: "running" }))).toBe(true);
-    expect(isSubagentActiveOrAttention(row({ id: "attention", requiresAttention: true }))).toBe(
-      true,
-    );
+    expect(
+      isSubagentActiveOrAttention(
+        row({ id: "attention", status: "initializing", requiresAttention: true }),
+      ),
+    ).toBe(true);
     expect(isSubagentActiveOrAttention(row({ id: "error", status: "error" }))).toBe(false);
     expect(isSubagentActiveOrAttention(row({ id: "idle", status: "idle" }))).toBe(false);
     expect(isSubagentActiveOrAttention(row({ id: "closed", status: "closed" }))).toBe(false);
+    // A completed agent is marked requiresAttention with reason "finished" — terminal wins.
+    expect(
+      isSubagentActiveOrAttention(
+        row({ id: "finished-attention", status: "idle", requiresAttention: true }),
+      ),
+    ).toBe(false);
+    expect(
+      isSubagentActiveOrAttention(
+        row({ id: "failed-attention", status: "error", requiresAttention: true }),
+      ),
+    ).toBe(false);
     expect(
       isSubagentActiveOrAttention({
         kind: "provider",
@@ -364,6 +327,20 @@ describe("subagent classification and sorting", () => {
         createdAt: new Date("2026-04-20T00:00:00.000Z"),
       }),
     ).toBe(false);
+    expect(
+      isSubagentActiveOrAttention({
+        kind: "provider",
+        id: "failed",
+        parentAgentId: "parent",
+        provider: "claude",
+        title: "failed",
+        description: null,
+        subtitle: null,
+        status: "failed",
+        requiresAttention: true,
+        createdAt: new Date("2026-04-20T00:00:00.000Z"),
+      }),
+    ).toBe(false);
   });
 
   it("sorts active/attention rows before completed rows, preserving createdAt order", () => {
@@ -384,7 +361,7 @@ describe("subagent classification and sorting", () => {
     });
     const attention = row({
       id: "att-1",
-      status: "idle",
+      status: "initializing",
       requiresAttention: true,
       createdAt: new Date("2026-04-20T00:00:04.000Z"),
     });

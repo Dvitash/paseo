@@ -1787,8 +1787,6 @@ export const ja: TranslationResources = {
     detachTooltip: "サブエージェントを切り離す",
     archiveAction: "{{label}}をアーカイブ",
     archiveTooltip: "サブエージェントをアーカイブ",
-    archiveFinishedAction: "完了したサブエージェントをアーカイブ",
-    archiveFinishedRetry: "再試行 ({{failed}}/{{total}})",
     openConversation: "会話を開く",
     showMore: "他 {{count}} 件",
     showLess: "折りたたむ",

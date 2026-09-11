@@ -1749,8 +1749,6 @@ export const zhCN: TranslationResources = {
     detachTooltip: "分离 subagent",
     archiveAction: "归档 {{label}}",
     archiveTooltip: "归档 subagent",
-    archiveFinishedAction: "归档已完成的 subagent",
-    archiveFinishedRetry: "重试 ({{failed}}/{{total}})",
     openConversation: "打开对话",
     showMore: "还有 {{count}} 个",
     showLess: "收起",

@@ -1802,8 +1802,6 @@ export const ptBR: TranslationResources = {
     detachTooltip: "Desanexar subagente",
     archiveAction: "Arquivar {{label}}",
     archiveTooltip: "Arquivar subagente",
-    archiveFinishedAction: "Arquivar subagentes concluídos",
-    archiveFinishedRetry: "Tentar novamente ({{failed}}/{{total}})",
     openConversation: "Abrir conversa",
     showMore: "+{{count}} mais",
     showLess: "Mostrar menos",

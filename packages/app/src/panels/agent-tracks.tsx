@@ -14,13 +14,9 @@ import { usePaneContext } from "@/panels/pane-context";
 import { useSettings } from "@/hooks/use-settings";
 import { PluginComposerPills } from "@/plugins";
 import { useSessionStore } from "@/stores/session-store";
-import {
-  type ArchiveFinishedStatus,
-  useArchiveSubagent,
-  useDetachSubagent,
-  type SubagentRow,
-} from "@/subagents";
+import { useArchiveSubagent, useDetachSubagent, type SubagentRow } from "@/subagents";
 import { SubagentsTrack } from "@/subagents/track";
+import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
 import type { TodoEntry } from "@/types/stream";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
@@ -41,8 +37,6 @@ export const AgentTracks = memo(function AgentTracks({
   cwd,
   subagentRows,
   tasks,
-  archiveFinishedStatus,
-  onArchiveFinished,
   hasPluginComposerPills,
 }: {
   serverId: string;
@@ -51,8 +45,6 @@ export const AgentTracks = memo(function AgentTracks({
   cwd: string;
   subagentRows: SubagentRow[];
   tasks: TodoEntry[] | undefined;
-  archiveFinishedStatus: ArchiveFinishedStatus;
-  onArchiveFinished: () => void;
   hasPluginComposerPills: boolean;
 }): ReactElement | null {
   const { tabId, openTab } = usePaneContext();
@@ -121,7 +113,7 @@ export const AgentTracks = memo(function AgentTracks({
 
   const hasPills =
     Boolean(tasks?.length) || hasPluginComposerPills || hasWorkspaceDiffStat || hasModelTurnMetrics;
-  const hasSubagents = subagentRows.length > 0 || archiveFinishedStatus.kind !== "idle";
+  const hasSubagents = subagentRows.some(isSubagentActiveOrAttention);
 
   if (!hasPills && !hasSubagents) {
     return null;
@@ -136,8 +128,6 @@ export const AgentTracks = memo(function AgentTracks({
           onOpenSubagent={handleOpenSubagent}
           onOpenProviderSubagent={handleOpenProviderSubagent}
           onArchiveSubagent={archiveSubagent}
-          onArchiveFinished={onArchiveFinished}
-          archiveFinishedStatus={archiveFinishedStatus}
           onDetachSubagent={canDetachSubagents ? detachSubagent : undefined}
         />
       ) : null}
@@ -167,20 +157,17 @@ export const AgentTracks = memo(function AgentTracks({
 export function hasAgentTracks({
   subagentRows,
   tasks,
-  archiveFinishedStatus,
   hasPluginComposerPills = false,
   hasModelTurnMetrics = false,
 }: {
   subagentRows: readonly SubagentRow[];
   tasks: readonly TodoEntry[] | undefined;
-  archiveFinishedStatus: ArchiveFinishedStatus;
   hasPluginComposerPills?: boolean;
   hasModelTurnMetrics?: boolean;
 }): boolean {
   return (
-    subagentRows.length > 0 ||
+    subagentRows.some(isSubagentActiveOrAttention) ||
     Boolean(tasks?.length) ||
-    archiveFinishedStatus.kind !== "idle" ||
     hasPluginComposerPills ||
     hasModelTurnMetrics
   );

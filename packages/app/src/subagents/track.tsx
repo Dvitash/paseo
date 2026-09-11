@@ -28,7 +28,6 @@ import type { PaseoSubagentRow, SubagentRow } from "./select";
 import {
   buildSubagentPillPresentation,
   buildSubagentRowPresentationData,
-  countFinishedSubagents,
   findLatestAssistantMessageText,
   getLatestToolCallOrThought,
   getRecentActions,
@@ -36,7 +35,6 @@ import {
   sortSubagentRows,
   type RecentSubagentAction,
 } from "./track-presentation";
-import type { ArchiveFinishedStatus } from "./use-archive-finished";
 
 const ThemedArchive = withUnistyles(Archive);
 const ThemedUnlink = withUnistyles(Unlink);
@@ -57,12 +55,9 @@ export interface SubagentsTrackProps {
   onOpenSubagent: (id: string) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
   onArchiveSubagent: (id: string) => void;
-  onArchiveFinished?: () => void;
-  archiveFinishedStatus?: ArchiveFinishedStatus;
   onDetachSubagent?: (id: string) => void;
 }
 
-const IDLE_ARCHIVE_FINISHED_STATUS: ArchiveFinishedStatus = { kind: "idle" };
 const ROW_ICON_SIZE = 14;
 const DEFAULT_VISIBLE_COUNT = 5;
 
@@ -103,8 +98,6 @@ export function SubagentsTrack({
   onOpenSubagent,
   onOpenProviderSubagent,
   onArchiveSubagent,
-  onArchiveFinished,
-  archiveFinishedStatus = IDLE_ARCHIVE_FINISHED_STATUS,
   onDetachSubagent,
 }: SubagentsTrackProps): ReactElement | null {
   const { t } = useTranslation();
@@ -113,11 +106,6 @@ export function SubagentsTrack({
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [isOverflowExpanded, setIsOverflowExpanded] = useState(false);
   const [hydrationErrors, setHydrationErrors] = useState<Record<string, string>>({});
-
-  const isArchivingFinished = archiveFinishedStatus.kind === "archiving";
-  const isArchiveFinishedFailed = archiveFinishedStatus.kind === "failed";
-  const finishedCount = countFinishedSubagents(rows);
-  const showArchiveFinished = finishedCount > 0 || isArchivingFinished || isArchiveFinishedFailed;
 
   const agentStreamTail = useSessionStore((state) => state.sessions[serverId]?.agentStreamTail);
   const agentStreamHead = useSessionStore((state) => state.sessions[serverId]?.agentStreamHead);
@@ -256,7 +244,7 @@ export function SubagentsTrack({
     [hydrateProviderRow, viewedTimelineSync],
   );
 
-  if (visibleRows.length === 0 && !(showArchiveFinished && onArchiveFinished)) {
+  if (visibleRows.length === 0) {
     return null;
   }
 
@@ -271,13 +259,6 @@ export function SubagentsTrack({
             {pill.accessibilityLabel}
           </Text>
         </View>
-        {showArchiveFinished && onArchiveFinished ? (
-          <ArchiveFinishedRow
-            status={archiveFinishedStatus}
-            disabled={isArchivingFinished}
-            onPress={onArchiveFinished}
-          />
-        ) : null}
       </View>
 
       <ScrollView
@@ -329,41 +310,6 @@ export function SubagentsTrack({
         </Pressable>
       ) : null}
     </View>
-  );
-}
-
-function ArchiveFinishedRow({
-  status,
-  disabled,
-  onPress,
-}: {
-  status: ArchiveFinishedStatus;
-  disabled: boolean;
-  onPress: () => void;
-}): ReactElement {
-  const { t } = useTranslation();
-
-  let label = t("subagents.archiveFinishedAction");
-  if (status.kind === "archiving") {
-    label = `${t("subagents.archiveFinishedAction")} (${status.completedCount}/${status.totalCount})`;
-  } else if (status.kind === "failed") {
-    label = t("subagents.archiveFinishedRetry", {
-      failed: status.failedCount,
-      total: status.totalCount,
-    });
-  }
-
-  return (
-    <Button
-      size="sm"
-      variant="secondary"
-      disabled={disabled}
-      leftIcon={Archive}
-      testID="subagents-track-archive-finished"
-      onPress={onPress}
-    >
-      {label}
-    </Button>
   );
 }
 

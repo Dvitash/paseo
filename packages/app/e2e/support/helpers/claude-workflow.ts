@@ -47,7 +47,8 @@ export async function expectWorkflowCompleted(page: Page): Promise<void> {
   await expect(row.getByRole("progressbar", { name: "Agent running" })).toHaveCount(0, {
     timeout: 120_000,
   });
-  await expect(page.getByTestId("subagents-track-archive-finished")).toBeVisible();
+  // Finished provider children are hidden from the track entirely.
+  await expect(row).toHaveCount(0, { timeout: 30_000 });
   await expect(
     page.getByTestId("assistant-message").filter({ hasText: WORKFLOW_ROW_MARKER }).last(),
   ).toBeVisible({ timeout: 120_000 });
@@ -71,5 +72,11 @@ export async function openWorkflowTimeline(page: Page): Promise<void> {
   await expect(panel.getByText("Start chatting with this agent...", { exact: true })).toHaveCount(
     0,
   );
-  await expect(panel.getByText(WORKFLOW_ROW_MARKER, { exact: true })).toBeVisible();
+}
+
+export async function expectWorkflowTimelineMarker(page: Page): Promise<void> {
+  const panel = page.getByTestId("provider-subagent-panel");
+  await expect(panel.getByText(WORKFLOW_ROW_MARKER, { exact: true })).toBeVisible({
+    timeout: 120_000,
+  });
 }

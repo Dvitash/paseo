@@ -1780,8 +1780,6 @@ export const ko: TranslationResources = {
     detachTooltip: "하위 에이전트 분리",
     archiveAction: "{{label}} 보관",
     archiveTooltip: "서브에이전트 보관",
-    archiveFinishedAction: "완료된 하위 에이전트 보관",
-    archiveFinishedRetry: "다시 시도 ({{failed}}/{{total}})",
     openConversation: "대화 열기",
     showMore: "{{count}}개 더보기",
     showLess: "간략히 보기",

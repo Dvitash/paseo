@@ -1816,8 +1816,6 @@ export const es: TranslationResources = {
     detachTooltip: "Separar subagente",
     archiveAction: "Archivo{{label}}",
     archiveTooltip: "Subagente de archivo",
-    archiveFinishedAction: "Archivar subagentes finalizados",
-    archiveFinishedRetry: "Reintentar ({{failed}}/{{total}})",
     openConversation: "Abrir conversación",
     showMore: "+{{count}} más",
     showLess: "Mostrar menos",

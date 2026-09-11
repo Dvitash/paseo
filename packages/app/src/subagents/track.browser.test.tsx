@@ -254,7 +254,7 @@ describe("SubagentsTrack browser component tests", () => {
       createRow({
         id: "att-1",
         title: "Attention Worker",
-        status: "idle",
+        status: "initializing",
         requiresAttention: true,
       }),
       createRow({ id: "done-1", title: "Done Worker", status: "idle" }),
@@ -275,28 +275,6 @@ describe("SubagentsTrack browser component tests", () => {
     expect(document.querySelector('[data-testid="subagents-track-row-done-1"]')).toBeNull();
     expect(document.querySelector('[data-testid="subagents-track-row-att-1"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="subagents-track-completed-summary"]')).toBeNull();
-  });
-
-  it("renders bulk archive finished action when finished subagents exist", () => {
-    const onArchiveFinished = vi.fn();
-    const rows: SubagentRow[] = [createRow({ id: "done-1", title: "Done Worker", status: "idle" })];
-
-    mount(
-      <SubagentsTrack
-        serverId="test-server"
-        rows={rows}
-        onOpenSubagent={vi.fn()}
-        onOpenProviderSubagent={vi.fn()}
-        onArchiveSubagent={vi.fn()}
-        onArchiveFinished={onArchiveFinished}
-      />,
-    );
-
-    const archiveBtn = document.querySelector('[data-testid="subagents-track-archive-finished"]');
-    expect(archiveBtn).not.toBeNull();
-
-    click(archiveBtn as Element);
-    expect(onArchiveFinished).toHaveBeenCalledTimes(1);
   });
 
   it("registers displayed managed child IDs with viewedTimelineSync and cleans up on unmount", () => {

@@ -1820,8 +1820,6 @@ export const fr: TranslationResources = {
     detachTooltip: "Detacher le sous-agent",
     archiveAction: "Archiver{{label}}",
     archiveTooltip: "Sous-agent d'archivage",
-    archiveFinishedAction: "Archiver les sous-agents terminés",
-    archiveFinishedRetry: "Réessayer ({{failed}}/{{total}})",
     openConversation: "Ouvrir la conversation",
     showMore: "+{{count}} de plus",
     showLess: "Afficher moins",

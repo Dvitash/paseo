@@ -102,7 +102,7 @@ import type { Theme } from "@/styles/theme";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem, TodoEntry } from "@/types/stream";
 import type { ViewedTimelineStatus, ViewedTimelineUiBridge } from "@/timeline/viewed-timeline-sync";
-import { useArchiveFinishedSubagents, useSubagentsForParent } from "@/subagents";
+import { useSubagentsForParent } from "@/subagents";
 import { getInitDeferred, getInitKey } from "@/utils/agent-initialization";
 import { derivePendingPermissionKey, normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
@@ -1267,18 +1267,12 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   const tasks = useSessionStore((state): TodoEntry[] | undefined =>
     state.sessions[serverId]?.agentTasks.get(agentId),
   );
-  const archiveFinishedSubagents = useArchiveFinishedSubagents({
-    serverId,
-    parentAgentId: agentId,
-    rows: subagentRows,
-  });
   const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
   const hasModelTurnMetrics = useHasModelTurnMetrics(serverId, agentId);
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const hasVisibleAgentTracks = hasAgentTracks({
     subagentRows,
     tasks,
-    archiveFinishedStatus: archiveFinishedSubagents.status,
     hasPluginComposerPills,
     hasModelTurnMetrics,
   });
@@ -1371,8 +1365,6 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           cwd={cwd}
           subagentRows={subagentRows}
           tasks={tasks}
-          archiveFinishedStatus={archiveFinishedSubagents.status}
-          onArchiveFinished={archiveFinishedSubagents.archiveFinished}
           hasPluginComposerPills={hasPluginComposerPills}
         />
       ) : null}
