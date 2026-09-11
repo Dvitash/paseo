@@ -258,6 +258,31 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
   return Array.from(compacted).sort();
 }
 
+function pickSupportedFeaturesPatch(
+  features: MutableDaemonConfigPatch["features"],
+): SupportedMutableConfigPatch["features"] {
+  const dictation = features?.dictation;
+  if (dictation === undefined) return undefined;
+  const stt = dictation.stt;
+  return {
+    dictation: {
+      ...(dictation.enabled !== undefined ? { enabled: dictation.enabled } : {}),
+      ...(stt !== undefined
+        ? {
+            stt: {
+              ...(stt.provider !== undefined ? { provider: stt.provider } : {}),
+              ...(stt.model !== undefined ? { model: stt.model } : {}),
+              ...(stt.language !== undefined ? { language: stt.language } : {}),
+              ...(stt.confidenceThreshold !== undefined
+                ? { confidenceThreshold: stt.confidenceThreshold }
+                : {}),
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
@@ -285,7 +310,9 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
-    ...(patch.features !== undefined ? { features: patch.features } : {}),
+    ...(patch.features !== undefined
+      ? { features: pickSupportedFeaturesPatch(patch.features) }
+      : {}),
   };
 }
 

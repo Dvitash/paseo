@@ -279,12 +279,6 @@ export const AgentSkillSelectionSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("custom"), skills: z.array(z.string()) }).strict(),
 ]);
 export type AgentSkillSelection = z.infer<typeof AgentSkillSelectionSchema>;
-const MutableSpeechProviderIdSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .pipe(z.enum(["openai", "local"]));
-
 /** Speech feature config mirrored from persisted `features.*`. Changes apply on
  * daemon restart — the speech runtime is built at bootstrap. `dictation` is
  * typed; other feature blocks (voiceMode, webUi) pass through untouched. */
@@ -295,15 +289,16 @@ const MutableDaemonFeaturesSchema = z
         enabled: z.boolean().optional(),
         stt: z
           .object({
-            provider: MutableSpeechProviderIdSchema.optional(),
+            // Response shape: tolerate providers added by newer daemons.
+            provider: z.string().min(1).optional(),
             model: z.string().min(1).optional(),
-            language: z.string().trim().min(1).optional(),
+            language: z.string().min(1).optional(),
             confidenceThreshold: z.number().optional(),
           })
-          .strict()
+          .passthrough()
           .optional(),
       })
-      .strict()
+      .passthrough()
       .optional(),
   })
   .passthrough();
@@ -314,15 +309,15 @@ const MutableDaemonFeaturesPatchSchema = z
         enabled: z.boolean().optional(),
         stt: z
           .object({
-            provider: MutableSpeechProviderIdSchema.optional(),
+            provider: z.enum(["openai", "local"]).optional(),
             model: z.string().min(1).optional(),
-            language: z.string().trim().min(1).optional(),
+            language: z.string().min(1).optional(),
             confidenceThreshold: z.number().optional(),
           })
-          .strict()
+          .passthrough()
           .optional(),
       })
-      .strict()
+      .passthrough()
       .optional(),
   })
   .passthrough();

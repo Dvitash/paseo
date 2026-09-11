@@ -349,7 +349,9 @@ function DictationAdvancedRows({
   const { t } = useTranslation();
   const languageInputRef = useRef<EditingTextInputHandle | null>(null);
 
-  const provider: DictationProvider = dictation?.stt?.provider ?? "local";
+  const rawProvider = dictation?.stt?.provider;
+  const provider: DictationProvider =
+    rawProvider === "openai" || rawProvider === "local" ? rawProvider : "local";
   const handleProviderChange = useCallback(
     (next: DictationProvider) => {
       void patch({ features: { dictation: { stt: { provider: next } } } });
