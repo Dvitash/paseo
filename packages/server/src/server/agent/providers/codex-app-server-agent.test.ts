@@ -1801,6 +1801,28 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
+  test("createSession closes the spawned app-server when thread/fork fails", async () => {
+    const appServer = createFakeCodexAppServer({
+      // A rejected promise produces a JSON-RPC error response; a synchronous
+      // throw would escape the fake's stdin handler and hang the request.
+      "thread/fork": () => Promise.reject(new Error("fork rejected")),
+    });
+    const client = createProviderWithFakeAppServer(appServer);
+    const killSpy = vi.spyOn(appServer.child, "kill");
+
+    await expect(
+      client.createSession(createConfig({ cwd: "/workspace/project" }), undefined, {
+        forkFrom: {
+          provider: CODEX_PROVIDER,
+          sessionId: "source-thread",
+          nativeHandle: "source-thread",
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(killSpy).toHaveBeenCalled();
+  });
+
   test("correlates a Codex user message with the submitting client message", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(

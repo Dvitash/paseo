@@ -146,7 +146,9 @@ describe("Side context-curator", () => {
     expect(secondTurnOptions).toEqual({ direction: "tail", limit: 60 });
     expect(second.isDelta).toBe(true);
     expect(second.itemCount).toBe(0);
-    expect(second.prompt).toBe("Side user request:\n\nAre there any errors?");
+    expect(second.prompt).toContain('"mainAgentId":"main-agent-1"');
+    expect(second.prompt).toContain("Are there any errors?");
+    expect(second.prompt).not.toContain("Initial request");
     expect(second.checkpoint.epoch).toBe("epoch-1");
     expect(second.checkpoint.seq).toBe(2);
     expect(second.checkpoint.recentRows).toEqual(initial.checkpoint.recentRows);

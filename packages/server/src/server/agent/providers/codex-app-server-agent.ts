@@ -7084,10 +7084,17 @@ export class CodexAppServerAgentClient implements AgentClient {
       autoReviewEnabled,
       launchContext?.agentId,
     );
-    await session.connect();
-    const forkSource = options?.forkFrom?.nativeHandle ?? options?.forkFrom?.sessionId;
-    if (forkSource) {
-      await session.forkThreadFrom(forkSource);
+    // The session owns its spawned app-server until AgentManager registers it;
+    // a failed fork must dispose it before rethrowing.
+    try {
+      await session.connect();
+      const forkSource = options?.forkFrom?.nativeHandle ?? options?.forkFrom?.sessionId;
+      if (forkSource) {
+        await session.forkThreadFrom(forkSource);
+      }
+    } catch (error) {
+      await session.close().catch(() => undefined);
+      throw error;
     }
     return session;
   }

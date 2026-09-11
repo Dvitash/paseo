@@ -146,6 +146,7 @@ class TestAgentSession implements AgentSession {
     return {
       provider: this.provider,
       sessionId: this.id,
+      nativeHandle: this.id,
     };
   }
 
@@ -419,7 +420,8 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     const snapshot2 = await service.send(mainAgentId, "Does it support SSL?", { wait: true });
     expect(snapshot2.messages).toHaveLength(4);
     const promptTurn2 = sideSession!.startPrompts[1] as string;
-    expect(promptTurn2).toBe("Side user request:\n\nDoes it support SSL?");
+    expect(promptTurn2).toContain(`"mainAgentId":"${mainAgentId}"`);
+    expect(promptTurn2).toContain("Does it support SSL?");
 
     expect(manager.fetchTimeline(mainAgentId).rows).toEqual(mainTimelineBefore);
 
@@ -759,6 +761,7 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     expect(firstPrompt).toContain("forked from this development session");
     expect(firstPrompt).toContain("What is the goal?");
     expect(firstPrompt).not.toContain("main-session-context");
+    expect(firstPrompt).toContain(`"mainAgentId":"${mainAgentId}"`);
   });
 
   test("reuses a fresh forked side session and re-forks after the reuse window", async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as waitForImmediate, setTimeout as delay } from "node:timers/promises";
@@ -620,6 +621,39 @@ export default function paseoReadOnlyGuard(api) {
     path: filePath,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
+}
+
+/**
+ * Read the `providerPromptCacheKey` (falling back to the session id) from an
+ * OMP session file header. Best-effort: a missing or unreadable file yields
+ * undefined and the fork proceeds without an explicit cache key.
+ */
+async function readOmpSessionPromptCacheKey(sessionFile: string): Promise<string | undefined> {
+  try {
+    const handle = await open(sessionFile, "r");
+    try {
+      const buffer = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const head = buffer.subarray(0, bytesRead).toString("utf8");
+      for (const line of head.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const entry = JSON.parse(trimmed) as {
+          type?: string;
+          providerPromptCacheKey?: string;
+          id?: string;
+        };
+        if (entry.type === "session") {
+          return entry.providerPromptCacheKey ?? entry.id;
+        }
+      }
+      return undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 function extractToolName(tool: unknown): string | null {
   if (tool && typeof tool === "object" && "name" in tool && typeof tool.name === "string") {
@@ -2545,7 +2579,9 @@ export class OmpAgentClient implements AgentClient {
   ): Promise<AgentSession> {
     const launchMode = this.resolveLaunchMode(config.modeId);
     const isReadOnly = config.readOnly === true;
-    const forkSource = options?.forkFrom?.nativeHandle ?? options?.forkFrom?.sessionId;
+    // --fork takes a session file path; a bare sessionId (in-memory sessions)
+    // cannot be resolved, so only a nativeHandle qualifies.
+    const forkSource = options?.forkFrom?.nativeHandle;
     const hostToolNames = launchContext?.paseoTools
       ? [...launchContext.paseoTools.tools.keys()]
       : [];
@@ -2559,6 +2595,11 @@ export class OmpAgentClient implements AgentClient {
       readOnlyGuard?.cleanup();
     };
 
+    // OMP suppresses the inherited providerPromptCacheKey whenever the fork
+    // launch passes shape flags (--model/--thinking/--tools/…). Carry the
+    // parent's key explicitly so the fork still routes to its cache pool.
+    const promptCacheKey = forkSource ? await readOmpSessionPromptCacheKey(forkSource) : undefined;
+
     let runtimeSession: OmpRuntimeSession;
     try {
       runtimeSession = await this.startRuntimeSession({
@@ -2566,6 +2607,7 @@ export class OmpAgentClient implements AgentClient {
         launchMode,
         isReadOnly,
         forkSource,
+        promptCacheKey,
         launchContext,
         readOnlyConfigPath: readOnlyConfig?.path,
         readOnlyGuardPath: readOnlyGuard?.path,
@@ -2616,20 +2658,21 @@ export class OmpAgentClient implements AgentClient {
       cleanup,
     });
   }
-
   private async startRuntimeSession(input: {
     config: AgentSessionConfig;
     launchMode: { modeId: string | null; extraArgs?: string[] };
     isReadOnly: boolean;
     forkSource?: string;
+    promptCacheKey?: string;
     launchContext?: AgentLaunchContext;
     readOnlyConfigPath?: string;
     readOnlyGuardPath?: string;
   }): Promise<OmpRuntimeSession> {
-    const { config, launchMode, isReadOnly, forkSource, launchContext } = input;
+    const { config, launchMode, isReadOnly, forkSource, promptCacheKey, launchContext } = input;
     return this.runtime.startSession({
       cwd: config.cwd,
       ...(forkSource ? { fork: forkSource } : {}),
+      ...(promptCacheKey ? { promptCacheKey } : {}),
       protocolMode: "rpc-ui",
       model: config.model,
       thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
