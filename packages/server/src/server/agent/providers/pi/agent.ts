@@ -869,18 +869,31 @@ function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions):
 	    if (!response.ok) {
 	      throw new Error("Paseo MCP request failed: HTTP " + response.status);
 	    }
-	    const contentType = response.headers.get("content-type") ?? "";
-	    if (contentType.includes("text/event-stream")) {
-	      const text = await response.text();
-	      for (const line of text.split("\\n")) {
-	        if (!line.startsWith("data:")) continue;
-	        const message = JSON.parse(line.slice(5).trim());
-	        if (message && message.id === 1) return message;
-	      }
-	      throw new Error("Paseo MCP response missing result frame");
-	    }
-	    return await response.json();
-	  }
+    const contentType = response.headers.get("content-type") ?? "";
+    let message = null;
+    if (contentType.includes("text/event-stream")) {
+      const text = await response.text();
+      for (const line of text.split("\\n")) {
+        if (!line.startsWith("data:")) continue;
+        const parsed = JSON.parse(line.slice(5).trim());
+        if (parsed && parsed.id === 1) {
+          message = parsed;
+          break;
+        }
+      }
+      if (!message) {
+        throw new Error("Paseo MCP response missing result frame");
+      }
+    } else {
+      message = await response.json();
+    }
+    if (message && message.error) {
+      throw new Error(
+        "Paseo MCP error: " + (message.error.message || JSON.stringify(message.error)),
+      );
+    }
+    return message;
+  }
 
 	  function normalizePaseoToolSchema(schema) {
 	    const inputSchema =
@@ -899,8 +912,11 @@ function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions):
 	      typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
 	        ? AbortSignal.timeout(30000)
 	        : undefined;
-	    const listResponse = await paseoRpc("tools/list", {}, listSignal);
-	    const tools = listResponse?.result?.tools ?? [];
+    const listResponse = await paseoRpc("tools/list", {}, listSignal);
+    const tools = listResponse?.result?.tools;
+    if (!Array.isArray(tools)) {
+      throw new Error("Paseo MCP tools/list returned no tool array");
+    }
 	    for (const tool of tools) {
 	      const toolName = "paseo_" + tool.name;
 	      pi.registerTool({
@@ -908,27 +924,28 @@ function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions):
 	        label: "Paseo: " + tool.name,
 	        description: tool.description || "Paseo daemon tool",
 	        parameters: normalizePaseoToolSchema(tool.inputSchema),
-	        execute: async (_toolCallId, params, signal) => {
-	          const callResponse = await paseoRpc(
-	            "tools/call",
-	            { name: tool.name, arguments: params ?? {} },
-	            signal,
-	          );
-	          if (callResponse?.error) {
-	            throw new Error(
-	              callResponse.error.message || "Paseo tool call failed",
-	            );
-	          }
-	          const result = callResponse?.result ?? {};
-	          return {
-	            content: Array.isArray(result.content) ? result.content : [],
-	            details: {
-	              isError: result.isError === true,
-	              ...(result.structuredContent !== undefined
-	                ? { structuredContent: result.structuredContent }
-	                : {}),
-	            },
-	          };
+        execute: async (_toolCallId, params, signal) => {
+          const callResponse = await paseoRpc(
+            "tools/call",
+            { name: tool.name, arguments: params ?? {} },
+            signal,
+          );
+          const result = callResponse?.result ?? {};
+          const content = Array.isArray(result.content) ? result.content : [];
+          if (result.isError === true) {
+            // Pi marks tool failure from the thrown error, not details.isError;
+            // surface the daemon's error text so the failure is not silent.
+            throw new Error(readTextContent(content) || "Paseo tool call failed");
+          }
+          return {
+            content,
+            details: {
+              isError: false,
+              ...(result.structuredContent !== undefined
+                ? { structuredContent: result.structuredContent }
+                : {}),
+            },
+          };
 	        },
 	      });
 	    }

@@ -110,6 +110,7 @@ interface LoadedPaseoExtension {
       signal?: AbortSignal,
     ) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
   }>;
+  registeredCommands: string[];
   activeTools: string[][];
 }
 
@@ -117,6 +118,7 @@ async function loadPaseoExtension(extensionPath: string): Promise<LoadedPaseoExt
   const loaded: LoadedPaseoExtension = {
     listeners: new Map(),
     registeredTools: [],
+    registeredCommands: [],
     activeTools: [],
   };
   // The extension file is generated at a runtime temp path, so a static import
@@ -124,14 +126,16 @@ async function loadPaseoExtension(extensionPath: string): Promise<LoadedPaseoExt
   const extension = (await import(pathToFileURL(extensionPath).href)) as {
     default: (piApi: {
       on: (event: string, listener: PaseoExtensionListener) => void;
-      registerCommand: () => void;
+      registerCommand: (name: string) => void;
       registerTool: (tool: LoadedPaseoExtension["registeredTools"][number]) => void;
       setActiveTools: (names: string[]) => void;
     }) => void;
   };
   extension.default({
     on: (event, listener) => loaded.listeners.set(event, listener),
-    registerCommand: () => undefined,
+    registerCommand: (name) => {
+      loaded.registeredCommands.push(name);
+    },
     registerTool: (tool) => loaded.registeredTools.push(tool),
     setActiveTools: (names) => {
       loaded.activeTools.push(names);
@@ -2927,6 +2931,99 @@ describe("PiRpcAgentClient", () => {
     });
     // The bridge forwards the injected capability token on every request.
     expect(receivedAuth).toEqual(["Bearer test-capability-token", "Bearer test-capability-token"]);
+
+    await session.close();
+  });
+
+  test("readOnly tool bridge fails closed when tools/list returns a JSON-RPC error", async () => {
+    // A JSON-RPC error frame must not register the ready sentinel — the daemon
+    // would otherwise see the bridge as live with zero tools.
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        readOnly: true,
+        mcpServers: {
+          paseo: { type: "http", url: "http://127.0.0.1:1/mcp/agents" },
+        },
+        paseoToolPolicy: { enabled: true, enabledTools: ["list_agents"] },
+      }),
+    );
+
+    const extensionPath = pi.recordedLaunches.at(-1)!.extensionPaths![0]!;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        `data: ${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: { code: -32603, message: "daemon exploded" },
+        })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      )) as typeof fetch;
+    try {
+      const loaded = await loadPaseoExtension(extensionPath);
+      await loaded.listeners.get("session_start")?.({}, {});
+
+      expect(loaded.registeredTools).toEqual([]);
+      expect(loaded.registeredCommands).not.toContain("__paseo_tools_ready__");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    await session.close();
+  });
+
+  test("readOnly tool bridge throws when a daemon tool reports isError", async () => {
+    // Pi surfaces tool failure from a thrown error, not details.isError, so the
+    // bridge must throw with the daemon's error text.
+    const pi = new FakePi();
+    const client = createClient(pi);
+    const session = await client.createSession(
+      createConfig({
+        readOnly: true,
+        mcpServers: {
+          paseo: { type: "http", url: "http://127.0.0.1:1/mcp/agents" },
+        },
+        paseoToolPolicy: { enabled: true, enabledTools: ["list_agents"] },
+      }),
+    );
+
+    const extensionPath = pi.recordedLaunches.at(-1)!.extensionPaths![0]!;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as { method?: string };
+      const payload =
+        body.method === "tools/list"
+          ? {
+              tools: [
+                {
+                  name: "list_agents",
+                  description: "List agents",
+                  inputSchema: { type: "object", properties: {} },
+                },
+              ],
+            }
+          : {
+              content: [{ type: "text", text: "caller agent not found" }],
+              isError: true,
+            };
+      return new Response(
+        `data: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: payload })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    }) as typeof fetch;
+    try {
+      const loaded = await loadPaseoExtension(extensionPath);
+      await loaded.listeners.get("session_start")?.({}, {});
+
+      expect(loaded.registeredTools.map((tool) => tool.name)).toEqual(["paseo_list_agents"]);
+      await expect(loaded.registeredTools[0]!.execute("call-1", {})).rejects.toThrow(
+        "caller agent not found",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     await session.close();
   });
