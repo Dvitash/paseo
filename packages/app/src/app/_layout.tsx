@@ -96,6 +96,7 @@ import { useStandalonePwaViewportHeal } from "@/hooks/use-standalone-pwa-viewpor
 import { useOpenProject } from "@/hooks/use-open-project";
 import { useAppSettings } from "@/hooks/use-settings";
 import { useStableEvent } from "@/hooks/use-stable-event";
+import { notifyNativeUserActivity } from "@/hooks/native-activity-source";
 import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
 import { I18nProvider } from "@/i18n/provider";
@@ -138,6 +139,7 @@ import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { PluginCatalogSync } from "@/plugins";
 import {
   ensureOsNotificationPermission,
+  shouldPresentForegroundNotification,
   WEB_NOTIFICATION_CLICK_EVENT,
   type WebNotificationClickDetail,
 } from "@/utils/os-notifications";
@@ -227,16 +229,22 @@ function PushNotificationRouter() {
         window.removeEventListener(WEB_NOTIFICATION_CLICK_EVENT, openFromWebClick as EventListener);
       };
     }
-
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        // When the app is open, don't show OS banners.
-        shouldShowAlert: false,
-        shouldShowBanner: false,
-        shouldShowList: false,
-        shouldPlaySound: false,
-        shouldSetBadge: false,
-      }),
+      handleNotification: async (notification) => {
+        // Server-routed attention pushes are already suppressed server-side
+        // when the user is actively viewing the target — present them even
+        // while the app is foregrounded. Everything else stays silent.
+        const present = shouldPresentForegroundNotification(
+          notification.request.content.data as Record<string, unknown> | undefined,
+        );
+        return {
+          shouldShowAlert: present,
+          shouldShowBanner: present,
+          shouldShowList: present,
+          shouldPlaySound: present,
+          shouldSetBadge: false,
+        };
+      },
     });
 
     const openFromResponse = (response: Notifications.NotificationResponse) => {
@@ -987,7 +995,7 @@ function RootProviders({ children }: { children: ReactNode }) {
 function RootAppTree() {
   return (
     <GestureHandlerRootView style={flexStyle}>
-      <View style={layoutStyles.surfaceFill}>
+      <View style={layoutStyles.surfaceFill} onTouchStart={notifyNativeUserActivity}>
         <RootProviders>
           <RuntimeProviders>
             <AppShell />

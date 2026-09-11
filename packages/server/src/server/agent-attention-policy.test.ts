@@ -9,9 +9,11 @@ import {
 function state(overrides: Partial<ClientPresenceState>): ClientPresenceState {
   return {
     appVisible: true,
+    isMobile: false,
     focusedAgentId: null,
     focusedTerminalId: null,
     lastActivityAtMs: null,
+    lastAppActivityAtMs: overrides.lastAppActivityAtMs ?? overrides.lastActivityAtMs ?? null,
     ...overrides,
   };
 }
@@ -32,12 +34,13 @@ describe("computeNotificationPlan", () => {
         allStates: [staleFocused],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: true });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: "all" });
   });
 
-  it("suppresses notifications when a focused client is present", () => {
+  it("suppresses notifications when a focused desktop client is present and interacted", () => {
     const staleFocused = state({
       focusedAgentId: "agent-1",
       lastActivityAtMs: staleAtMs,
@@ -52,9 +55,45 @@ describe("computeNotificationPlan", () => {
         allStates: [staleFocused, presentFocused],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: null });
+  });
+
+  it("pushes to mobile when a focused desktop client is present and override applies", () => {
+    const presentFocused = state({
+      focusedAgentId: "agent-1",
+      lastActivityAtMs: presentAtMs,
+    });
+
+    expect(
+      computeNotificationPlan({
+        allStates: [presentFocused],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        mobilePushOverride: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: null, pushScope: "mobile" });
+  });
+
+  it("suppresses everything when a focused mobile client is present", () => {
+    const presentFocusedMobile = state({
+      isMobile: true,
+      focusedAgentId: "agent-1",
+      lastActivityAtMs: presentAtMs,
+    });
+
+    expect(
+      computeNotificationPlan({
+        allStates: [presentFocusedMobile],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        mobilePushOverride: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: null, pushScope: null });
   });
 
   it("does not suppress notifications when a focused client is backgrounded", () => {
@@ -69,25 +108,29 @@ describe("computeNotificationPlan", () => {
         allStates: [backgroundFocused],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 0, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: null });
   });
 
-  it("treats present clients focused on different agents as eligible", () => {
+  it("pushes to mobile when a focused desktop client is visible but has stale app interaction", () => {
+    const staleFocused = state({
+      focusedAgentId: "agent-1",
+      // Presence fresh via OS-idle, but the app window itself is untouched.
+      lastActivityAtMs: presentAtMs,
+      lastAppActivityAtMs: staleAtMs,
+    });
+
     expect(
       computeNotificationPlan({
-        allStates: [
-          state({
-            focusedAgentId: "agent-2",
-            lastActivityAtMs: nowMs - 1_000,
-          }),
-        ],
+        allStates: [staleFocused],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 0, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: "mobile" });
   });
 
   it("chooses the present client with the greatest clamped activity timestamp", () => {
@@ -100,9 +143,10 @@ describe("computeNotificationPlan", () => {
         ],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 1, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 1, pushScope: null });
   });
 
   it("uses the lower index when present clients have identical timestamps", () => {
@@ -114,9 +158,10 @@ describe("computeNotificationPlan", () => {
         ],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 0, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: null });
   });
 
   it("clamps future timestamps to now and treats them as present", () => {
@@ -128,9 +173,10 @@ describe("computeNotificationPlan", () => {
         ],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 1, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 1, pushScope: null });
   });
 
   it("never treats no-heartbeat clients as present", () => {
@@ -139,9 +185,10 @@ describe("computeNotificationPlan", () => {
         allStates: [state({ lastActivityAtMs: null })],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: true });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: "all" });
   });
 
   it("falls back to push for non-error attention when no clients are present", () => {
@@ -150,9 +197,10 @@ describe("computeNotificationPlan", () => {
         allStates: [state({ lastActivityAtMs: staleAtMs })],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: true });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: "all" });
   });
 
   it("does not push error attention when no clients are present", () => {
@@ -161,45 +209,78 @@ describe("computeNotificationPlan", () => {
         allStates: [state({ lastActivityAtMs: staleAtMs })],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: false,
+        mobilePushOverride: true,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: null });
   });
 
-  it("lets a foreground mobile-style client with recent activity win as most recent", () => {
+  it("pushes mobile scope when presence is fresh but desktop app interaction is stale", () => {
+    // Electron-style client: OS activity keeps presence fresh while the app
+    // window itself has not been touched — mobile push must still fire.
     expect(
       computeNotificationPlan({
         allStates: [
-          state({ focusedAgentId: "agent-2", lastActivityAtMs: nowMs - 20_000 }),
-          state({ focusedAgentId: null, lastActivityAtMs: nowMs - 500 }),
+          state({
+            lastActivityAtMs: nowMs - 1_000,
+            lastAppActivityAtMs: staleAtMs,
+          }),
         ],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 1, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: "mobile" });
   });
 
-  it("selects no in-app recipient and pushes when two web-style clients are stale", () => {
+  it("pushes mobile scope when override applies and a desktop client interacted recently", () => {
+    expect(
+      computeNotificationPlan({
+        allStates: [state({ lastActivityAtMs: nowMs - 1_000 })],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        mobilePushOverride: true,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: "mobile" });
+  });
+
+  it("does not suppress push when a mobile client interacted recently", () => {
+    // Mobile interaction alone never blocks push — the phone may be backgrounded.
+    expect(
+      computeNotificationPlan({
+        allStates: [state({ isMobile: true, appVisible: false, lastActivityAtMs: nowMs - 1_000 })],
+        focusTarget: { kind: "agent", id: "agent-1" },
+        pushEligible: true,
+        mobilePushOverride: false,
+        nowMs,
+      }),
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: "mobile" });
+  });
+
+  it("selects no in-app recipient and pushes all when two web-style clients are stale", () => {
     expect(
       computeNotificationPlan({
         allStates: [state({ lastActivityAtMs: staleAtMs }), state({ lastActivityAtMs: staleAtMs })],
         focusTarget: { kind: "agent", id: "agent-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: true });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: "all" });
   });
 
   it("never suppresses when focusTarget is null even if a client focuses a matching id", () => {
     expect(
       computeNotificationPlan({
-        allStates: [state({ focusedAgentId: "terminal-1", lastActivityAtMs: nowMs - 500 })],
+        allStates: [state({ focusedTerminalId: "terminal-1", lastActivityAtMs: nowMs - 500 })],
         focusTarget: null,
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: 0, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: 0, pushScope: null });
   });
 
   it("suppresses terminal notifications when a present visible client focuses the terminal", () => {
@@ -208,9 +289,10 @@ describe("computeNotificationPlan", () => {
         allStates: [state({ focusedTerminalId: "terminal-1", lastActivityAtMs: nowMs - 500 })],
         focusTarget: { kind: "terminal", id: "terminal-1" },
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: false });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: null });
   });
 
   it("pushes for a null-focus target when no client is present and push is eligible", () => {
@@ -219,9 +301,10 @@ describe("computeNotificationPlan", () => {
         allStates: [state({ lastActivityAtMs: staleAtMs })],
         focusTarget: null,
         pushEligible: true,
+        mobilePushOverride: false,
         nowMs,
       }),
-    ).toEqual({ inAppRecipientIndex: null, shouldPush: true });
+    ).toEqual({ inAppRecipientIndex: null, pushScope: "all" });
   });
 });
 

@@ -142,7 +142,11 @@ export class WebPushService {
 
   subscribe(subscription: WebPushSubscription, principalId: string, clientId?: string): void {
     const validated = validateWebPushSubscription(subscription);
-    this.store.subscribe(validated, principalId, clientId);
+    this.store.subscribe(
+      { ...validated, deviceClass: subscription.deviceClass },
+      principalId,
+      clientId,
+    );
   }
 
   unsubscribe(endpoint: string, principalId: string, clientId?: string): boolean {
@@ -179,8 +183,12 @@ export class WebPushService {
     await this.deliverToSubscription(subscription, testPayload);
   }
 
-  async sendPush(payload: PushPayload): Promise<void> {
-    const subscriptions = this.store.getActiveSubscriptions();
+  async sendPush(payload: PushPayload, options?: { scope?: "all" | "mobile" }): Promise<void> {
+    const subscriptions = this.store
+      .getActiveSubscriptions()
+      // "mobile" scope reaches mobile-class endpoints only; subscriptions
+      // without a recorded class are treated as desktop.
+      .filter((sub) => options?.scope !== "mobile" || sub.deviceClass === "mobile");
     if (subscriptions.length === 0) {
       return;
     }
@@ -222,6 +230,21 @@ export class WebPushService {
     );
 
     await Promise.allSettled(tasks);
+  }
+
+  /**
+   * Whether a scope-scoped push would reach an active subscription owned by
+   * this client. Used to suppress the page-local OS notification when the
+   * service worker will already show one for the same event.
+   */
+  hasPushCoverageForClient(clientId: string, scope: "all" | "mobile"): boolean {
+    const normalized = clientId.trim();
+    return this.store
+      .getActiveSubscriptions()
+      .some(
+        (sub) =>
+          sub.clientId === normalized && (scope !== "mobile" || sub.deviceClass === "mobile"),
+      );
   }
 
   private async deliverToSubscription(

@@ -75,6 +75,7 @@ import {
   buildAgentAttentionNotificationPayload,
   findLatestPermissionRequest,
 } from "@getpaseo/protocol/agent-attention-notification";
+import { getOriginDeviceFromLabels } from "@getpaseo/protocol/agent-labels";
 import type { WebPushSubscription } from "@getpaseo/protocol/messages";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
@@ -2565,6 +2566,8 @@ export class VoiceAssistantWebSocketServer {
         focusedAgentId: null,
         focusedTerminalId: null,
         lastActivityAtMs: null,
+        lastAppActivityAtMs: null,
+        isMobile: false,
       };
     }
 
@@ -2573,6 +2576,8 @@ export class VoiceAssistantWebSocketServer {
       focusedAgentId: activity.focusedAgentId,
       focusedTerminalId: activity.focusedTerminalId,
       lastActivityAtMs: activity.lastActivityAt.getTime(),
+      lastAppActivityAtMs: activity.lastAppActivityAt.getTime(),
+      isMobile: activity.deviceType === "mobile" || activity.deviceClass === "mobile",
     };
   }
 
@@ -2600,12 +2605,24 @@ export class VoiceAssistantWebSocketServer {
 
     const allStates = clientEntries.map((e) => e.state);
     const nowMs = Date.now();
-    const assistantMessage = await this.agentManager.getLastAssistantMessage(params.agentId);
+    // Only "finished" notifications embed the assistant preview — skip the
+    // durable-store read for permission/error so a slow lookup can't delay them.
+    const assistantMessage =
+      params.reason === "finished"
+        ? await this.agentManager.getLastAssistantMessage(params.agentId).catch((err) => {
+            this.logger.warn(
+              { err, agentId: params.agentId },
+              "Failed to read last assistant message for notification",
+            );
+            return null;
+          })
+        : null;
     const notification = buildAgentAttentionNotificationPayload({
       reason: params.reason,
       serverId: this.serverId,
       workspaceId: agent.workspaceId,
       agentId: params.agentId,
+      agentTitle: agent.config.title ?? null,
       assistantMessage,
       permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
     });
@@ -2614,19 +2631,31 @@ export class VoiceAssistantWebSocketServer {
       allStates,
       focusTarget: { kind: "agent", id: params.agentId },
       pushEligible: isPushEligibleAttentionReason(params.reason),
+      // Permission prompts and mobile-origin agents still push to mobile
+      // endpoints while a desktop client shows recent app interaction.
+      mobilePushOverride:
+        params.reason === "permission" || getOriginDeviceFromLabels(agent.labels) === "mobile",
       nowMs,
     });
 
-    if (plan.shouldPush) {
-      void this.pushNotificationSender.send(notification).catch((err) => {
-        this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
-      });
+    if (plan.pushScope) {
+      void this.pushNotificationSender
+        .send(notification, { scope: plan.pushScope })
+        .catch((err) => {
+          this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
+        });
     }
 
     for (const [clientIndex, { ws }] of clientEntries.entries()) {
-      const shouldNotify = clientIndex === plan.inAppRecipientIndex;
-      const timestamp = new Date().toISOString();
       const connection = this.sessions.get(ws);
+      // Suppress the page-local OS notification when this client's own push
+      // subscription will already surface the same event via the service worker.
+      const pushCovered =
+        plan.pushScope !== null &&
+        connection !== undefined &&
+        this.webPushService?.hasPushCoverageForClient(connection.clientId, plan.pushScope) === true;
+      const shouldNotify = clientIndex === plan.inAppRecipientIndex && !pushCovered;
+      const timestamp = new Date().toISOString();
       const attentionPayload = {
         agentId: params.agentId,
         reason: params.reason,
@@ -2696,24 +2725,28 @@ export class VoiceAssistantWebSocketServer {
       allStates,
       focusTarget: { kind: "terminal", id: params.terminalId },
       pushEligible: true,
+      mobilePushOverride: false,
       nowMs,
     });
 
     const title = terminalAttentionTitle(params.reason);
     const body = params.terminalName;
 
-    if (plan.shouldPush) {
+    if (plan.pushScope) {
       void this.pushNotificationSender
-        .send({
-          title,
-          body,
-          data: {
-            serverId: this.serverId,
-            terminalId: params.terminalId,
-            cwd: params.cwd,
-            ...(workspaceId ? { workspaceId } : {}),
+        .send(
+          {
+            title,
+            body,
+            data: {
+              serverId: this.serverId,
+              terminalId: params.terminalId,
+              cwd: params.cwd,
+              ...(workspaceId ? { workspaceId } : {}),
+            },
           },
-        })
+          { scope: plan.pushScope },
+        )
         .catch((err) => {
           this.logger.warn(
             { err, terminalId: params.terminalId },
@@ -2723,7 +2756,12 @@ export class VoiceAssistantWebSocketServer {
     }
 
     for (const [clientIndex, { ws }] of clientEntries.entries()) {
-      const shouldNotify = clientIndex === plan.inAppRecipientIndex;
+      const connection = this.sessions.get(ws);
+      const pushCovered =
+        plan.pushScope !== null &&
+        connection !== undefined &&
+        this.webPushService?.hasPushCoverageForClient(connection.clientId, plan.pushScope) === true;
+      const shouldNotify = clientIndex === plan.inAppRecipientIndex && !pushCovered;
       const message = wrapSessionMessage({
         type: "terminal_attention_required",
         payload: {

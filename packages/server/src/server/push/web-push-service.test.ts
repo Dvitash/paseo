@@ -106,6 +106,63 @@ describe("WebPushService", () => {
     expect(req.body!.length).toBeGreaterThan(50);
   });
 
+  it("delivers mobile scope only to mobile-class subscriptions, including after disk reload", async () => {
+    const mobileEndpoint = "https://fcm.googleapis.com/fcm/send/phone-1";
+    const desktopEndpoint = "https://fcm.googleapis.com/fcm/send/desktop-1";
+    const legacyEndpoint = "https://fcm.googleapis.com/fcm/send/legacy-1";
+
+    store.subscribe(
+      {
+        endpoint: mobileEndpoint,
+        keys: { auth: generateValidAuth(), p256dh: generateValidP256dh() },
+        deviceClass: "mobile",
+      },
+      "principal-1",
+      "client-mobile",
+    );
+    store.subscribe(
+      {
+        endpoint: desktopEndpoint,
+        keys: { auth: generateValidAuth(), p256dh: generateValidP256dh() },
+        deviceClass: "desktop",
+      },
+      "principal-1",
+      "client-desktop",
+    );
+    // Legacy row: subscribed before deviceClass existed.
+    store.subscribe(
+      {
+        endpoint: legacyEndpoint,
+        keys: { auth: generateValidAuth(), p256dh: generateValidP256dh() },
+      },
+      "principal-1",
+      "client-legacy",
+    );
+
+    // Reload from disk so persisted deviceClass is what the service sees.
+    const reloadedStore = new WebPushStore(createNoopLogger(), storePath);
+    const reloadedService = new WebPushService({
+      logger: createNoopLogger(),
+      vapidKeys: loadOrCreateVapidKeys(vapidKeyPath, createNoopLogger()),
+      store: reloadedStore,
+      transport,
+    });
+
+    await reloadedService.sendPush(
+      { title: "Agent needs permission", body: "Approve?" },
+      { scope: "mobile" },
+    );
+
+    expect(transport.sentRequests.map((r) => r.endpoint)).toEqual([mobileEndpoint]);
+
+    transport.sentRequests.length = 0;
+    await reloadedService.sendPush({ title: "Agent finished", body: "Done" });
+
+    expect(transport.sentRequests.map((r) => r.endpoint).sort()).toEqual(
+      [mobileEndpoint, desktopEndpoint, legacyEndpoint].sort(),
+    );
+  });
+
   it("bounds oversized payloads under 3072 bytes without breaking multi-byte code points", async () => {
     const endpoint = "https://fcm.googleapis.com/fcm/send/device-huge";
     store.subscribe(

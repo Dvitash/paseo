@@ -939,6 +939,7 @@ export const AgentStreamEventPayloadSchema = z.discriminatedUnion("type", [
           serverId: z.string(),
           workspaceId: z.string().optional(),
           agentId: z.string(),
+          agentTitle: z.string().optional(),
           reason: z.enum(["finished", "error", "permission"]),
         }),
       })
@@ -2896,6 +2897,10 @@ export const ClientHeartbeatMessageSchema = z.object({
   // COMPAT(terminalFocusHeartbeat): added in v0.1.97, remove optional default after 2026-12-13 once old clients no longer send heartbeats without terminal focus.
   focusedTerminalId: z.string().nullable().optional().default(null),
   lastActivityAt: z.string(),
+  // COMPAT(appActivityHeartbeat): added in v0.8.0, remove optional after 2027-03-10 once old clients no longer send heartbeats without app-interaction time.
+  lastAppActivityAt: z.string().optional(),
+  // COMPAT(deviceClassHeartbeat): added in v0.8.0, remove optional after 2027-03-10 once old clients no longer send heartbeats without a device class.
+  deviceClass: z.enum(["mobile", "desktop"]).optional(),
   appVisible: z.boolean(),
   appVisibilityChangedAt: z.string().optional(),
 });
@@ -4795,6 +4800,7 @@ export const AgentAttentionRequiredMessageSchema = z.object({
           serverId: z.string(),
           workspaceId: z.string().optional(),
           agentId: z.string(),
+          agentTitle: z.string().optional(),
           reason: z.enum(["finished", "error", "permission"]),
         }),
       })

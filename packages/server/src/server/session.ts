@@ -66,7 +66,7 @@ import { loadPersistedConfig } from "./persisted-config.js";
 import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-registry.js";
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
-import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
+import { getParentAgentIdFromLabels, ORIGIN_DEVICE_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -733,9 +733,11 @@ export class Session {
   private readonly workspaceUpdateTails = new Map<string, Promise<void>>();
   private clientActivity: {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId: string | null;
     lastActivityAt: Date;
+    lastAppActivityAt: Date;
     appVisible: boolean;
     appVisibilityChangedAt: Date;
   } | null = null;
@@ -1398,9 +1400,11 @@ export class Session {
    */
   public getClientActivity(): {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId: string | null;
     lastActivityAt: Date;
+    lastAppActivityAt: Date;
     appVisible: boolean;
     appVisibilityChangedAt: Date;
   } | null {
@@ -3827,10 +3831,19 @@ export class Session {
           initialPrompt,
           clientMessageId,
           outputSchema,
+          labels: {
+            ...resolvedIntent.intent.labels,
+            // Stamp the creating client's device class so attention routing can
+            // push mobile-origin agents to mobile even while desktop is active.
+            [ORIGIN_DEVICE_LABEL]:
+              this.clientActivity?.deviceType === "mobile" ||
+              this.clientActivity?.deviceClass === "mobile"
+                ? "mobile"
+                : "desktop",
+          },
           images,
           attachments,
           git,
-          labels: resolvedIntent.intent.labels,
           env,
           provisionalTitle,
           firstAgentContext,
@@ -4402,9 +4415,11 @@ export class Session {
    */
   private handleClientHeartbeat(msg: {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId?: string | null;
     lastActivityAt: string;
+    lastAppActivityAt?: string;
     appVisible: boolean;
     appVisibilityChangedAt?: string;
   }): void {
@@ -4412,11 +4427,18 @@ export class Session {
     const appVisibilityChangedAt = msg.appVisibilityChangedAt
       ? new Date(msg.appVisibilityChangedAt)
       : new Date(msg.lastActivityAt);
+    const lastActivityAt = new Date(msg.lastActivityAt);
+    // Old clients don't send an app-interaction clock; fall back to presence.
+    const lastAppActivityAt = msg.lastAppActivityAt
+      ? new Date(msg.lastAppActivityAt)
+      : lastActivityAt;
     this.clientActivity = {
       deviceType: msg.deviceType,
+      deviceClass: msg.deviceClass,
       focusedAgentId: msg.focusedAgentId,
       focusedTerminalId,
-      lastActivityAt: new Date(msg.lastActivityAt),
+      lastActivityAt,
+      lastAppActivityAt,
       appVisible: msg.appVisible,
       appVisibilityChangedAt,
     };

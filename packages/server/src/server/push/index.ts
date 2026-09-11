@@ -1,5 +1,6 @@
 import type pino from "pino";
 
+import type { PushScope } from "../agent-attention-policy.js";
 import { PushService, type PushPayload } from "./push-service.js";
 import { PushTokenStore } from "./token-store.js";
 import type { WebPushService } from "./web-push-service.js";
@@ -8,10 +9,15 @@ export type { PushPayload };
 
 const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
 
+export interface PushSendOptions {
+  /** "mobile" restricts delivery to mobile endpoints (Expo tokens + mobile-class web push). */
+  scope?: PushScope;
+}
+
 export interface PushNotifications {
   renew(token: string): void;
   revoke(token: string): void;
-  send(payload: PushPayload): Promise<void>;
+  send(payload: PushPayload, options?: PushSendOptions): Promise<void>;
   readonly webPush?: WebPushService;
 }
 
@@ -39,7 +45,8 @@ export function createPushNotifications(options: {
     revoke(token) {
       store.revokeToken(token);
     },
-    async send(payload) {
+    async send(payload, sendOptions) {
+      // Expo tokens are inherently mobile endpoints.
       const expoTask = (async () => {
         const tokens = store.getActiveTokens();
         if (tokens.length > 0) {
@@ -50,7 +57,7 @@ export function createPushNotifications(options: {
 
       const webTask = (async () => {
         if (options.webPush) {
-          await options.webPush.sendPush(payload);
+          await options.webPush.sendPush(payload, { scope: sendOptions?.scope });
         }
       })();
 

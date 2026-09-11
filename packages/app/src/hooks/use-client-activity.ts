@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 import { AppState } from "react-native";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { getIsElectron, isWeb, isNative } from "@/constants/platform";
+import { getDeviceClass, getIsElectron, isWeb, isNative } from "@/constants/platform";
+import { getIsAppActivelyVisible } from "@/utils/app-visibility";
 import { readDesktopSystemIdleTimeMs } from "@/desktop/electron/idle";
 import { invokeDesktopCommand } from "@/desktop/electron/invoke";
+import { subscribeNativeUserActivity } from "./native-activity-source";
 import {
   type ClientActivityTracker,
   createClientActivityTracker,
@@ -33,9 +35,10 @@ export function useClientActivity({
     trackerRef.current = createClientActivityTracker({
       client,
       deviceType: isWeb ? "web" : "mobile",
+      deviceClass: getDeviceClass(),
       initialFocusedAgentId: focusedAgentId,
       initialFocusedTerminalId: focusedTerminalId,
-      initialAppVisible: AppState.currentState === "active",
+      initialAppVisible: getIsAppActivelyVisible(),
       now: () => Date.now(),
     });
   }
@@ -43,11 +46,21 @@ export function useClientActivity({
 
   // Track app visibility via AppState (native).
   useEffect(() => {
-    const subscription = AppState.addEventListener("change", (nextState) => {
-      tracker.notifyAppVisibility(nextState === "active");
+    const subscription = AppState.addEventListener("change", () => {
+      tracker.notifyAppVisibility(getIsAppActivelyVisible());
       tracker.sendHeartbeat();
     });
     return () => subscription.remove();
+  }, [tracker]);
+
+  // Feed native touch activity into the tracker — without it an actively used
+  // mobile client looks absent after PRESENCE_THRESHOLD_MS.
+  useEffect(() => {
+    if (!isNative) return;
+    return subscribeNativeUserActivity(() => {
+      tracker.recordUserActivity();
+      tracker.maybeSendImmediateHeartbeat();
+    });
   }, [tracker]);
 
   // Track user activity and visibility on web.
@@ -60,24 +73,30 @@ export function useClientActivity({
       tracker.maybeSendImmediateHeartbeat();
     };
 
-    const handleVisibilityChange = () => {
-      const visible = document.visibilityState === "visible";
-      const { changed } = tracker.notifyAppVisibility(visible);
-      if (changed && visible) {
-        tracker.maybeSendImmediateHeartbeat();
-      }
+    const syncVisibility = () => {
+      tracker.notifyAppVisibility(getIsAppActivelyVisible());
+      // Unthrottled on every transition: a hidden/blurred window must stop
+      // suppressing mobile push immediately, not after the next interval.
+      tracker.sendHeartbeat();
     };
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", handleUserActivity);
+    const handleFocus = () => {
+      handleUserActivity();
+      syncVisibility();
+    };
+
+    document.addEventListener("visibilitychange", syncVisibility);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("blur", syncVisibility);
     window.addEventListener("pointerdown", handleUserActivity, { passive: true });
     window.addEventListener("keydown", handleUserActivity);
     window.addEventListener("wheel", handleUserActivity, { passive: true });
     window.addEventListener("touchstart", handleUserActivity, { passive: true });
 
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", handleUserActivity);
+      document.removeEventListener("visibilitychange", syncVisibility);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("blur", syncVisibility);
       window.removeEventListener("pointerdown", handleUserActivity);
       window.removeEventListener("keydown", handleUserActivity);
       window.removeEventListener("wheel", handleUserActivity);

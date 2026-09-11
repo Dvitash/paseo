@@ -54,6 +54,8 @@ async function showPush(event) {
     icon: "/pwa-icon-192.png",
     badge: "/pwa-icon-192.png",
     tag: `paseo:${url}`,
+    // Same-agent repeats replace the existing notification; renotify keeps them audible.
+    renotify: true,
     data: { url },
   });
 }

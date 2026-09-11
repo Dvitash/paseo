@@ -53,3 +53,24 @@ export function getIsElectronMac(): boolean {
   if (result) _isElectronMacCached = true;
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Notification device class
+//
+// Stable per device (unlike layout breakpoints): native apps and mobile
+// browsers are "mobile", everything else is "desktop". Used for push routing
+// and the agent origin-device label — not for layout decisions.
+// ---------------------------------------------------------------------------
+
+export function getDeviceClass(): "mobile" | "desktop" {
+  if (isNative) return "mobile";
+  if (isWeb && typeof navigator !== "undefined") {
+    const ua = navigator.userAgent;
+    // iPadOS reports a Macintosh UA; multi-touch exposes it.
+    const isMobileBrowser =
+      /Mobi|Android|iPhone|iPad/i.test(ua) ||
+      (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    return isMobileBrowser ? "mobile" : "desktop";
+  }
+  return "desktop";
+}

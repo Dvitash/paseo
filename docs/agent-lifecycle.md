@@ -78,6 +78,14 @@ Permission requests are notification checkpoints, not the end of that subscripti
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.
 A watched child that closes before its finish event also notifies the caller so delegated work cannot disappear silently during archive or workspace teardown.
 
+## Attention and push routing
+
+`AgentManager` raises attention on three transitions: `running → idle` (finished), `→ error`, and the first pending permission. `computeNotificationPlan` (`packages/server/src/server/agent-attention-policy.ts`) then decides who hears about it.
+
+Clients report two clocks in `client_heartbeat`: `lastActivityAt` is a presence clock (Electron inflates it with OS idle time so a backgrounded desktop window still counts as present), and `lastAppActivityAt` only advances on real input inside the app window. Presence picks the single most-recently-active in-app recipient for `agent_attention_required`. Push scope is decided separately: `"all"` when no client is present, `"mobile"` when clients are present but no desktop app interaction is recent, and `"mobile"` again when a desktop is in use but `mobilePushOverride` applies (permission prompts and agents stamped `paseo.origin-device=mobile` at creation). A client actively watching the target — visible, focused, recently interacted — suppresses its own delivery; a mobile viewer suppresses push entirely, a desktop viewer only narrows it to mobile scope.
+
+`scope: "mobile"` reaches Expo tokens plus web-push subscriptions whose stored `deviceClass` is `"mobile"` (native apps and mobile browsers report `"mobile"`; subscriptions without a class are treated as desktop). Web-push subscriptions carry a 48h lease renewed only on client activity/reconnect — never on delivery, since a push service accepting an endpoint does not prove the client is still active.
+
 ## Provider-managed child agents
 
 Some providers can create their own child sessions inside one provider runtime. OMP's task tool reports these with `child_session` events; `AgentManager` imports the live provider handle, stamps `paseo.parent-agent-id`, and surfaces the result as a normal subagent in the parent's subagents track.

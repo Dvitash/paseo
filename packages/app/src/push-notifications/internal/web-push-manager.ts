@@ -1,4 +1,4 @@
-import { isWeb } from "@/constants/platform";
+import { getDeviceClass, isWeb } from "@/constants/platform";
 import { createWebPushBrowserAdapter } from "./web-push-adapter";
 import { createAsyncStorageWebPushStorage } from "./web-push-storage";
 import type {
@@ -261,7 +261,7 @@ export class WebPushManager {
       }
 
       try {
-        await client.subscribeWebPush(subscription);
+        await client.subscribeWebPush({ ...subscription, deviceClass: getDeviceClass() });
       } catch (error) {
         await this.adapter.unsubscribe(serverId).catch(() => undefined);
         if (this.isCurrentGeneration(serverId, opGen)) {
@@ -490,7 +490,7 @@ export class WebPushManager {
       return;
     }
     try {
-      await client.subscribeWebPush(subscription);
+      await client.subscribeWebPush({ ...subscription, deviceClass: getDeviceClass() });
     } catch {
       await this.adapter.unsubscribe(serverId).catch(() => undefined);
       return;
@@ -529,7 +529,7 @@ export class WebPushManager {
       return;
     }
     try {
-      await client.subscribeWebPush(existing);
+      await client.subscribeWebPush({ ...existing, deviceClass: getDeviceClass() });
       if (!(await this.canReconcile(serverId, generation))) return;
       this.setStatus(serverId, {
         kind: "enabled",

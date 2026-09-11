@@ -457,3 +457,48 @@ test("server_info accepts modelTurnMetrics feature flag", () => {
     true,
   );
 });
+
+test("attention notifications preserve agentTitle in both wire variants", () => {
+  const notification = {
+    title: "Agent finished",
+    body: "Refactor auth: Done.",
+    data: {
+      serverId: "srv-1",
+      workspaceId: "ws-1",
+      agentId: "agent-1",
+      agentTitle: "Refactor auth",
+      reason: "finished",
+    },
+  };
+
+  const legacy = {
+    type: "agent_stream",
+    payload: {
+      agentId: "agent-1",
+      event: {
+        type: "attention_required",
+        provider: "claude",
+        reason: "finished",
+        timestamp: "2026-09-10T00:00:00.000Z",
+        shouldNotify: false,
+        notification,
+      },
+      timestamp: "2026-09-10T00:00:00.000Z",
+    },
+  };
+  const parsedLegacy = SessionOutboundMessageSchema.parse(legacy);
+  expect(parsedLegacy).toEqual(legacy);
+
+  const dedicated = {
+    type: "agent_attention_required",
+    payload: {
+      agentId: "agent-1",
+      reason: "finished",
+      timestamp: "2026-09-10T00:00:00.000Z",
+      shouldNotify: false,
+      notification,
+    },
+  };
+  const parsedDedicated = SessionOutboundMessageSchema.parse(dedicated);
+  expect(parsedDedicated).toEqual(dedicated);
+});

@@ -4,9 +4,11 @@ export const DESKTOP_IDLE_POLL_INTERVAL_MS = 5_000;
 
 export interface HeartbeatPayload {
   deviceType: "web" | "mobile";
+  deviceClass?: "mobile" | "desktop";
   focusedAgentId: string | null;
   focusedTerminalId: string | null;
   lastActivityAt: string;
+  lastAppActivityAt: string;
   appVisible: boolean;
   appVisibilityChangedAt?: string;
 }
@@ -19,6 +21,7 @@ export interface HeartbeatClient {
 export interface ClientActivityTrackerInput {
   client: HeartbeatClient;
   deviceType: "web" | "mobile";
+  deviceClass?: "mobile" | "desktop";
   initialFocusedAgentId: string | null;
   initialFocusedTerminalId: string | null;
   initialAppVisible: boolean;
@@ -38,8 +41,11 @@ export interface ClientActivityTracker {
 export function createClientActivityTracker(
   input: ClientActivityTrackerInput,
 ): ClientActivityTracker {
-  const { client, deviceType, now } = input;
+  const { client, deviceType, deviceClass, now } = input;
   let lastActivityAtMs = now();
+  // App-interaction clock: only real input inside the app window advances it.
+  // OS-idle presence (Electron) must not suppress mobile push.
+  let lastAppActivityAtMs = lastActivityAtMs;
   let appVisible = input.initialAppVisible;
   let appVisibilityChangedAtMs = now();
   let focusedAgentId = input.initialFocusedAgentId;
@@ -50,9 +56,11 @@ export function createClientActivityTracker(
     if (!client.isConnected) return;
     client.sendHeartbeat({
       deviceType,
+      deviceClass,
       focusedAgentId,
       focusedTerminalId,
       lastActivityAt: new Date(lastActivityAtMs).toISOString(),
+      lastAppActivityAt: new Date(lastAppActivityAtMs).toISOString(),
       appVisible,
       appVisibilityChangedAt: new Date(appVisibilityChangedAtMs).toISOString(),
     });
@@ -60,6 +68,7 @@ export function createClientActivityTracker(
 
   function recordUserActivity(): void {
     lastActivityAtMs = now();
+    lastAppActivityAtMs = lastActivityAtMs;
   }
 
   function maybeSendImmediateHeartbeat(): void {

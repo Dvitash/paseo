@@ -16,6 +16,8 @@ export interface StoredWebPushSubscription {
   };
   principalId: string;
   clientId: string;
+  /** "mobile" | "desktop" as reported by the subscribing client; absent on legacy rows. */
+  deviceClass?: "mobile" | "desktop";
   createdAt: number;
   expiresAt: number;
 }
@@ -28,6 +30,7 @@ interface SerializedSubscription {
   };
   principalId: string;
   clientId?: string;
+  deviceClass?: "mobile" | "desktop";
   createdAt: string;
   expiresAt: string;
 }
@@ -111,11 +114,12 @@ export class WebPushStore {
         );
       }
 
-      // Same owner: update keys and renew lease
+      // Same owner: update keys, refresh device class, and renew lease
       const updated: StoredWebPushSubscription = {
         ...existing,
         keys,
         clientId: effectiveClientId,
+        deviceClass: subscription.deviceClass ?? existing.deviceClass,
         expiresAt: now + this.leaseMs,
       };
 
@@ -164,6 +168,7 @@ export class WebPushStore {
       keys,
       principalId,
       clientId: effectiveClientId,
+      deviceClass: subscription.deviceClass,
       createdAt: now,
       expiresAt: now + this.leaseMs,
     };
@@ -379,7 +384,7 @@ export class WebPushStore {
       const items = Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [];
       for (const item of items) {
         if (!item || typeof item !== "object") continue;
-        const { endpoint, keys, principalId, clientId, createdAt, expiresAt } = item;
+        const { endpoint, keys, principalId, clientId, deviceClass, createdAt, expiresAt } = item;
         if (
           typeof endpoint !== "string" ||
           typeof principalId !== "string" ||
@@ -403,6 +408,8 @@ export class WebPushStore {
             keys: validKeys,
             principalId: principalId.trim(),
             clientId: typeof clientId === "string" ? clientId.trim() : "default",
+            deviceClass:
+              deviceClass === "mobile" || deviceClass === "desktop" ? deviceClass : undefined,
             createdAt: Number.isFinite(createdAtMs) ? createdAtMs : now,
             expiresAt: expiresAtMs,
           });
@@ -428,6 +435,7 @@ export class WebPushStore {
           keys: sub.keys,
           principalId: sub.principalId,
           clientId: sub.clientId,
+          deviceClass: sub.deviceClass,
           createdAt: new Date(sub.createdAt).toISOString(),
           expiresAt: new Date(sub.expiresAt).toISOString(),
         })),

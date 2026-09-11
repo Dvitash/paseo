@@ -1949,18 +1949,22 @@ export class DaemonClient {
 
   sendHeartbeat(params: {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId?: string | null;
     lastActivityAt: string;
+    lastAppActivityAt?: string;
     appVisible: boolean;
     appVisibilityChangedAt?: string;
   }): void {
     this.sendSessionMessage({
       type: "client_heartbeat",
       deviceType: params.deviceType,
+      deviceClass: params.deviceClass,
       focusedAgentId: params.focusedAgentId,
       focusedTerminalId: params.focusedTerminalId ?? null,
       lastActivityAt: params.lastActivityAt,
+      lastAppActivityAt: params.lastAppActivityAt,
       appVisible: params.appVisible,
       appVisibilityChangedAt: params.appVisibilityChangedAt,
     });

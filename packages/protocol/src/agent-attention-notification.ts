@@ -7,6 +7,7 @@ export interface AgentAttentionNotificationData {
   serverId: string;
   workspaceId?: string;
   agentId: string;
+  agentTitle?: string;
   reason: AgentAttentionReason;
 }
 
@@ -21,6 +22,7 @@ interface BuildAgentAttentionNotificationPayloadInput {
   serverId: string;
   workspaceId: string;
   agentId: string;
+  agentTitle?: string | null;
   assistantMessage?: string | null;
   permissionRequest?: NotificationPermissionRequest | null;
 }
@@ -198,7 +200,10 @@ export function buildAgentAttentionNotificationPayload(
 ): AgentAttentionNotificationPayload {
   const title = resolveAgentAttentionTitle(input.reason);
   const preview = resolveAgentAttentionPreview(input);
-  const body = preview ?? resolveAgentAttentionFallbackBody(input.reason);
+  const fallback = resolveAgentAttentionFallbackBody(input.reason);
+  const agentTitle = input.agentTitle?.trim() || null;
+  const detail = preview ?? fallback;
+  const body = agentTitle ? `${agentTitle}: ${detail}` : detail;
 
   return {
     title,
@@ -207,6 +212,7 @@ export function buildAgentAttentionNotificationPayload(
       serverId: input.serverId,
       workspaceId: input.workspaceId,
       agentId: input.agentId,
+      ...(agentTitle ? { agentTitle } : {}),
       reason: input.reason,
     },
   };
