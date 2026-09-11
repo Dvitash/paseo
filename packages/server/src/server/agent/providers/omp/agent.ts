@@ -22,6 +22,7 @@ import {
   type AgentProvider,
   type AgentRunOptions,
   type AgentRunResult,
+  type AgentCreateSessionOptions,
   type AgentRuntimeInfo,
   type AgentSession,
   type AgentSessionConfig,
@@ -129,6 +130,7 @@ const OMP_CORE_CAPABILITIES: AgentCapabilityFlags = {
   supportsToolInvocations: true,
   supportsRewindConversation: true,
   supportsRewindFiles: false,
+  supportsSessionFork: true,
   supportsRewindBoth: false,
 };
 
@@ -2506,97 +2508,140 @@ export class OmpAgentClient implements AgentClient {
     await setOmpHostTools(runtimeSession, catalog);
   }
 
+  /**
+   * Fail-closed check that the read-only guard extension loaded and the live
+   * tool surface contains nothing beyond read/grep/glob plus host tools.
+   */
+  private async verifyReadOnlyConfinement(
+    runtimeSession: OmpRuntimeSession,
+    hostToolNames: string[],
+  ): Promise<void> {
+    const commands = await runtimeSession.getCommands();
+    const guardLoaded = commands.some((cmd) => cmd.name === PASEO_OMP_READONLY_GUARD_COMMAND);
+    if (!guardLoaded) {
+      throw new Error(
+        "OMP read-only guard extension failed to load: sentinel command not registered",
+      );
+    }
+    const state = await runtimeSession.getState();
+    const rawDumpTools = (state as Record<string, unknown>).dumpTools;
+    if (Array.isArray(rawDumpTools)) {
+      const allowed = new Set(["read", "grep", "glob", ...hostToolNames]);
+      const disallowed = rawDumpTools
+        .map(extractToolName)
+        .filter((name): name is string => typeof name === "string" && !allowed.has(name));
+      if (disallowed.length > 0) {
+        throw new Error(
+          `OMP read-only tool confinement verification failed: unexpected tools present (${disallowed.join(", ")})`,
+        );
+      }
+    }
+  }
+
   async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,
+    options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
     const launchMode = this.resolveLaunchMode(config.modeId);
     const isReadOnly = config.readOnly === true;
+    const forkSource = options?.forkFrom?.nativeHandle ?? options?.forkFrom?.sessionId;
     const hostToolNames = launchContext?.paseoTools
       ? [...launchContext.paseoTools.tools.keys()]
       : [];
 
-    let readOnlyConfig: OmpTempFile | null = null;
-    let readOnlyGuard: OmpTempFile | null = null;
-    if (isReadOnly) {
-      readOnlyConfig = createOmpReadOnlyConfigFile();
-      readOnlyGuard = createOmpReadOnlyGuardExtensionFile({ hostToolNames });
-    }
-
-    let runtimeSession: OmpRuntimeSession;
-    try {
-      runtimeSession = await this.runtime.startSession({
-        cwd: config.cwd,
-        protocolMode: "rpc-ui",
-        model: config.model,
-        thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
-        noSession: config.internal === true && !isReadOnly && config.durableInternal !== true,
-        modeId: launchMode.modeId,
-        extraArgs: launchMode.extraArgs,
-        systemPrompt: composeSystemPromptParts(
-          config.systemPrompt,
-          config.daemonAppendSystemPrompt,
-        ),
-        env: launchContext?.env,
-        readOnly: isReadOnly,
-        configFilePath: readOnlyConfig?.path,
-        extensionPaths: readOnlyGuard ? [readOnlyGuard.path] : undefined,
-      });
-    } catch (error) {
-      readOnlyConfig?.cleanup();
-      readOnlyGuard?.cleanup();
-      throw error;
-    }
-
+    const readOnlyConfig = isReadOnly ? createOmpReadOnlyConfigFile() : null;
+    const readOnlyGuard = isReadOnly
+      ? createOmpReadOnlyGuardExtensionFile({ hostToolNames })
+      : null;
     const cleanupFiles = () => {
       readOnlyConfig?.cleanup();
       readOnlyGuard?.cleanup();
     };
 
+    let runtimeSession: OmpRuntimeSession;
+    try {
+      runtimeSession = await this.startRuntimeSession({
+        config,
+        launchMode,
+        isReadOnly,
+        forkSource,
+        launchContext,
+        readOnlyConfigPath: readOnlyConfig?.path,
+        readOnlyGuardPath: readOnlyGuard?.path,
+      });
+    } catch (error) {
+      cleanupFiles();
+      throw error;
+    }
+
     try {
       if (isReadOnly) {
-        const commands = await runtimeSession.getCommands();
-        const guardLoaded = commands.some((cmd) => cmd.name === PASEO_OMP_READONLY_GUARD_COMMAND);
-        if (!guardLoaded) {
-          throw new Error(
-            "OMP read-only guard extension failed to load: sentinel command not registered",
-          );
-        }
-        const state = await runtimeSession.getState();
-        const rawDumpTools = (state as Record<string, unknown>).dumpTools;
-        if (Array.isArray(rawDumpTools)) {
-          const allowed = new Set(["read", "grep", "glob", ...hostToolNames]);
-          const disallowed = rawDumpTools
-            .map(extractToolName)
-            .filter((name): name is string => typeof name === "string" && !allowed.has(name));
-          if (disallowed.length > 0) {
-            throw new Error(
-              `OMP read-only tool confinement verification failed: unexpected tools present (${disallowed.join(", ")})`,
-            );
-          }
-        }
+        await this.verifyReadOnlyConfinement(runtimeSession, hostToolNames);
       }
-
       await this.configureNativePaseoTools(runtimeSession, launchContext?.paseoTools);
-      return new OmpAgentSession({
+      return this.buildSession(
         runtimeSession,
         config,
-        initialState: await runtimeSession.getState(),
-        currentModeId: launchMode.modeId,
-        logger: this.logger,
-        subagentCardScheduler: this.subagentCardScheduler,
-        providerIdleScheduler: this.providerIdleScheduler,
-        noTurnScheduler: this.noTurnScheduler,
-        usagePollScheduler: this.usagePollScheduler,
-        now: this.now,
-        paseoTools: launchContext?.paseoTools,
-        cleanup: cleanupFiles,
-      });
+        launchMode.modeId,
+        launchContext,
+        cleanupFiles,
+      );
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
       cleanupFiles();
       throw error;
     }
+  }
+
+  private async buildSession(
+    runtimeSession: OmpRuntimeSession,
+    config: AgentSessionConfig,
+    modeId: string | null,
+    launchContext: AgentLaunchContext | undefined,
+    cleanup: () => void,
+  ): Promise<OmpAgentSession> {
+    return new OmpAgentSession({
+      runtimeSession,
+      config,
+      initialState: await runtimeSession.getState(),
+      currentModeId: modeId,
+      logger: this.logger,
+      subagentCardScheduler: this.subagentCardScheduler,
+      providerIdleScheduler: this.providerIdleScheduler,
+      noTurnScheduler: this.noTurnScheduler,
+      usagePollScheduler: this.usagePollScheduler,
+      now: this.now,
+      paseoTools: launchContext?.paseoTools,
+      cleanup,
+    });
+  }
+
+  private async startRuntimeSession(input: {
+    config: AgentSessionConfig;
+    launchMode: { modeId: string | null; extraArgs?: string[] };
+    isReadOnly: boolean;
+    forkSource?: string;
+    launchContext?: AgentLaunchContext;
+    readOnlyConfigPath?: string;
+    readOnlyGuardPath?: string;
+  }): Promise<OmpRuntimeSession> {
+    const { config, launchMode, isReadOnly, forkSource, launchContext } = input;
+    return this.runtime.startSession({
+      cwd: config.cwd,
+      ...(forkSource ? { fork: forkSource } : {}),
+      protocolMode: "rpc-ui",
+      model: config.model,
+      thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
+      noSession: config.internal === true && !isReadOnly && config.durableInternal !== true,
+      modeId: launchMode.modeId ?? undefined,
+      extraArgs: launchMode.extraArgs,
+      systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
+      env: launchContext?.env,
+      readOnly: isReadOnly,
+      configFilePath: input.readOnlyConfigPath,
+      extensionPaths: input.readOnlyGuardPath ? [input.readOnlyGuardPath] : undefined,
+    });
   }
 
   async resumeSession(

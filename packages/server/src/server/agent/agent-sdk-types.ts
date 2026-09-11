@@ -193,6 +193,12 @@ export interface AgentCapabilityFlags {
   supportsRewindConversation?: boolean;
   supportsRewindFiles?: boolean;
   supportsRewindBoth?: boolean;
+  /**
+   * Provider can create a new session forked from an existing native session,
+   * inheriting its full transcript (Claude forkSession, Codex thread/fork,
+   * OMP --fork). Used by fork-based Side sessions.
+   */
+  supportsSessionFork?: boolean;
 }
 
 export interface AgentPersistenceHandle {
@@ -665,6 +671,13 @@ export interface AgentCreateSessionOptions {
    * Defaults to true. Providers that cannot honor false should no-op.
    */
   persistSession?: boolean;
+  /**
+   * Fork the new session from this existing native session, inheriting its
+   * transcript. Only honored when the client advertises supportsSessionFork.
+   * `nativeHandle` carries the provider-specific source (OMP session file,
+   * Claude session id, Codex thread id).
+   */
+  forkFrom?: AgentPersistenceHandle;
 }
 
 /** Runtime-only intent for a persisted-session resume. Never persist this option. */

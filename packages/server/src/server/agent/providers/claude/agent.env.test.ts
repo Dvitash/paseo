@@ -159,3 +159,67 @@ describe("Claude SDK env", () => {
     }
   });
 });
+
+describe("Claude session fork", () => {
+  test("createSession with forkFrom resumes the source with forkSession", async () => {
+    let capturedOptions: { resume?: string; forkSession?: boolean } | undefined;
+    const queryFactory = vi.fn(({ options }: ClaudeQueryInput) => {
+      capturedOptions = { resume: options.resume, forkSession: options.forkSession };
+      return createQueryMock([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "forked-session-id",
+          permissionMode: "default",
+          model: "opus",
+        },
+        {
+          type: "assistant",
+          message: { content: "done" },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          usage: {
+            input_tokens: 1,
+            cache_read_input_tokens: 0,
+            output_tokens: 1,
+          },
+          total_cost_usd: 0,
+        },
+      ]);
+    });
+
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.createSession(
+      {
+        provider: "claude",
+        cwd: process.cwd(),
+      },
+      undefined,
+      {
+        forkFrom: {
+          provider: "claude",
+          sessionId: "source-session-id",
+          nativeHandle: "source-session-id",
+        },
+      },
+    );
+
+    try {
+      const result = await session.run("fork check");
+      expect(capturedOptions).toEqual({
+        resume: "source-session-id",
+        forkSession: true,
+      });
+      // The forked session id replaces the source id once init arrives.
+      expect(result.sessionId).toBe("forked-session-id");
+    } finally {
+      await session.close();
+    }
+  });
+});

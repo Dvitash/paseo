@@ -16,6 +16,10 @@ export const StoredSideChatRecordSchema = SideChatSnapshotSchema.omit({
   checkpoint: SideContextCheckpointSchema.nullable(),
   provider: z.string().nullable(),
   model: z.string().nullable(),
+  /** True when the side agent was forked from the main native session. */
+  forked: z.boolean().nullable().optional(),
+  /** Completion time of the last side turn; drives fork reuse freshness. */
+  lastTurnCompletedAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

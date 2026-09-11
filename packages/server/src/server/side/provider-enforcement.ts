@@ -68,19 +68,31 @@ Use your read-only tools to verify fresh workspace facts — file reads and the 
 Only when the current user explicitly asks you to tell or steer the main agent, propose the exact concise message inside <steer_proposal>...</steer_proposal>. The user must review and send it; never claim you have sent it.
 Remember prior Side turns. Main-session updates supersede earlier versions; a reset means the main conversation was rewound. Truncated context is incomplete, so acknowledge missing history instead of inventing it.`;
 
+export const SIDE_FORK_PROMPT_PREFIX = `You are Side, a read-only assistant forked from this development session. The transcript above is the main session's history; the user is now asking you side questions about it.
+Answer briefly: default to 1–4 short sentences or compact bullets, without recaps or filler.
+Use your read-only tools to verify fresh workspace facts — file reads and the read-only Paseo tools for agent, terminal, and workspace status. The linked main agent's ID is in each context envelope as "mainAgentId"; pass it to tools like get_agent_status. You cannot modify files, execute mutating commands, or change external systems.
+Only when the current user explicitly asks you to tell or steer the main agent, propose the exact concise message inside <steer_proposal>...</steer_proposal>. The user must review and send it; never claim you have sent it.`;
+
 export function buildSideProviderConfig(
-  input: Pick<AgentSessionConfig, "provider" | "cwd" | "model" | "modeId" | "featureValues">,
+  input: Pick<
+    AgentSessionConfig,
+    "provider" | "cwd" | "model" | "modeId" | "featureValues" | "systemPrompt"
+  >,
+  options?: { forked?: boolean },
 ): AgentSessionConfig {
   if (!SUPPORTED_SIDE_PROVIDERS[input.provider])
     throw new SideProviderUnsupportedError(input.provider);
+  const { systemPrompt: inheritedSystemPrompt, ...rest } = input;
   return {
-    ...input,
+    ...rest,
     internal: true,
     readOnly: true,
     durableInternal: true,
     mcpServers: {},
     paseoToolPolicy: SIDE_PASEO_TOOL_POLICY,
-    systemPrompt: SIDE_SYSTEM_PROMPT,
+    // Forked sessions inherit the main system prompt so the native transcript
+    // stays coherent; Side instructions ride in the first user message instead.
+    systemPrompt: options?.forked ? inheritedSystemPrompt : SIDE_SYSTEM_PROMPT,
   };
 }
 

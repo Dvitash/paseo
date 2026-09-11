@@ -221,6 +221,7 @@ const CODEX_APP_SERVER_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindConversation: true,
   supportsRewindFiles: false,
   supportsRewindBoth: false,
+  supportsSessionFork: true,
 };
 
 const CODEX_MODES: AgentMode[] = [
@@ -4763,6 +4764,35 @@ export class CodexAppServerAgentSession implements AgentSession {
     });
   }
 
+  /**
+   * Fork this session's thread from an existing Codex thread, inheriting its
+   * full history. Read-only sessions carry their sandbox/approval policy into
+   * the fork so confinement survives the copy.
+   */
+  async forkThreadFrom(sourceThreadId: string): Promise<void> {
+    await this.connect();
+    if (!this.client) {
+      throw new Error("Codex client is not initialized");
+    }
+    const developerInstructions = composeSystemPromptParts(
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    const forked = await forkCodexThread(this.client, {
+      threadId: sourceThreadId,
+      cwd: this.config.cwd ?? null,
+      model: this.config.model ?? null,
+      serviceTier: this.serviceTier,
+      ...(developerInstructions ? { developerInstructions } : {}),
+      ...(this.config.readOnly ? { approvalPolicy: "never", sandbox: "read-only" } : {}),
+    });
+    this.currentThreadId = forked.thread.id;
+    this.cachedRuntimeInfo = null;
+    this.persistedHistory = [];
+    this.historyPending = false;
+    await this.loadPersistedHistory();
+  }
+
   async interrupt(): Promise<void> {
     const pendingStart = this.pendingForegroundStart;
     if (pendingStart) {
@@ -7055,9 +7085,12 @@ export class CodexAppServerAgentClient implements AgentClient {
       launchContext?.agentId,
     );
     await session.connect();
+    const forkSource = options?.forkFrom?.nativeHandle ?? options?.forkFrom?.sessionId;
+    if (forkSource) {
+      await session.forkThreadFrom(forkSource);
+    }
     return session;
   }
-
   async resumeSession(
     handle: { sessionId: string; metadata?: Record<string, unknown> },
     overrides?: Partial<AgentSessionConfig>,

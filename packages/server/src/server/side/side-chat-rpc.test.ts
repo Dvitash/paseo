@@ -8,6 +8,7 @@ import { AgentManager } from "../agent/agent-manager.js";
 import type {
   AgentCapabilityFlags,
   AgentClient,
+  AgentCreateSessionOptions,
   AgentLaunchContext,
   AgentPersistenceHandle,
   AgentPromptInput,
@@ -37,7 +38,7 @@ const TEST_CAPABILITIES = {
 
 class TestAgentSession implements AgentSession {
   readonly provider: AgentProvider;
-  readonly capabilities = TEST_CAPABILITIES;
+  capabilities: AgentCapabilityFlags = { ...TEST_CAPABILITIES };
   readonly id = randomUUID();
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private turnIdCounter = 0;
@@ -153,6 +154,7 @@ class TestAgentSession implements AgentSession {
 class TestAgentClient implements AgentClient {
   readonly capabilities: AgentCapabilityFlags;
   readonly createdConfigs: AgentSessionConfig[] = [];
+  readonly createdOptions: (AgentCreateSessionOptions | undefined)[] = [];
   readonly launchContexts: (AgentLaunchContext | undefined)[] = [];
   readonly sessions: TestAgentSession[] = [];
   sessionFactory?: (config: AgentSessionConfig) => TestAgentSession;
@@ -171,8 +173,10 @@ class TestAgentClient implements AgentClient {
   async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,
+    options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
     this.createdConfigs.push(config);
+    this.createdOptions.push(options);
     this.launchContexts.push(launchContext);
     const session = this.sessionFactory
       ? this.sessionFactory(config)
@@ -690,7 +694,7 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     );
   });
 
-  test("stops and marks error when inspection budget is exceeded", async () => {
+  test("completes turns with many tool calls now that budgets are removed", async () => {
     claudeClient.sessionFactory = (config) => {
       const session = new TestAgentSession(config);
       session.turnScript = async (turnId, pushEvent) => {
@@ -723,8 +727,104 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     };
 
     const snapshot = await service.send(mainAgentId, "Inspect everything", { wait: true });
-    expect(snapshot.status).toBe("error");
-    expect(snapshot.error).toContain("Side reached its inspection/output limit");
+    expect(snapshot.status).toBe("idle");
+    expect(snapshot.messages.at(-1)?.text).toBe("Inspected files");
+  });
+
+  test("forks the side session from the main native session when supported", async () => {
+    // getAgent returns a shallow copy; the session object is shared, so set the
+    // capability there — the manager reads capabilities off the live session.
+    const mainSession = manager.getAgent(mainAgentId)?.session as
+      | TestAgentSession
+      | null
+      | undefined;
+    if (mainSession) {
+      mainSession.capabilities.supportsSessionFork = true;
+    }
+
+    const snapshot = await service.send(mainAgentId, "What is the goal?", { wait: true });
+    expect(snapshot.status).toBe("idle");
+
+    const sideConfig = claudeClient.createdConfigs.at(-1);
+    const sideOptions = claudeClient.createdOptions.at(-1);
+    expect(sideConfig?.readOnly).toBe(true);
+    // Forked side inherits the main system prompt instead of the digest prompt.
+    expect(sideConfig?.systemPrompt).toBe(
+      manager.getAgent(mainAgentId)?.config.systemPrompt ?? undefined,
+    );
+    expect(sideOptions?.forkFrom?.sessionId).toBe(mainSession?.id);
+
+    const sideSession = claudeClient.sessions.at(-1);
+    const firstPrompt = String(sideSession?.startPrompts[0] ?? "");
+    expect(firstPrompt).toContain("forked from this development session");
+    expect(firstPrompt).toContain("What is the goal?");
+    expect(firstPrompt).not.toContain("main-session-context");
+  });
+
+  test("reuses a fresh forked side session and re-forks after the reuse window", async () => {
+    const mainSession = manager.getAgent(mainAgentId)?.session as
+      | TestAgentSession
+      | null
+      | undefined;
+    if (mainSession) {
+      mainSession.capabilities.supportsSessionFork = true;
+    }
+
+    await service.send(mainAgentId, "First question", { wait: true });
+    const firstSideId = claudeClient.sessions.at(-1)?.id;
+
+    // Chained follow-up within the reuse window: same side session, delta prompt.
+    await service.send(mainAgentId, "Follow up", { wait: true });
+    expect(claudeClient.sessions.at(-1)?.id).toBe(firstSideId);
+    const followUpPrompt = String(claudeClient.sessions.at(-1)?.startPrompts.at(-1) ?? "");
+    expect(followUpPrompt).toContain("Follow up");
+
+    // Past the reuse window: a fresh fork is created and the stale one archived.
+    const staleService = new SideChatService(manager, store, logger, undefined, undefined, 0);
+    await staleService.send(mainAgentId, "Much later question", { wait: true });
+    const newSideId = claudeClient.sessions.at(-1)?.id;
+    expect(newSideId).not.toBe(firstSideId);
+    const newPrompt = String(claudeClient.sessions.at(-1)?.startPrompts.at(-1) ?? "");
+    expect(newPrompt).toContain("forked from this development session");
+  });
+
+  test("upgrades a legacy digest side to a fork on the next message", async () => {
+    await service.send(mainAgentId, "Legacy question", { wait: true });
+    const legacySideId = claudeClient.sessions.at(-1)?.id;
+
+    const mainSession = manager.getAgent(mainAgentId)?.session as
+      | TestAgentSession
+      | null
+      | undefined;
+    if (mainSession) {
+      mainSession.capabilities.supportsSessionFork = true;
+    }
+
+    await service.send(mainAgentId, "Now with fork support", { wait: true });
+    const newSideId = claudeClient.sessions.at(-1)?.id;
+    expect(newSideId).not.toBe(legacySideId);
+    expect(claudeClient.createdOptions.at(-1)?.forkFrom?.sessionId).toBe(mainSession?.id);
+    const prompt = String(claudeClient.sessions.at(-1)?.startPrompts.at(-1) ?? "");
+    expect(prompt).toContain("forked from this development session");
+  });
+
+  test("does not fork when the side provider differs from the main provider", async () => {
+    const mainSession = manager.getAgent(mainAgentId)?.session as
+      | TestAgentSession
+      | null
+      | undefined;
+    if (mainSession) {
+      mainSession.capabilities.supportsSessionFork = true;
+    }
+
+    const snapshot = await service.send(mainAgentId, "Cross-provider question", {
+      wait: true,
+      provider: "codex",
+    });
+    expect(snapshot.status).toBe("idle");
+    expect(codexClient.createdOptions.at(-1)?.forkFrom).toBeUndefined();
+    // A foreign provider must not inherit the main model id.
+    expect(codexClient.createdConfigs.at(-1)?.model).not.toBe("claude-3-7-sonnet");
   });
 
   test("validates user prompt length and rejects empty prompts", async () => {

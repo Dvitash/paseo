@@ -1736,6 +1736,71 @@ describe("Codex app-server provider", () => {
     await session.close();
   });
 
+  test("createSession with forkFrom forks the source thread and rebinds", async () => {
+    const appServer = createFakeCodexAppServer();
+    const client = createProviderWithFakeAppServer(appServer);
+
+    const session = await client.createSession(
+      createConfig({ cwd: "/workspace/project" }),
+      undefined,
+      {
+        forkFrom: {
+          provider: CODEX_PROVIDER,
+          sessionId: "source-thread",
+          nativeHandle: "source-thread",
+        },
+      },
+    );
+
+    const forkRequests = appServer
+      .requests()
+      .filter((request) => request.method === "thread/fork")
+      .map((request) => request.params);
+    expect(forkRequests).toEqual([
+      expect.objectContaining({
+        threadId: "source-thread",
+        cwd: "/workspace/project",
+        model: "gpt-5.4",
+      }),
+    ]);
+    await expect(session.getRuntimeInfo()).resolves.toMatchObject({
+      sessionId: "forked-thread",
+    });
+    appServer.assertNoErrors();
+    await session.close();
+  });
+
+  test("createSession forkFrom carries read-only policy into the fork", async () => {
+    const appServer = createFakeCodexAppServer();
+    const client = createProviderWithFakeAppServer(appServer);
+
+    const session = await client.createSession(
+      createConfig({ cwd: "/workspace/project", readOnly: true }),
+      undefined,
+      {
+        forkFrom: {
+          provider: CODEX_PROVIDER,
+          sessionId: "source-thread",
+          nativeHandle: "source-thread",
+        },
+      },
+    );
+
+    const forkRequests = appServer
+      .requests()
+      .filter((request) => request.method === "thread/fork")
+      .map((request) => request.params);
+    expect(forkRequests).toEqual([
+      expect.objectContaining({
+        threadId: "source-thread",
+        approvalPolicy: "never",
+        sandbox: "read-only",
+      }),
+    ]);
+    appServer.assertNoErrors();
+    await session.close();
+  });
+
   test("correlates a Codex user message with the submitting client message", async () => {
     const appServer = createFakeCodexAppServer();
     const session = new CodexAppServerAgentSession(

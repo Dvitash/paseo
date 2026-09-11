@@ -295,6 +295,12 @@ export interface CreateAgentOptions {
   // undefined is an explicit decision: the agent never appears in the sidebar.
   workspaceId: string | undefined;
   owner?: AgentOwner;
+  /**
+   * Fork the new agent's native session from this source session, inheriting
+   * its transcript. Ignored unless the provider client advertises
+   * supportsSessionFork.
+   */
+  forkFrom?: AgentPersistenceHandle;
 }
 
 export interface AgentManagerOptions {
@@ -1255,10 +1261,15 @@ export class AgentManager {
 
   private buildCreateSessionOptions(options?: {
     persistSession?: boolean;
+    forkFrom?: AgentPersistenceHandle;
   }): AgentCreateSessionOptions | undefined {
-    return options?.persistSession === undefined
-      ? undefined
-      : { persistSession: options.persistSession };
+    if (options?.persistSession === undefined && options?.forkFrom === undefined) {
+      return undefined;
+    }
+    return {
+      ...(options.persistSession === undefined ? {} : { persistSession: options.persistSession }),
+      ...(options.forkFrom === undefined ? {} : { forkFrom: options.forkFrom }),
+    };
   }
 
   // Reconstruct an agent from provider persistence. Callers should explicitly

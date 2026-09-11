@@ -318,6 +318,7 @@ const CLAUDE_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindConversation: true,
   supportsRewindFiles: true,
   supportsRewindBoth: true,
+  supportsSessionFork: true,
 };
 
 const DEFAULT_MODES: AgentMode[] = [
@@ -412,6 +413,8 @@ interface ClaudeAgentSessionOptions {
   defaults?: { agents?: Record<string, AgentDefinition> };
   runtimeSettings?: ProviderRuntimeSettings;
   handle?: AgentPersistenceHandle;
+  /** Fork the new session from this existing Claude session (resume + forkSession). */
+  forkFrom?: AgentPersistenceHandle;
   agentId?: string;
   launchEnv?: Record<string, string>;
   persistSession?: boolean;
@@ -1533,6 +1536,7 @@ export class ClaudeAgentClient implements AgentClient {
       agentId: launchContext?.agentId,
       launchEnv: launchContext?.env,
       persistSession: options?.persistSession,
+      forkFrom: options?.forkFrom,
       logger: this.logger,
       queryFactory: this.queryFactory,
       resolveBinary: this.resolveBinary,
@@ -2122,6 +2126,7 @@ class ClaudeAgentSession implements AgentSession {
   private readonly emittedUserMessageIds = new Set<string>();
   private readonly rewindTurnAnchors: ClaudeRewindTurnAnchor[] = [];
   private pendingFreshSessionId: string | null = null;
+  private pendingForkSessionId: string | null = null;
   private recentStderr = "";
   private closed = false;
 
@@ -2151,6 +2156,9 @@ class ClaudeAgentSession implements AgentSession {
     } else {
       this.claudeSessionId = null;
       this.persistence = null;
+      // Fork keeps the source session id out of claudeSessionId so the new
+      // forked id is captured cleanly from the init message.
+      this.pendingForkSessionId = options.forkFrom?.sessionId ?? null;
     }
 
     // Validate mode if provided
@@ -3335,16 +3343,18 @@ class ClaudeAgentSession implements AgentSession {
     return base;
   }
 
-  private resolveSessionBinding(): Pick<ClaudeOptions, "resume" | "sessionId"> {
+  private resolveSessionBinding(): Pick<ClaudeOptions, "resume" | "sessionId" | "forkSession"> {
     if (this.pendingFreshSessionId) {
       return { sessionId: this.pendingFreshSessionId };
     }
     if (this.claudeSessionId) {
       return { resume: this.claudeSessionId };
     }
+    if (this.pendingForkSessionId) {
+      return { resume: this.pendingForkSessionId, forkSession: true };
+    }
     return {};
   }
-
   private resolveIntegrationOptions(
     providerOptions: ClaudeProviderOptions,
     settingsOptions: Pick<ClaudeOptions, "settings"> | Record<string, never>,

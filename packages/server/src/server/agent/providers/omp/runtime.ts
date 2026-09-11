@@ -24,6 +24,8 @@ export interface OmpRuntimeLaunch {
   modeId?: string;
   session?: string;
   noSession?: boolean;
+  /** Session file to fork via `omp --fork` (new session id, inherited transcript). */
+  fork?: string;
   systemPrompt?: string;
   extraArgs?: string[];
   readOnly?: boolean;
@@ -41,6 +43,8 @@ export interface OmpStartSessionInput {
   modeId?: string;
   session?: string;
   noSession?: boolean;
+  /** Session file to fork via `omp --fork` (new session id, inherited transcript). */
+  fork?: string;
   systemPrompt?: string;
   extraArgs?: string[];
   readOnly?: boolean;
@@ -123,7 +127,7 @@ export function buildOmpLaunch(input: {
     protocolMode,
     modeId: input.session.modeId,
     session: input.session.session,
-    noSession: input.session.noSession,
+    fork: input.session.fork,
     systemPrompt,
     extraArgs: input.session.extraArgs,
     readOnly: input.session.readOnly,
@@ -167,6 +171,8 @@ function appendOmpLaunchArgs(
   }
   if (session.noSession) {
     argv.push("--no-session");
+  } else if (session.fork) {
+    argv.push("--fork", session.fork);
   } else if (session.session) {
     argv.push("--session", session.session);
   }
