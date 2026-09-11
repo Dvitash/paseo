@@ -24,8 +24,9 @@ import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-w
 import { encodeImages } from "@/utils/encode-images";
 import { toErrorMessage } from "@/utils/error-messages";
 import {
+  assertComposerWireImagesEncoded,
+  buildComposerWirePayload,
   resolveComposerAttachmentSubmitFormat,
-  splitComposerAttachmentsForSubmit,
 } from "@/composer/attachments/submit";
 import type {
   CreateAgentRequestOptions,
@@ -316,12 +317,20 @@ export function WorkspaceSetupDialog() {
           throw new Error(t("workspaceSetup.errors.selectModel"));
         }
 
-        const wirePayload = splitComposerAttachmentsForSubmit(attachments, {
+        const wirePayload = buildComposerWirePayload({
+          text,
+          attachments,
           format: resolveComposerAttachmentSubmitFormat({
             supportsForgeAttachments: supportsForgeSearch,
           }),
         });
         const encodedImages = await encodeImages(wirePayload.images);
+        // Indexed `[image:N]` references break if encoding silently drops an image.
+        assertComposerWireImagesEncoded({
+          text: wirePayload.text,
+          images: wirePayload.images,
+          encoded: encodedImages,
+        });
         const workspaceDirectory = requireWorkspaceDirectory({
           workspaceId: ensuredWorkspace.id,
           workspaceDirectory: ensuredWorkspace.workspaceDirectory,
@@ -329,7 +338,7 @@ export function WorkspaceSetupDialog() {
         const agent = await connectedClient.createAgent(
           buildCreateAgentOptions({
             composerState,
-            text,
+            text: wirePayload.text,
             attachments: wirePayload.attachments,
             encodedImages: encodedImages ?? null,
             workspaceDirectory,

@@ -125,6 +125,35 @@ export async function expectAttachmentPill(page: Page, testID: string): Promise<
   await expect(page.getByTestId(testID).first()).toBeVisible({ timeout: 10_000 });
 }
 
+/**
+ * Inline image attachments render as a marker inside the text, not a tray pill.
+ * The marker carries `data-inline-image` and an accessible "Open image
+ * attachment" role; the remove button is "Remove image attachment".
+ */
+export function inlineImageMarker(page: Page) {
+  return page.locator("[data-inline-image]").first();
+}
+
+export async function expectInlineImageMarker(page: Page): Promise<void> {
+  await expect(inlineImageMarker(page)).toBeVisible({ timeout: 10_000 });
+}
+
+/** Type at the caret without clearing inline image tokens (unlike `.fill()`). */
+export async function typeIntoComposer(page: Page, text: string): Promise<void> {
+  const input = composerInput(page);
+  await input.focus();
+  await input.pressSequentially(text);
+}
+
+/** Submit preserving any inline image token: type at the caret, then Enter. */
+export async function submitMessagePreservingAttachments(page: Page, text: string): Promise<void> {
+  const input = composerInput(page);
+  await expect(input).toBeEditable({ timeout: 30_000 });
+  await input.focus();
+  await input.pressSequentially(text);
+  await input.press("Enter");
+}
+
 export async function dropFileOnComposer(
   page: Page,
   file: { name: string; mimeType: string; buffer: Buffer },
@@ -162,6 +191,13 @@ export async function removeAttachmentPill(
   await page.getByRole("button", { name: removeAccessibilityLabel }).first().click();
 }
 
+/** Hover the inline image marker to reveal its X, then click "Remove image attachment". */
+export async function removeInlineImageMarker(page: Page): Promise<void> {
+  const marker = page.locator("[data-inline-image]").first();
+  await marker.hover();
+  await marker.getByRole("button", { name: "Remove image attachment" }).click();
+}
+
 export async function expectGithubAttachmentPill(
   page: Page,
   input: { number: number; title: string },
@@ -171,9 +207,15 @@ export async function expectGithubAttachmentPill(
   await expect(pill).toContainText(`#${input.number}`);
   await expect(pill).toContainText(input.title);
 }
-
 export async function openImageLightbox(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Open image attachment" }).first().click();
+  // Inline image markers expose the "Open image attachment" role; the sent
+  // message pill uses the same label, so scope to the marker when present.
+  const marker = page.locator("[data-inline-image]").first();
+  if (await marker.count()) {
+    await marker.click();
+  } else {
+    await page.getByRole("button", { name: "Open image attachment" }).first().click();
+  }
   await expect(page.getByTestId("attachment-lightbox-close")).toBeVisible({ timeout: 5_000 });
 }
 

@@ -10,6 +10,8 @@ import {
   userAttachmentsOnly,
 } from "@/attachments/workspace-attachment-utils";
 import {
+  assertComposerWireImagesEncoded,
+  buildComposerWirePayload,
   splitComposerAttachmentsForSubmit,
   type ComposerAttachmentSubmitFormat,
 } from "@/composer/attachments/submit";
@@ -185,13 +187,18 @@ export interface DispatchComposerAgentMessageInput {
 export async function dispatchComposerAgentMessage(
   input: DispatchComposerAgentMessageInput,
 ): Promise<void> {
-  const wirePayload = splitComposerAttachmentsForSubmit(input.attachments, {
+  // Resolve `[image:…]` tokens to wire indices exactly once, here — draft and
+  // queue state keep stable ID tokens so failure-restore and queued-message
+  // edit never lose identity.
+  const wirePayload = buildComposerWirePayload({
+    text: input.text,
+    attachments: input.attachments,
     format: input.attachmentSubmitFormat,
   });
   const clientMessageId = generateMessageId();
   const userMessage = createUserMessage({
     clientMessageId,
-    text: input.text,
+    text: wirePayload.text,
     timestamp: new Date(),
     images: wirePayload.images,
     attachments: wirePayload.attachments,
@@ -202,7 +209,13 @@ export async function dispatchComposerAgentMessage(
   input.submission.begin(input.agentId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    await input.client.sendAgentMessage(input.agentId, input.text, {
+    // Indexed references break if encoding silently drops an image.
+    assertComposerWireImagesEncoded({
+      text: wirePayload.text,
+      images: wirePayload.images,
+      encoded: imagesData,
+    });
+    await input.client.sendAgentMessage(input.agentId, wirePayload.text, {
       messageId: clientMessageId,
       ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
       images: imagesData ?? [],

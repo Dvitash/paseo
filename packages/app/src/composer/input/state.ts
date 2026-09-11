@@ -49,7 +49,7 @@ interface StopRealtimeVoiceContext {
 interface SendActionContext {
   defaultSendBehavior: SendBehavior;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => boolean | void) | undefined;
   handleSendMessage: () => void;
   handleQueueMessage: () => void;
 }
@@ -58,7 +58,7 @@ interface DictationTranscriptContext {
   value: string;
   defaultSendBehavior: SendBehavior;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => void) | undefined;
+  onQueue: ((payload: MessagePayload) => boolean | void) | undefined;
   onSubmit: (payload: MessagePayload) => void;
   replaceText: (text: string) => void;
   attachments: MessagePayload["attachments"];
@@ -79,8 +79,9 @@ export function applyDictationTranscript(text: string, ctx: DictationTranscriptC
   ctx.replaceText(nextValue);
 
   if (ctx.defaultSendBehavior === "queue" && ctx.isAgentRunning && ctx.onQueue) {
-    ctx.onQueue({ text: nextValue, attachments: ctx.attachments, cwd: ctx.cwd });
-    ctx.replaceText("");
+    const accepted = ctx.onQueue({ text: nextValue, attachments: ctx.attachments, cwd: ctx.cwd });
+    // Rejected queues (e.g. pending paste) keep the transcript in the draft.
+    if (accepted !== false) ctx.replaceText("");
     return;
   }
 

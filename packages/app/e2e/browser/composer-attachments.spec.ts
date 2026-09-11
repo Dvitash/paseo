@@ -8,7 +8,8 @@ import {
   openGithubPickerFromMenu,
   attachImageFromMenu,
   expectAttachmentPill,
-  removeAttachmentPill,
+  expectInlineImageMarker,
+  removeInlineImageMarker,
   openImageLightbox,
   closeImageLightbox,
   pressInterruptShortcut,
@@ -179,7 +180,7 @@ test.describe("Composer attachments", () => {
     await expectComposerVisible(page);
 
     await attachImageFromMenu(page, TEST_IMAGE);
-    await expectAttachmentPill(page, "composer-image-attachment-pill");
+    await expectInlineImageMarker(page);
 
     await openImageLightbox(page);
     await closeImageLightbox(page);
@@ -194,7 +195,7 @@ test.describe("Composer attachments", () => {
 
     await attachImageFromMenu(page, TEST_IMAGE);
 
-    await expectAttachmentPill(page, "composer-image-attachment-pill");
+    await expectInlineImageMarker(page);
   });
 
   test("dropped JSON file renders as a file attachment in active chat", async ({
@@ -246,11 +247,11 @@ test.describe("Composer attachments", () => {
     await expectComposerVisible(page);
 
     await attachImageFromMenu(page, TEST_IMAGE);
-    await expectAttachmentPill(page, "composer-image-attachment-pill");
+    await expectInlineImageMarker(page);
 
-    await removeAttachmentPill(page, "composer-image-attachment-pill", "Remove image attachment");
+    await removeInlineImageMarker(page);
 
-    await expect(page.getByTestId("composer-image-attachment-pill")).toHaveCount(0, {
+    await expect(page.locator("[data-inline-image]")).toHaveCount(0, {
       timeout: 5_000,
     });
   });
