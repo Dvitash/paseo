@@ -16,6 +16,7 @@ import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
 import { useSessionStore } from "@/stores/session-store";
 import { useSubagentsForParent } from "@/subagents/select";
 import { SubagentsTrack } from "@/subagents/track";
+import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
 import {
   providerSubagentKey,
   providerSubagentLifecycleStatus,
@@ -50,7 +51,7 @@ function ProviderSubagentChildTrack({
   rows: ReturnType<typeof useSubagentsForParent>;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
 }) {
-  if (rows.length === 0) return null;
+  if (!rows.some(isSubagentActiveOrAttention)) return null;
   return (
     <View style={styles.childTrackContainer} pointerEvents="box-none">
       <SubagentsTrack
@@ -134,7 +135,10 @@ function ProviderSubagentPanel() {
     parentAgentId: target.parentAgentId,
     providerParentSubagentId: target.subagentId,
   });
-  const childTrackClearance = resolveChildTrackClearance(childRows.length, isCompact);
+  const childTrackClearance = resolveChildTrackClearance(
+    childRows.filter(isSubagentActiveOrAttention).length,
+    isCompact,
+  );
   const openProviderChild = useCallback(
     (parentAgentId: string, subagentId: string) => {
       openTab({ kind: "provider_subagent", parentAgentId, subagentId });

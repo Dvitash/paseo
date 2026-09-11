@@ -248,7 +248,7 @@ export function SubagentsTrack({
     return null;
   }
 
-  const pill = buildSubagentPillPresentation(t, rows);
+  const pill = buildSubagentPillPresentation(t, visibleRows);
 
   return (
     <View style={styles.card} testID="subagents-track-header-panel">

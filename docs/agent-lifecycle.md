@@ -184,7 +184,7 @@ Claude Code announces subagent lifecycle on the SDK stream (`task_started` / `ta
 
 Archived Paseo subagents disappear from the track, by design. To remove one from the track without closing its tab, use the **archive button** on the row — it opens a confirm dialog and archives the subagent on confirm. Provider-owned rows have no individual Paseo lifecycle controls.
 
-The **Archive finished** row at the foot of the panel covers every finished row. It archives idle or errored managed Paseo subagents one at a time, and hides completed, failed, or canceled provider-owned rows in the current app session. Native sessions and timelines are untouched. Running and initializing children remain in the track. If a hidden provider child starts running again, the app brings it back to the track.
+Finished rows are hidden from the track entirely — idle, errored, or closed managed children and completed, failed, or canceled provider-owned children do not render. Terminal status wins over `requiresAttention`, so a completed agent flagged `finished` stays hidden. To clean up a finished managed subagent, archive it from the sidebar agent list.
 
 To keep the agent alive but remove it from the parent's track, use **detach**. The daemon clears the relationship lifecycle labels, emits the normal agent update, and every client reclassifies the agent from subagent to root/sibling from that updated snapshot.
 
@@ -204,7 +204,7 @@ We considered universal decoupling (no tab close ever archives, archive is alway
 
 ### Subagent accumulation under long-lived parents
 
-A parent that spawns many subagents will see the panel's list grow; the pill only counts them. Managed Paseo subagents can be archived individually or with **Archive finished**. That action hides finished provider-owned rows locally; this presentation state resets when the app restarts.
+Finished children are hidden from the track, so the list only grows while subagents are running or need attention. Managed Paseo subagents can be archived individually from the sidebar agent list.
 
 ### Cross-client tab dismissal
 
