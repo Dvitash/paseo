@@ -12,6 +12,7 @@ export interface ProviderUsageServiceOptions {
   now?: () => number;
   ompUsageCachePath?: string;
   ompAccountWeightsPath?: string;
+  ompAgentDbPath?: string;
 }
 
 export type { ProviderUsageListResult };
@@ -25,6 +26,7 @@ export class ProviderUsageService {
   private readonly now: () => number;
   private readonly ompUsageCachePath?: string;
   private readonly ompAccountWeightsPath?: string;
+  private readonly ompAgentDbPath?: string;
   private cached: { fetchedAtMs: number; result: ProviderUsageListResult } | null = null;
   private inFlight: Promise<ProviderUsageListResult> | null = null;
 
@@ -44,6 +46,7 @@ export class ProviderUsageService {
     this.now = options.now ?? Date.now;
     this.ompUsageCachePath = options.ompUsageCachePath;
     this.ompAccountWeightsPath = options.ompAccountWeightsPath;
+    this.ompAgentDbPath = options.ompAgentDbPath;
   }
 
   async listUsage(options?: { forceRefresh?: boolean }): Promise<ProviderUsageListResult> {
@@ -79,6 +82,7 @@ export class ProviderUsageService {
     const request = readOmpUsage({
       cachePath: this.ompUsageCachePath,
       accountWeightsPath: this.ompAccountWeightsPath,
+      agentDbPath: this.ompAgentDbPath,
       now: this.now,
       logger: this.logger,
     });

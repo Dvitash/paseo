@@ -19,9 +19,11 @@ function matchProvider(
 export function ProviderUsageTooltipSection({
   view,
   activeProviderId,
+  serverId,
 }: {
   view: ProviderUsageView;
   activeProviderId: string | null | undefined;
+  serverId?: string | null;
 }) {
   if (view.kind === "loading") {
     return (
@@ -47,7 +49,7 @@ export function ProviderUsageTooltipSection({
   return (
     <>
       <View style={styles.divider} />
-      <ProviderUsageCard usage={usage} compact />
+      <ProviderUsageCard usage={usage} compact serverId={serverId} />
     </>
   );
 }

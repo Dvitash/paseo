@@ -6,6 +6,7 @@ import { CodexIcon } from "@/components/icons/codex-icon";
 import { CopilotIcon } from "@/components/icons/copilot-icon";
 import { DevinIcon } from "@/components/icons/devin-icon";
 import { ACP_PROVIDER_ICON_SVGS } from "@/assets/acp-provider-icons";
+import { USAGE_PROVIDER_ICON_SVGS } from "@/assets/usage-provider-icons";
 import { MiniMaxIcon } from "@/components/icons/minimax-icon";
 import { OpenCodeIcon } from "@/components/icons/opencode-icon";
 import { OmpIcon } from "@/components/icons/omp-icon";
@@ -57,7 +58,7 @@ function getCatalogProviderIcon(provider: string): ProviderIconComponent {
   if (cached) {
     return cached;
   }
-  const iconSvg = CATALOG_ICON_SVGS.get(provider);
+  const iconSvg = CATALOG_ICON_SVGS.get(provider) ?? USAGE_PROVIDER_ICON_SVGS[provider];
   if (!iconSvg) {
     return Bot;
   }

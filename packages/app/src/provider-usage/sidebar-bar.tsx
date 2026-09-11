@@ -6,11 +6,11 @@ import {
   Text,
   View,
 } from "react-native";
-import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { StyleSheet } from "react-native-unistyles";
 import { useRouter } from "expo-router";
 import { buildSettingsHostSectionRoute, buildSettingsRoute } from "@/utils/host-routes";
-import { getProviderIcon } from "@/components/provider-icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ThemedProviderUsageIcon, providerUsageIconColorMapping } from "./provider-usage-icon";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useAppVisible } from "@/hooks/use-app-visible";
 import { getHostRuntimeStore, useHostRuntimeIsConnected, useHosts } from "@/runtime/host-runtime";
@@ -20,7 +20,6 @@ import {
   useActiveWorkspaceSelection,
   useLastWorkspaceSelection,
 } from "@/stores/navigation-active-workspace-store";
-import type { Theme } from "@/styles/theme";
 import {
   resolveProviderUsageSlot,
   resolveSidebarHostServerId,
@@ -29,20 +28,6 @@ import {
   type SidebarUsageDensity,
 } from "./sidebar-usage-model";
 import { useProviderUsage } from "./use-provider-usage";
-
-interface ProviderUsageIconProps {
-  iconKey: string;
-  size: number;
-  color?: string;
-}
-
-function ProviderUsageIcon({ iconKey, size, color = "" }: ProviderUsageIconProps) {
-  const Icon = getProviderIcon(iconKey);
-  return <Icon size={size} color={color} />;
-}
-
-const ThemedProviderUsageIcon = withUnistyles(ProviderUsageIcon);
-const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 function useEarliestOnlineHostServerId(): string | null {
   const store = getHostRuntimeStore();
@@ -106,13 +91,19 @@ function resolveDensityStyles(density: SidebarUsageDensity) {
 
 function SidebarUsageSlotItem({
   slot,
+  serverId,
   iconSize,
   density,
+  showsName,
+  slotBasisPercent,
   onPress,
 }: {
   slot: SidebarProviderUsageSlot;
+  serverId: string | null;
   iconSize: number;
   density: SidebarUsageDensity;
+  showsName: boolean;
+  slotBasisPercent: number;
   onPress: () => void;
 }) {
   const [isHovered, setIsHovered] = useState(false);
@@ -124,10 +115,11 @@ function SidebarUsageSlotItem({
   const slotStyle = useCallback(
     ({ hovered }: PressableStateCallbackType & { hovered?: boolean }) => [
       styles.slot,
+      { flexBasis: `${slotBasisPercent}%` as `${number}%` },
       gapStyle,
       Boolean(hovered) && styles.slotHovered,
     ],
-    [gapStyle],
+    [gapStyle, slotBasisPercent],
   );
 
   return (
@@ -147,9 +139,18 @@ function SidebarUsageSlotItem({
         >
           <ThemedProviderUsageIcon
             iconKey={slot.providerId}
+            serverId={serverId}
             size={iconSize}
-            uniProps={mutedColorMapping}
+            uniProps={providerUsageIconColorMapping}
           />
+          {showsName ? (
+            <Text
+              style={[styles.slotName, fontStyle, isHovered && styles.slotTextHovered]}
+              numberOfLines={1}
+            >
+              {slot.displayName}
+            </Text>
+          ) : null}
           <Text
             style={[styles.slotText, fontStyle, isHovered && styles.slotTextHovered]}
             numberOfLines={1}
@@ -226,8 +227,11 @@ export const SidebarProviderUsageBar = memo(function SidebarProviderUsageBar() {
             <SidebarUsageSlotItem
               key={slot.providerId}
               slot={slot}
+              serverId={serverId}
               iconSize={geometry.iconSize}
               density={geometry.density}
+              showsName={geometry.showsName}
+              slotBasisPercent={100 / geometry.slotsPerRow}
               onPress={handleOpenUsageSettings}
             />
           ))}
@@ -262,11 +266,13 @@ const styles = StyleSheet.create((theme) => ({
   slotsRow: {
     flex: 1,
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     minHeight: 32,
   },
   slot: {
-    flex: 1,
+    flexGrow: 0,
+    flexShrink: 0,
     minWidth: 0,
     minHeight: 32,
     flexDirection: "row",
@@ -280,6 +286,12 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surfaceSidebarHover,
   },
   slotText: {
+    color: theme.colors.foregroundMuted,
+    fontWeight: theme.fontWeight.normal,
+    minWidth: 0,
+    flexShrink: 0,
+  },
+  slotName: {
     color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.normal,
     minWidth: 0,

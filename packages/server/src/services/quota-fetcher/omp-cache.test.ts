@@ -20,6 +20,7 @@ describe("OMP Usage Cache Adapter & Service", () => {
   let weightsFile: string;
   const originalEnvCache = process.env.PASEO_OMP_USAGE_CACHE_PATH;
   const originalEnvWeights = process.env.PASEO_OMP_ACCOUNT_WEIGHTS_PATH;
+  const originalEnvAgentDb = process.env.PASEO_OMP_AGENT_DB_PATH;
 
   beforeEach(() => {
     testDir = mkdtempSync(join(tmpdir(), "omp-cache-test-"));
@@ -27,6 +28,8 @@ describe("OMP Usage Cache Adapter & Service", () => {
     weightsFile = join(testDir, "account-weights.json");
     delete process.env.PASEO_OMP_USAGE_CACHE_PATH;
     delete process.env.PASEO_OMP_ACCOUNT_WEIGHTS_PATH;
+    // Tests must never read the developer's real OMP credential store.
+    process.env.PASEO_OMP_AGENT_DB_PATH = join(testDir, "agent.db");
   });
 
   afterEach(() => {
@@ -39,6 +42,11 @@ describe("OMP Usage Cache Adapter & Service", () => {
       process.env.PASEO_OMP_ACCOUNT_WEIGHTS_PATH = originalEnvWeights;
     } else {
       delete process.env.PASEO_OMP_ACCOUNT_WEIGHTS_PATH;
+    }
+    if (originalEnvAgentDb !== undefined) {
+      process.env.PASEO_OMP_AGENT_DB_PATH = originalEnvAgentDb;
+    } else {
+      delete process.env.PASEO_OMP_AGENT_DB_PATH;
     }
     rmSync(testDir, { recursive: true, force: true });
   });
@@ -102,6 +110,81 @@ describe("OMP Usage Cache Adapter & Service", () => {
     expect(claude).toBeDefined();
     expect(claude.displayName).toBe("Claude");
     expect(claude.status).toBe("unavailable");
+  });
+  it("merges active credential providers that have no usage report yet", async () => {
+    const fixedNow = Date.now();
+    const agentDbFile = join(testDir, "agent.db");
+    const { DatabaseSync } = (await import("node:sqlite")) as unknown as {
+      DatabaseSync: new (path: string) => {
+        exec(sql: string): void;
+        close(): void;
+      };
+    };
+    const db = new DatabaseSync(agentDbFile);
+    db.exec(
+      "CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY, provider TEXT NOT NULL, credential_type TEXT NOT NULL, data TEXT NOT NULL, disabled_cause TEXT DEFAULT NULL)",
+    );
+    db.exec(
+      "INSERT INTO auth_credentials (provider, credential_type, data) VALUES " +
+        "('commandcode', 'api_key', 'x'), ('openai-codex', 'oauth', 'x'), " +
+        "('retired-provider', 'api_key', 'x')",
+    );
+    db.exec(
+      "UPDATE auth_credentials SET disabled_cause = 'deleted by user' WHERE provider = 'retired-provider'",
+    );
+    db.close();
+
+    const payload: OmpUsageData = {
+      generatedAt: fixedNow,
+      reports: [
+        {
+          provider: "openai-codex",
+          fetchedAt: fixedNow,
+          limits: [{ id: "m", amount: { remainingFraction: 0.8 } }],
+        },
+      ],
+    };
+    writeFileSync(cacheFile, JSON.stringify(payload));
+
+    const result = await readOmpUsage({
+      cachePath: cacheFile,
+      agentDbPath: agentDbFile,
+      now: () => fixedNow,
+    });
+
+    const ids = result.providers.map((p) => p.providerId);
+    expect(ids).toEqual(["openai-codex", "commandcode"]);
+    const commandcode = result.providers.find((p) => p.providerId === "commandcode")!;
+    expect(commandcode.status).toBe("unavailable");
+    expect(commandcode.displayName).toBe("Command Code");
+    expect(commandcode.windows[0]?.usedPct).toBeNull();
+  });
+
+  it("lists credential providers even when the usage cache file is missing", async () => {
+    const fixedNow = Date.now();
+    const agentDbFile = join(testDir, "agent.db");
+    const { DatabaseSync } = (await import("node:sqlite")) as unknown as {
+      DatabaseSync: new (path: string) => {
+        exec(sql: string): void;
+        close(): void;
+      };
+    };
+    const db = new DatabaseSync(agentDbFile);
+    db.exec(
+      "CREATE TABLE auth_credentials (id INTEGER PRIMARY KEY, provider TEXT NOT NULL, credential_type TEXT NOT NULL, data TEXT NOT NULL, disabled_cause TEXT DEFAULT NULL)",
+    );
+    db.exec(
+      "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('commandcode', 'api_key', 'x')",
+    );
+    db.close();
+
+    const result = await readOmpUsage({
+      cachePath: join(testDir, "missing-cache.json"),
+      agentDbPath: agentDbFile,
+      now: () => fixedNow,
+    });
+
+    expect(result.providers.map((p) => p.providerId)).toEqual(["commandcode"]);
   });
 
   it("treats warning and exhausted limit status as valid usage rather than errors", async () => {

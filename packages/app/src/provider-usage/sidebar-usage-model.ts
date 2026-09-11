@@ -17,7 +17,16 @@ export type SidebarUsageDensity = "spacious" | "compact" | "tight";
 export interface SidebarUsageGeometry {
   density: SidebarUsageDensity;
   iconSize: number;
+  slotsPerRow: number;
+  rowCount: number;
+  showsName: boolean;
 }
+
+// Each provider keeps roughly a third of a 2k screen's sidebar share; when the
+// row can't fit every provider at that width it wraps to 2 rows, then 3, and
+// so on — a provider is never dropped or hidden.
+export const MIN_PROVIDER_SLOT_WIDTH_PX = 300;
+const MIN_NAMED_SLOT_WIDTH_PX = 160;
 
 export function resolveSidebarUsageGeometry(input: {
   slotCount: number;
@@ -28,15 +37,26 @@ export function resolveSidebarUsageGeometry(input: {
     typeof input.availableWidth === "number" && input.availableWidth > 0
       ? input.availableWidth
       : 264;
-  const slotWidth = width / count;
 
+  const maxPerRow = Math.max(1, Math.floor(width / MIN_PROVIDER_SLOT_WIDTH_PX));
+  const rowCount = Math.ceil(count / maxPerRow);
+  // Balance rows so the last row isn't a single orphan slot.
+  const slotsPerRow = Math.ceil(count / rowCount);
+  const slotWidth = width / slotsPerRow;
+
+  let density: SidebarUsageDensity = "tight";
   if (slotWidth >= 90) {
-    return { density: "spacious", iconSize: 14 };
+    density = "spacious";
+  } else if (slotWidth >= 55) {
+    density = "compact";
   }
-  if (slotWidth >= 55) {
-    return { density: "compact", iconSize: 14 };
-  }
-  return { density: "tight", iconSize: 12 };
+  return {
+    density,
+    iconSize: density === "tight" ? 12 : 14,
+    slotsPerRow,
+    rowCount,
+    showsName: slotWidth >= MIN_NAMED_SLOT_WIDTH_PX,
+  };
 }
 
 export function resolveSidebarHostServerId(input: {

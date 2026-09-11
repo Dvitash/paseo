@@ -101,6 +101,7 @@ export interface ProviderUsageListResult {
 export interface OmpUsageCacheOptions {
   cachePath?: string;
   accountWeightsPath?: string;
+  agentDbPath?: string;
   now?: () => number;
   logger?: Logger;
   staleThresholdMs?: number;
@@ -125,6 +126,7 @@ const DEFAULT_ACCOUNT_WEIGHTS_PATH = path.join(
   "agent",
   "account-weights.json",
 );
+const DEFAULT_OMP_AGENT_DB_PATH = path.join(os.homedir(), ".omp", "agent", "agent.db");
 
 const KNOWN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "google-antigravity": "Google Antigravity",
@@ -133,6 +135,9 @@ const KNOWN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   anthropic: "Claude",
   "github-copilot": "GitHub Copilot",
   "kimi-code": "Kimi",
+  commandcode: "Command Code",
+  "opencode-zen": "OpenCode Zen",
+  openrouter: "OpenRouter",
   cursor: "Cursor",
   devin: "Devin",
   claude: "Claude",
@@ -144,6 +149,101 @@ const KNOWN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   zai: "Zai",
   omp: "OMP",
 };
+
+// OMP keeps the authoritative subscription list in agent.db's auth_credentials
+// table. A freshly added provider has a credential row before the usage cache
+// ever reports on it, so the sidebar would otherwise hide it entirely.
+// Read provider names only — never the credential payloads.
+interface OmpAgentDbStatement {
+  all(...params: unknown[]): Record<string, unknown>[];
+}
+interface OmpAgentDb {
+  prepare(sql: string): OmpAgentDbStatement;
+  close(): void;
+}
+interface NodeSqliteModule {
+  DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => OmpAgentDb;
+}
+
+export async function listOmpCredentialProviders(
+  agentDbPath?: string,
+  logger?: Logger,
+): Promise<string[]> {
+  const resolvedPath =
+    agentDbPath ?? process.env.PASEO_OMP_AGENT_DB_PATH ?? DEFAULT_OMP_AGENT_DB_PATH;
+  if (!existsSync(resolvedPath)) {
+    return [];
+  }
+
+  // @types/node@20 predates node:sqlite typings; same narrow declaration as the
+  // Cursor fetcher uses for state.vscdb.
+  const sqliteSpecifier: string = "node:sqlite";
+  let sqlite: NodeSqliteModule;
+  try {
+    sqlite = (await import(sqliteSpecifier)) as unknown as NodeSqliteModule;
+  } catch (err) {
+    logger?.debug({ err }, "node:sqlite unavailable; cannot read OMP agent.db");
+    return [];
+  }
+
+  let db: OmpAgentDb | undefined;
+  try {
+    db = new sqlite.DatabaseSync(resolvedPath, { readOnly: true });
+    const rows = db
+      .prepare("SELECT DISTINCT provider FROM auth_credentials WHERE disabled_cause IS NULL")
+      .all();
+    const providers: string[] = [];
+    for (const row of rows) {
+      const provider = row["provider"];
+      if (typeof provider === "string" && provider.trim()) {
+        providers.push(provider.trim());
+      }
+    }
+    return providers;
+  } catch (err) {
+    logger?.debug({ err, path: resolvedPath }, "Failed to read OMP credential providers");
+    return [];
+  } finally {
+    db?.close();
+  }
+}
+
+function credentialOnlyUsage(providerId: string, fetchedAtMs: number): ProviderUsage {
+  return {
+    providerId,
+    displayName: formatProviderDisplayName(providerId),
+    status: "unavailable",
+    planLabel: null,
+    sourceLabel: "OMP",
+    fetchedAt: new Date(fetchedAtMs).toISOString(),
+    windows: [
+      {
+        id: "omp-rollup",
+        label: "Usage",
+        usedPct: null,
+        remainingPct: null,
+      },
+    ],
+    balances: [],
+    details: [],
+    error: null,
+  };
+}
+
+function mergeCredentialProviders(
+  providers: ProviderUsage[],
+  credentialProviders: readonly string[],
+  fetchedAtMs: number,
+): ProviderUsage[] {
+  const known = new Set(providers.map((provider) => provider.providerId));
+  const merged = [...providers];
+  for (const providerId of credentialProviders) {
+    if (!providerId || known.has(providerId)) continue;
+    merged.push(credentialOnlyUsage(providerId, fetchedAtMs));
+    known.add(providerId);
+  }
+  return merged;
+}
 
 export function loadAccountWeights(weightsPath?: string): AccountWeightsConfig {
   const resolvedPath =
@@ -433,22 +533,13 @@ export function parseOmpUsage(
   return providers;
 }
 
-export async function readOmpUsage(
-  options?: OmpUsageCacheOptions,
-): Promise<ProviderUsageListResult> {
-  const cachePath =
-    options?.cachePath ?? process.env.PASEO_OMP_USAGE_CACHE_PATH ?? DEFAULT_OMP_CACHE_PATH;
-  const nowMs = (options?.now ?? Date.now)();
-
+async function readOmpUsageCacheData(cachePath: string): Promise<OmpUsageData | null> {
   let raw: string;
   try {
     raw = await fsPromises.readFile(cachePath, "utf8");
   } catch (err: unknown) {
     if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") {
-      return {
-        fetchedAt: new Date(nowMs).toISOString(),
-        providers: [],
-      };
+      return null;
     }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to read OMP usage cache at ${cachePath}: ${message}`, { cause: err });
@@ -467,14 +558,34 @@ export async function readOmpUsage(
     throw new Error(`Malformed OMP usage cache at ${cachePath}: ${message}`, { cause: err });
   }
 
-  let data: OmpUsageData;
   try {
-    data = OmpUsageCacheSchema.parse(parsedJson);
+    return OmpUsageCacheSchema.parse(parsedJson);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Malformed OMP usage cache at ${cachePath}: validation failed - ${message}`, {
       cause: err,
     });
+  }
+}
+
+export async function readOmpUsage(
+  options?: OmpUsageCacheOptions,
+): Promise<ProviderUsageListResult> {
+  const cachePath =
+    options?.cachePath ?? process.env.PASEO_OMP_USAGE_CACHE_PATH ?? DEFAULT_OMP_CACHE_PATH;
+  const nowMs = (options?.now ?? Date.now)();
+
+  const credentialProviders = await listOmpCredentialProviders(
+    options?.agentDbPath,
+    options?.logger,
+  );
+
+  const data = await readOmpUsageCacheData(cachePath);
+  if (data === null) {
+    return {
+      fetchedAt: new Date(nowMs).toISOString(),
+      providers: mergeCredentialProviders([], credentialProviders, nowMs),
+    };
   }
 
   const weights = loadAccountWeights(options?.accountWeightsPath);
@@ -485,6 +596,6 @@ export async function readOmpUsage(
 
   return {
     fetchedAt: new Date(data.generatedAt).toISOString(),
-    providers,
+    providers: mergeCredentialProviders(providers, credentialProviders, data.generatedAt),
   };
 }

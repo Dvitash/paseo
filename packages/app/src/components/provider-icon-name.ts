@@ -3,6 +3,7 @@ import {
   KNOWN_PROVIDER_ICON_NAMES,
 } from "@getpaseo/protocol/provider-icon-names";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
+import { USAGE_PROVIDER_ICON_SVGS } from "@/assets/usage-provider-icons";
 
 export type ProviderIconName =
   | { kind: "builtin"; id: string }
@@ -57,6 +58,14 @@ export function resolveProviderIconName(
   }
   if (KNOWN_PROVIDER_IDS.has(canonical)) {
     return { kind: "catalog", id: canonical };
+  }
+  // Vendored usage-provider glyphs (OMP subscription providers like commandcode)
+  // resolve through the same catalog path without living in the ACP catalog.
+  if (USAGE_PROVIDER_ICON_SVGS[canonical]) {
+    return { kind: "catalog", id: canonical };
+  }
+  if (USAGE_PROVIDER_ICON_SVGS[provider]) {
+    return { kind: "catalog", id: provider };
   }
   return { kind: "bot" };
 }
