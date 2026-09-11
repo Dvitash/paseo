@@ -40,20 +40,6 @@
           background-color: #181b1a;
         }
       }
-      /* iOS standalone PWAs with viewport-fit=cover + black-translucent report
-         100dvh/innerHeight short by the TOP safe-area inset, leaving a dead
-         band at the bottom of the screen. The compensation is gated on the
-         `ios-standalone` class (added by the inline script below) rather than
-         a display-mode media query: Android edge-to-edge standalone also
-         matches that query but reports correct heights, and its nonzero top
-         inset would oversize the shell. env() is 0 where unaffected. */
-      .ios-standalone,
-      .ios-standalone body {
-        /* var() wraps env(): env()'s own fallback only applies when the
-           variable is undefined, but Chromium defines it as 0px — the custom
-           property must sit outside so tests can inject a nonzero inset. */
-        height: calc(100dvh + var(--paseo-safe-area-inset-top, env(safe-area-inset-top, 0px)));
-      }
       /* These styles make the root element full-height */
       #root {
         display: flex;
@@ -65,25 +51,6 @@
         overflow: hidden;
       }
     </style>
-    <script>
-      // iOS standalone PWAs need the top safe-area compensation above. This
-      // must run before first paint, so it lives inline rather than in the
-      // bundle. Detection mirrors isAppleHandheldPlatform + the standalone
-      // checks in use-standalone-pwa-viewport-heal.ts.
-      (function () {
-        var nav = window.navigator;
-        var isIos =
-          /iPad|iPhone|iPod/.test(nav.userAgent) ||
-          (/Mac/i.test(nav.platform || "") && nav.maxTouchPoints > 1);
-        var isStandalone =
-          ("standalone" in nav && Boolean(nav.standalone)) ||
-          (typeof window.matchMedia === "function" &&
-            window.matchMedia("(display-mode: standalone)").matches);
-        if (isIos && isStandalone) {
-          document.documentElement.classList.add("ios-standalone");
-        }
-      })();
-    </script>
     <style>
       button,
       a,
