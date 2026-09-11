@@ -1833,6 +1833,8 @@ export class VoiceAssistantWebSocketServer {
         agentProfiles: true,
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: true,
+        // COMPAT(dictationConfig): added in v0.8.0-beta.2, remove gate after 2027-03-10.
+        dictationConfig: true,
       },
     };
   }

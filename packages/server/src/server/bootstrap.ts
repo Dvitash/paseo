@@ -447,6 +447,10 @@ export interface PaseoDaemonConfig {
   };
   providerOverrides?: Record<string, ProviderOverride>;
   log?: PersistedConfig["log"];
+  /** Persisted `features.*` block, mirrored into the mutable config so
+   * `get_daemon_config`/`set_daemon_config` can read and stage changes that
+   * apply on restart. */
+  features?: PersistedConfig["features"];
   onLifecycleIntent?: (intent: DaemonLifecycleIntent) => void;
   pushNotificationSender?: PushNotificationSender;
   managedProcesses?: ManagedProcessRegistry;
@@ -552,8 +556,8 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
     pluginsEnabled: config.pluginsEnabled ?? false,
     plugins: config.plugins ?? {},
     skills: { selection: config.skillSelection },
+    features: config.features,
   };
-
   if (config.terminalProfiles !== undefined) {
     initialConfig.terminalProfiles = config.terminalProfiles;
   }

@@ -25,6 +25,7 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
     canStart,
     canConfirm,
     enableDuration = false,
+    inputDeviceId,
   } = options;
 
   const [isRecording, setIsRecording] = useState(false);
@@ -241,6 +242,7 @@ export function useDictation(options: UseDictationOptions): UseDictationResult {
       }
       handleDictationFailure(new Error("Dictation was interrupted by another audio source."));
     },
+    inputDeviceId,
   });
   const audioStopRef = useRef(audio.stop);
   useEffect(() => {

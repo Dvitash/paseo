@@ -11,6 +11,8 @@ export interface UseDictationOptions {
   canStart?: () => boolean;
   canConfirm?: () => boolean;
   enableDuration?: boolean;
+  /** Preferred capture device id (web/Electron). Null = system default. */
+  inputDeviceId?: string | null;
 }
 
 export interface UseDictationResult {

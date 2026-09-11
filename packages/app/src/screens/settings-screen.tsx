@@ -35,6 +35,7 @@ import {
   FolderGit2,
   SquareTerminal,
   Code2,
+  AudioLines,
   Smartphone,
   Sparkles,
   Blocks,
@@ -78,6 +79,7 @@ import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
 import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
+import { VoiceSection } from "@/screens/settings/voice-section";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { CommunityLinks } from "@/components/community-links";
@@ -157,6 +159,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     desktopOnly: true,
   },
   { id: "editor", labelKey: "settings.sections.editor", icon: Code2, webOnly: true },
+  { id: "voice", labelKey: "settings.sections.voice", icon: AudioLines },
   { id: "shortcuts", labelKey: "settings.sections.shortcuts", icon: Keyboard, desktopOnly: true },
   {
     id: "integrations",
@@ -227,6 +230,90 @@ function renderHostSettingsContent(
       return <HostPluginsPage serverId={view.serverId} />;
     case "host":
       return <HostSettingsPage serverId={view.serverId} onHostRemoved={onHostRemoved} />;
+  }
+}
+interface SettingsSectionContentProps {
+  section: SettingsSectionSlug;
+  settings: AppSettings;
+  isDesktopApp: boolean;
+  handleSendBehaviorChange: (value: SendBehavior) => void;
+  handleServiceUrlBehaviorChange: (value: ServiceUrlBehavior) => void;
+  handleLanguageChange: (value: AppLanguage) => void;
+  handleTerminalScrollbackLinesChange: (value: number) => void;
+  handleUseLegacyTerminalRendererChange: (value: boolean) => void;
+  voiceAudioEngine: ReturnType<typeof useVoiceAudioEngineOptional>;
+  isPlaybackTestRunning: boolean;
+  playbackTestResult: string | null;
+  handlePlaybackTest: () => Promise<void>;
+  appVersion: string | null;
+  appVersionText: string;
+}
+
+function renderSettingsSectionContent(props: SettingsSectionContentProps): ReactNode {
+  const {
+    section,
+    settings,
+    isDesktopApp,
+    handleSendBehaviorChange,
+    handleServiceUrlBehaviorChange,
+    handleLanguageChange,
+    handleTerminalScrollbackLinesChange,
+    handleUseLegacyTerminalRendererChange,
+    voiceAudioEngine,
+    isPlaybackTestRunning,
+    playbackTestResult,
+    handlePlaybackTest,
+    appVersion,
+    appVersionText,
+  } = props;
+  switch (section) {
+    case "general":
+      return (
+        <>
+          <GeneralSection
+            settings={settings}
+            isDesktopApp={isDesktopApp}
+            handleSendBehaviorChange={handleSendBehaviorChange}
+            handleServiceUrlBehaviorChange={handleServiceUrlBehaviorChange}
+            handleLanguageChange={handleLanguageChange}
+            handleTerminalScrollbackLinesChange={handleTerminalScrollbackLinesChange}
+          />
+          {isDesktopApp ? <BrowserDataSection /> : null}
+        </>
+      );
+    case "appearance":
+      return <AppearanceSection />;
+    case "editor":
+      return isWeb ? <EditorSection /> : null;
+    case "voice":
+      return <VoiceSection />;
+    case "shortcuts":
+      return isDesktopApp ? <KeyboardShortcutsSection /> : null;
+    case "integrations":
+      return isDesktopApp ? <IntegrationsSection /> : null;
+    case "notifications":
+      return isDesktopApp ? <DesktopNotificationsSection /> : null;
+    case "permissions":
+      return isDesktopApp ? <DesktopPermissionsSection /> : null;
+    case "diagnostics":
+      return (
+        <DiagnosticsSection
+          useLegacyTerminalRenderer={settings.useLegacyTerminalRenderer}
+          onUseLegacyTerminalRendererChange={handleUseLegacyTerminalRendererChange}
+          voiceAudioEngine={voiceAudioEngine}
+          isPlaybackTestRunning={isPlaybackTestRunning}
+          playbackTestResult={playbackTestResult}
+          handlePlaybackTest={handlePlaybackTest}
+        />
+      );
+    case "about":
+      return (
+        <AboutSection
+          appVersion={appVersion}
+          appVersionText={appVersionText}
+          isDesktopApp={isDesktopApp}
+        />
+      );
   }
 }
 
@@ -1490,53 +1577,22 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         );
       }
       if (view.kind === "section") {
-        switch (view.section) {
-          case "general":
-            return (
-              <>
-                <GeneralSection
-                  settings={settings}
-                  isDesktopApp={isDesktopApp}
-                  handleSendBehaviorChange={handleSendBehaviorChange}
-                  handleServiceUrlBehaviorChange={handleServiceUrlBehaviorChange}
-                  handleLanguageChange={handleLanguageChange}
-                  handleTerminalScrollbackLinesChange={handleTerminalScrollbackLinesChange}
-                />
-                {isDesktopApp ? <BrowserDataSection /> : null}
-              </>
-            );
-          case "appearance":
-            return <AppearanceSection />;
-          case "editor":
-            return isWeb ? <EditorSection /> : null;
-          case "shortcuts":
-            return isDesktopApp ? <KeyboardShortcutsSection /> : null;
-          case "integrations":
-            return isDesktopApp ? <IntegrationsSection /> : null;
-          case "notifications":
-            return isDesktopApp ? <DesktopNotificationsSection /> : null;
-          case "permissions":
-            return isDesktopApp ? <DesktopPermissionsSection /> : null;
-          case "diagnostics":
-            return (
-              <DiagnosticsSection
-                useLegacyTerminalRenderer={settings.useLegacyTerminalRenderer}
-                onUseLegacyTerminalRendererChange={handleUseLegacyTerminalRendererChange}
-                voiceAudioEngine={voiceAudioEngine}
-                isPlaybackTestRunning={isPlaybackTestRunning}
-                playbackTestResult={playbackTestResult}
-                handlePlaybackTest={handlePlaybackTest}
-              />
-            );
-          case "about":
-            return (
-              <AboutSection
-                appVersion={appVersion}
-                appVersionText={appVersionText}
-                isDesktopApp={isDesktopApp}
-              />
-            );
-        }
+        return renderSettingsSectionContent({
+          section: view.section,
+          settings,
+          isDesktopApp,
+          handleSendBehaviorChange,
+          handleServiceUrlBehaviorChange,
+          handleLanguageChange,
+          handleTerminalScrollbackLinesChange,
+          handleUseLegacyTerminalRendererChange,
+          voiceAudioEngine,
+          isPlaybackTestRunning,
+          playbackTestResult,
+          handlePlaybackTest,
+          appVersion,
+          appVersionText,
+        });
       }
       return null;
     })();

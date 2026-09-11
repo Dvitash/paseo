@@ -93,6 +93,9 @@ export interface AppSettings {
   openInSidePane: OpenInSidePanePreferences;
   pullRequestOpenLocation: PullRequestOpenLocation;
   showHostPerformance: boolean;
+  /** Preferred microphone for dictation (web/Electron `MediaDeviceInfo.deviceId`).
+   * Null = system default. Ignored on native, where the OS routes input. */
+  dictationInputDeviceId: string | null;
 }
 
 export type AppSettingsUpdate =
@@ -146,6 +149,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
   pullRequestOpenLocation: "explorer",
   showHostPerformance: true,
+  dictationInputDeviceId: null,
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -240,6 +244,7 @@ const StoredAppSettingsSchema = z
     chatOutlineEnabled: z.boolean().catch(true),
     vimKeybindings: z.boolean().catch(false),
     showHostPerformance: z.boolean().catch(true),
+    dictationInputDeviceId: z.string().nullable().catch(null),
     openInSidePane: z
       .object({
         explorerFiles: z.boolean().catch(false),

@@ -2556,13 +2556,7 @@ export class Session {
       case "daemon.update.request":
         return this.daemonSession.handleUpdateRequest(msg);
       case "set_daemon_config_request":
-        this.emit({
-          type: "set_daemon_config_response",
-          payload: {
-            requestId: msg.requestId,
-            config: this.daemonConfigStore.patch(msg.config),
-          },
-        });
+        this.handleSetDaemonConfigRequest(msg);
         return undefined;
       case "read_project_config_request":
         return this.projectConfigSession.handleReadProjectConfigRequest(msg);
@@ -2572,6 +2566,22 @@ export class Session {
         return undefined;
     }
   }
+  private handleSetDaemonConfigRequest(
+    msg: Extract<SessionInboundMessage, { type: "set_daemon_config_request" }>,
+  ): void {
+    const patchResult = this.daemonConfigStore.patch(msg.config);
+    this.emit({
+      type: "set_daemon_config_response",
+      payload: {
+        requestId: msg.requestId,
+        config: patchResult.config,
+        ...(patchResult.restartRequiredPaths.length > 0
+          ? { restartRequiredPaths: patchResult.restartRequiredPaths }
+          : {}),
+      },
+    });
+  }
+
   private async handleHostPerformanceGetSnapshotRequest(
     msg: Extract<SessionInboundMessage, { type: "host.performance.get_snapshot.request" }>,
   ): Promise<void> {

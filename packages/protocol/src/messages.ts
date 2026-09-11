@@ -279,6 +279,53 @@ export const AgentSkillSelectionSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("custom"), skills: z.array(z.string()) }).strict(),
 ]);
 export type AgentSkillSelection = z.infer<typeof AgentSkillSelectionSchema>;
+const MutableSpeechProviderIdSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.enum(["openai", "local"]));
+
+/** Speech feature config mirrored from persisted `features.*`. Changes apply on
+ * daemon restart — the speech runtime is built at bootstrap. `dictation` is
+ * typed; other feature blocks (voiceMode, webUi) pass through untouched. */
+const MutableDaemonFeaturesSchema = z
+  .object({
+    dictation: z
+      .object({
+        enabled: z.boolean().optional(),
+        stt: z
+          .object({
+            provider: MutableSpeechProviderIdSchema.optional(),
+            model: z.string().min(1).optional(),
+            language: z.string().trim().min(1).optional(),
+            confidenceThreshold: z.number().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .passthrough();
+const MutableDaemonFeaturesPatchSchema = z
+  .object({
+    dictation: z
+      .object({
+        enabled: z.boolean().optional(),
+        stt: z
+          .object({
+            provider: MutableSpeechProviderIdSchema.optional(),
+            model: z.string().min(1).optional(),
+            language: z.string().trim().min(1).optional(),
+            confidenceThreshold: z.number().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .passthrough();
 
 export const MutableDaemonConfigSchema = z
   .object({
@@ -317,6 +364,7 @@ export const MutableDaemonConfigSchema = z
     skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
+    features: MutableDaemonFeaturesSchema.optional(),
   })
   .passthrough();
 
@@ -337,6 +385,7 @@ export const MutableDaemonConfigPatchSchema = z
     agentProfiles: z.array(AgentProfileSchema).optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
+    features: MutableDaemonFeaturesPatchSchema.optional(),
   })
   .partial()
   .passthrough();
@@ -3718,6 +3767,10 @@ export const ServerInfoStatusPayloadSchema = z
         agentProfiles: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
+        // COMPAT(dictationConfig): added in v0.8.0-beta.2, remove gate after
+        // 2027-03-10. Older daemons silently drop `features` patches, so the
+        // client must not show dictation config controls without this flag.
+        dictationConfig: z.boolean().optional(),
         webPush: z.boolean().optional(),
         hostPerformance: z.boolean().optional(),
       })
@@ -4956,6 +5009,8 @@ export const SetDaemonConfigResponseMessageSchema = z.object({
     .object({
       requestId: z.string(),
       config: MutableDaemonConfigSchema,
+      /** Persisted paths that only take effect after a daemon restart. */
+      restartRequiredPaths: z.array(z.string()).optional(),
     })
     .passthrough(),
 });

@@ -487,7 +487,7 @@ describe("DaemonConfigStore", () => {
       undefined,
     );
 
-    const next = store.patch({ removeProviders: ["gemini"] });
+    const next = store.patch({ removeProviders: ["gemini"] }).config;
 
     expect(next.providers.gemini).toBeUndefined();
     expect(next.providers.claude).toEqual({ enabled: false });
@@ -597,7 +597,7 @@ describe("DaemonConfigStore", () => {
       undefined,
     );
 
-    const next = store.patch({ removeProviders: ["gemini"] });
+    const next = store.patch({ removeProviders: ["gemini"] }).config;
 
     expect(next.metadataGeneration.providers).toEqual([{ provider: "claude", model: "haiku" }]);
     const persisted = loadPersistedConfig(paseoHome);
@@ -648,7 +648,7 @@ describe("DaemonConfigStore", () => {
       undefined,
     );
 
-    const next = store.patch({ removeProviders: ["gemini"] });
+    const next = store.patch({ removeProviders: ["gemini"] }).config;
 
     expect(next.providers.gemini).toBeUndefined();
     const persisted = loadPersistedConfig(paseoHome);
@@ -830,6 +830,45 @@ describe("DaemonConfigStore", () => {
         { provider: "codex", model: "gpt-5.4-mini", thinkingOptionId: "low" },
       ],
     });
+  });
+
+  test("patch persists dictation features into config.json and reports restart paths", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
+    tempDirs.push(paseoHome);
+
+    const store = new DaemonConfigStore(
+      paseoHome,
+      {
+        mcp: { injectIntoAgents: false },
+        providers: {},
+        metadataGeneration: { providers: [] },
+        autoArchiveAfterMerge: false,
+        enableTerminalAgentHooks: false,
+        appendSystemPrompt: "",
+      },
+      undefined,
+    );
+
+    const result = store.patch({
+      features: { dictation: { enabled: true, stt: { provider: "local" } } },
+    });
+
+    expect(result.config.features?.dictation?.enabled).toBe(true);
+    expect(result.restartRequiredPaths).toEqual([
+      "features.dictation.enabled",
+      "features.dictation.stt.provider",
+    ]);
+
+    const persisted = loadPersistedConfig(paseoHome);
+    expect(persisted.features?.dictation).toEqual({
+      enabled: true,
+      stt: { provider: "local" },
+    });
+
+    const unchanged = store.patch({
+      features: { dictation: { enabled: true, stt: { provider: "local" } } },
+    });
+    expect(unchanged.restartRequiredPaths).toEqual([]);
   });
 
   test("patch persists clearing metadata generation providers into config.json", () => {

@@ -191,6 +191,10 @@ result. Normal config patches persist only the requested fields, so launch overr
 defaults never leak into the file. Startup-only fields remain compared with the daemon's launch
 snapshot so a mixed edit can apply its live subset and still name the paths that require restart.
 
+`features.dictation` is also patchable through `set_daemon_config` (the app's Voice settings use
+it), but it is not reloadable — the speech runtime is built at bootstrap, so the response reports
+the changed leaf paths in `restartRequiredPaths` and they apply on the next daemon start.
+
 ```
 {
   version: 1,
