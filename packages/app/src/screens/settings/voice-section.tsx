@@ -350,14 +350,19 @@ function DictationAdvancedRows({
   const languageInputRef = useRef<EditingTextInputHandle | null>(null);
 
   const rawProvider = dictation?.stt?.provider;
-  // Unknown providers from a newer daemon display raw and select nothing —
-  // never alias to a known value the user could then "save" over it.
-  const provider: DictationProvider | null =
-    rawProvider === "openai" || rawProvider === "local" ? rawProvider : null;
+  // Absent means the daemon default (local). Unknown providers from a newer
+  // daemon display raw and select nothing — never alias to a known value the
+  // user could then "save" over it.
+  let provider: DictationProvider | null;
+  if (rawProvider === undefined || rawProvider === "local") {
+    provider = "local";
+  } else if (rawProvider === "openai") {
+    provider = "openai";
+  } else {
+    provider = null;
+  }
   const providerLabel =
-    provider !== null
-      ? t(dictationProviderLabelKey(provider))
-      : (rawProvider ?? t(dictationProviderLabelKey("local")));
+    provider !== null ? t(dictationProviderLabelKey(provider)) : (rawProvider ?? "");
   const handleProviderChange = useCallback(
     (next: DictationProvider) => {
       void patch({ features: { dictation: { stt: { provider: next } } } });
