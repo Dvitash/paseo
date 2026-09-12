@@ -61,6 +61,19 @@ beforeEach(() => {
   setViewport(390, 844);
   setUserAgent(IPHONE_UA);
   setStandalone(true);
+  // Match screen height to innerHeight so the launch heal stays inert unless
+  // a test stubs a shortfall; clear visualViewport so compensation tests
+  // control it explicitly.
+  Object.defineProperty(window.screen, "height", { value: 844, configurable: true });
+  Object.defineProperty(window, "visualViewport", {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+});
+
+afterEach(() => {
+  document.documentElement.style.removeProperty("--paseo-viewport-compensation");
 });
 
 afterEach(() => {
@@ -153,5 +166,63 @@ describe("useStandalonePwaViewportHeal", () => {
     fireResize();
     vi.advanceTimersByTime(200);
     expect(displayAtReflow).toBe("none");
+  });
+  it("sets --paseo-viewport-compensation to the visualViewport shortfall", () => {
+    Object.defineProperty(window, "visualViewport", {
+      value: {
+        height: 878, // innerHeight (844) + 34px dead band
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+      configurable: true,
+    });
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(document.documentElement.style.getPropertyValue("--paseo-viewport-compensation")).toBe(
+      "34px",
+    );
+  });
+
+  it("sets --paseo-viewport-compensation to 0 when the viewport is not short", () => {
+    Object.defineProperty(window, "visualViewport", {
+      value: {
+        height: 844,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+      configurable: true,
+    });
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(document.documentElement.style.getPropertyValue("--paseo-viewport-compensation")).toBe(
+      "0px",
+    );
+  });
+
+  it("clamps compensation to zero when the shortfall exceeds the safe-area range", () => {
+    Object.defineProperty(window, "visualViewport", {
+      value: {
+        height: 1144, // 300px over innerHeight — keyboard-sized, not an inset
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+      configurable: true,
+    });
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(document.documentElement.style.getPropertyValue("--paseo-viewport-compensation")).toBe(
+      "0px",
+    );
+  });
+
+  it("runs the display-flip re-measure at mount when the viewport is stuck at launch", () => {
+    // screen.height taller than innerHeight means the reported viewport is
+    // already short before any keyboard interaction.
+    Object.defineProperty(window.screen, "height", { value: 896, configurable: true });
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(displayAtReflow).toBe("none");
+    expect(root.style.display).toBe("");
+  });
+
+  it("does not flip at mount when the reported viewport fills the screen", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(displayAtReflow).toBeNull();
   });
 });

@@ -2,13 +2,16 @@ import { useEffect } from "react";
 import { isWeb } from "@/constants/platform";
 import { isAppleHandheldPlatform } from "@/utils/terminal-keys";
 
-// WebKit bug (iOS standalone "Add to Home Screen" PWA): the first time the
-// software keyboard opens, the layout viewport shrinks and never grows back
-// until the app is force-quit. window.innerHeight, visualViewport.height, and
-// 100dvh all stay short, leaving a dead band below the app shell. The only
-// known recovery is forcing WebKit to re-measure the viewport by flipping
-// display none→flex on a full-viewport-height element with a synchronous
-// reflow in between. See docs/development.md ("PWA viewport").
+// WebKit bugs (iOS standalone "Add to Home Screen" PWA):
+// 1. Launch: innerHeight/100dvh can report short of the painted area, leaving
+//    a dead band below the app shell. Compensated by measuring
+//    visualViewport.height - innerHeight (the actually-visible region, so it
+//    can never overshoot) into --paseo-viewport-compensation.
+// 2. Keyboard: the first software-keyboard open can shrink the layout
+//    viewport permanently until force-quit. The only known recovery is
+//    forcing WebKit to re-measure by flipping display none→flex on a
+//    full-viewport-height element with a synchronous reflow in between.
+// See docs/development.md ("PWA viewport").
 const RESTORE_EPSILON_PX = 4;
 const HEAL_DELAY_MS = 140;
 // Only compensate shortfalls in the safe-area range. A larger gap means the
@@ -55,20 +58,10 @@ export function useStandalonePwaViewportHeal() {
     };
     applyCompensation();
 
-    const healViewport = () => {
-      healTimer = undefined;
-      if (maxHeight - window.innerHeight <= RESTORE_EPSILON_PX) {
-        return;
-      }
-      // Focus may have moved to another editable surface during the delay
-      // (iOS also reports relatedTarget=null on focusout). Never detach the
-      // root while the keyboard is up for a new editor.
-      if (
-        document.activeElement instanceof HTMLElement &&
-        document.activeElement.closest("input, textarea, [contenteditable]")
-      ) {
-        return;
-      }
+    // The display-flip re-measure is the only known recovery for a stuck
+    // viewport. Extracted so it can run at mount (stuck-at-launch) without
+    // the maxHeight guard, which is initialized to the already-short height.
+    const remeasureViewport = () => {
       // Capture scroll offsets before the flip; WebKit drops them when the
       // subtree is detached from layout.
       const scrolled: Array<{ element: Element; top: number; left: number }> = [];
@@ -84,6 +77,32 @@ export function useStandalonePwaViewportHeal() {
         element.scrollTop = top;
         element.scrollLeft = left;
       }
+    };
+
+    // Stuck-at-launch: if the reported viewport is already short of the
+    // physical screen, force a re-measure once. Harmless when nothing is
+    // stuck — the flip is a no-op for a healthy viewport.
+    if (window.screen.height - window.innerHeight > RESTORE_EPSILON_PX) {
+      remeasureViewport();
+      maxHeight = window.innerHeight;
+      applyCompensation();
+    }
+
+    const healViewport = () => {
+      healTimer = undefined;
+      if (maxHeight - window.innerHeight <= RESTORE_EPSILON_PX) {
+        return;
+      }
+      // Focus may have moved to another editable surface during the delay
+      // (iOS also reports relatedTarget=null on focusout). Never detach the
+      // root while the keyboard is up for a new editor.
+      if (
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.closest("input, textarea, [contenteditable]")
+      ) {
+        return;
+      }
+      remeasureViewport();
       // Do NOT adopt an unrestored height as the baseline: the heal can fire
       // while the keyboard is still dismissing, and lowering maxHeight here
       // would permanently disable later healing. The baseline only resets on
