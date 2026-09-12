@@ -158,7 +158,16 @@ Running provider-native subagents contribute `running` to the workspace owned by
 
 ## The subagents track
 
-The track is a pill at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`): a count you can read at a glance, and a panel behind it — a popover on wide screens, a sheet on compact ones — holding the rows. It floats over the transcript rather than sitting in a band above the composer, so the timeline scrolls underneath it; `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the pill frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
+The track sits at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`), listing its rows and floating over the transcript so the timeline scrolls underneath it. `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
+
+It has two shapes, chosen by form factor, because the same panel cannot serve both:
+
+- **Wide** — a card, open by default: a header with the count, then the rows. There is room above the composer, and the rows are the point.
+- **Compact** — a pull tab, collapsed to the header by default. The header states the count and is the pull handle; tapping it reveals the rows in place. A phone pane is mostly transcript, and an always-open card spends a third of the screen on a list that is usually just "running".
+
+Both shapes report the count with `buildSubagentPillPresentation`, so the header reads the same either way. The collapsed/expanded choice is a per-mount `useState`, not persisted: a fresh pane starts closed on compact.
+
+Rows carry the live activity from the child's own stream — the latest tool call or thought. On compact it gets the row's second line rather than sharing the first with the task and the elapsed counter, which squeezed all three to a few characters each.
 
 The rows combine two kinds of children:
 

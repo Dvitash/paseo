@@ -125,19 +125,17 @@ export async function seedParentWithCrossWorkspaceSubagent(
 }
 
 /**
- * Opens the subagents panel, and leaves it open if it already is — the pill is a toggle, and a
- * second click would close the thing the caller is about to assert on. The panel also closes on
- * its own whenever a row navigates away, so a flow that comes back to the parent reopens it.
+ * Opens the subagents track, and leaves it open if it already is. The track has two shapes: a
+ * card that is open by default (wide) and a pull tab that starts collapsed (compact). The pull
+ * tab's header reports `aria-expanded="false"` while hidden, and both header shapes are toggles,
+ * so an unconditional click can close the thing the caller is about to assert on.
  */
 export async function openSubagentsTrack(page: Page): Promise<void> {
-  const panel = page.getByTestId("subagents-track-header-panel");
-  if ((await panel.count()) === 0) {
-    const header = page.getByTestId("subagents-track-header");
-    if ((await header.count()) > 0) {
-      await header.click();
-    }
+  const header = page.getByTestId("subagents-track-header");
+  if ((await header.count()) > 0 && (await header.getAttribute("aria-expanded")) === "false") {
+    await header.click();
   }
-  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("subagents-track-header-panel")).toBeVisible({ timeout: 30_000 });
 }
 
 export async function expectSubagentRowVisible(page: Page, childId: string): Promise<void> {
