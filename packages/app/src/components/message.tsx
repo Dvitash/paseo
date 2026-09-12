@@ -3024,6 +3024,8 @@ interface ToolCallProps {
   detail?: ToolCallDetail;
   cwd?: string;
   metadata?: Record<string, unknown>;
+  startedAt?: Date;
+  endedAt?: Date;
   isLastInSequence?: boolean;
   disableOuterSpacing?: boolean;
   onInlineDetailsHoverChange?: (hovered: boolean) => void;
@@ -3043,6 +3045,8 @@ export const ToolCall = memo(function ToolCall({
   detail,
   cwd,
   metadata,
+  startedAt,
+  endedAt,
   isLastInSequence = false,
   disableOuterSpacing,
   onInlineDetailsHoverChange,
@@ -3110,6 +3114,9 @@ export const ToolCall = memo(function ToolCall({
         errorText: presentation.errorText,
         icon: presentation.icon,
         showLoadingSkeleton: presentation.isLoadingDetails,
+        status,
+        startedAt,
+        endedAt,
       });
     } else {
       setIsExpanded((prev) => !prev);
@@ -3124,6 +3131,9 @@ export const ToolCall = memo(function ToolCall({
     presentation.icon,
     presentation.isLoadingDetails,
     effectiveDetail,
+    status,
+    startedAt,
+    endedAt,
   ]);
 
   useEffect(() => {
@@ -3163,6 +3173,9 @@ export const ToolCall = memo(function ToolCall({
         errorText={presentation.errorText}
         maxHeight={maxDetailHeight}
         showLoadingSkeleton={presentation.isLoadingDetails}
+        status={status}
+        startedAt={startedAt}
+        endedAt={endedAt}
       />
     );
   }, [
@@ -3172,6 +3185,9 @@ export const ToolCall = memo(function ToolCall({
     presentation.errorText,
     presentation.isLoadingDetails,
     maxDetailHeight,
+    status,
+    startedAt,
+    endedAt,
   ]);
 
   const renderPreview = useCallback(
@@ -3243,6 +3259,8 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.detail !== next.detail) return false;
   if (previous.cwd !== next.cwd) return false;
   if (previous.metadata !== next.metadata) return false;
+  if (previous.startedAt !== next.startedAt) return false;
+  if (previous.endedAt !== next.endedAt) return false;
   if (previous.isLastInSequence !== next.isLastInSequence) return false;
   if (previous.disableOuterSpacing !== next.disableOuterSpacing) return false;
   if (previous.onOpenFilePath !== next.onOpenFilePath) return false;

@@ -1928,6 +1928,9 @@ export const fr: TranslationResources = {
     input: "Saisir",
     output: "Sortir",
     showMore: "Afficher plus",
+    shellWallLabel: "Durée :",
+    shellTimeoutLabel: "Délai :",
+    shellTimeoutNone: "aucun",
   },
   hub: {
     title: {

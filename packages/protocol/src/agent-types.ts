@@ -212,6 +212,8 @@ export type ToolCallDetail =
       cwd?: string;
       output?: string;
       exitCode?: number | null;
+      /** Wall-clock timeout the tool reported for the command, in milliseconds. */
+      timeoutMs?: number;
     }
   | {
       type: "read";
@@ -311,6 +313,10 @@ interface ToolCallBase {
   name: string;
   detail: ToolCallDetail;
   metadata?: Record<string, unknown>;
+  /** ISO timestamp of the first observed update for this call. */
+  startedAt?: string;
+  /** ISO timestamp of the first terminal-status update. */
+  endedAt?: string;
 }
 
 type ToolCallRunningTimelineItem = ToolCallBase & {

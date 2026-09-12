@@ -115,7 +115,20 @@ function mergeToolCallItems(
 
 function makeCanonicalEntries(rows: readonly AgentTimelineRow[]): WorkingEntry[] {
   return rows.map((row) => ({
-    item: row.item,
+    item:
+      row.item.type === "tool_call"
+        ? {
+            ...row.item,
+            startedAt: row.item.startedAt ?? row.timestamp,
+            endedAt:
+              row.item.endedAt ??
+              (row.item.status === "completed" ||
+              row.item.status === "failed" ||
+              row.item.status === "canceled"
+                ? row.timestamp
+                : undefined),
+          }
+        : row.item,
     ...(row.turnId ? { turnId: row.turnId } : {}),
     timestamp: row.timestamp,
     seqStart: row.seq,
@@ -144,7 +157,17 @@ function mergeIdentityEntries(existing: WorkingEntry, entry: WorkingEntry): Work
       if (existing.item.type !== "tool_call" || existing.turnId !== entry.turnId) return null;
       return {
         ...existing,
-        item: mergeToolCallItems(existing.item, entry.item),
+        item: {
+          ...mergeToolCallItems(existing.item, entry.item),
+          startedAt: existing.item.startedAt ?? existing.timestamp,
+          endedAt:
+            existing.item.endedAt ??
+            (entry.item.status === "completed" ||
+            entry.item.status === "failed" ||
+            entry.item.status === "canceled"
+              ? entry.timestamp
+              : undefined),
+        },
         timestamp: entry.timestamp,
         seqEnd: Math.max(existing.seqEnd, entry.seqEnd),
         ...mergeIdentityMetadata(existing, entry, "tool_lifecycle"),

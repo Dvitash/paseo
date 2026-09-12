@@ -1876,6 +1876,9 @@ export const ar: TranslationResources = {
     input: "مدخل",
     output: "الإخراج",
     showMore: "عرض المزيد",
+    shellWallLabel: "Wall:",
+    shellTimeoutLabel: "Timeout:",
+    shellTimeoutNone: "none",
   },
   hub: {
     title: {

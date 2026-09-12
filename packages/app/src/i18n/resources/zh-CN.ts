@@ -1854,6 +1854,9 @@ export const zhCN: TranslationResources = {
     input: "输入",
     output: "输出",
     showMore: "显示更多",
+    shellWallLabel: "耗时:",
+    shellTimeoutLabel: "超时:",
+    shellTimeoutNone: "无",
   },
   hub: {
     title: {

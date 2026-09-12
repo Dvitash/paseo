@@ -752,6 +752,9 @@ export interface AgentToolCallData {
   error: unknown;
   detail: ToolCallDetail;
   metadata?: Record<string, unknown>;
+  /** ISO timestamps carried by projected timeline rows; absent on live events. */
+  startedAt?: string;
+  endedAt?: string;
 }
 
 export type ToolCallPayload =
@@ -764,6 +767,10 @@ export interface ToolCallItem {
   timelineCursor?: TimelinePosition;
   turnId?: string;
   timestamp: Date;
+  /** When the call was first observed; unlike `timestamp` this never moves on updates. */
+  startedAt?: Date;
+  /** When the call first reached a terminal status. */
+  endedAt?: Date;
   payload: ToolCallPayload;
 }
 
@@ -1152,6 +1159,10 @@ function mergeAgentToolCallStatus(
   return "running";
 }
 
+function isTerminalToolCallStatus(status: AgentToolCallStatus): boolean {
+  return status === "completed" || status === "failed" || status === "canceled";
+}
+
 export function mergeAgentToolCallItem(
   existing: AgentToolCallItem,
   data: AgentToolCallData,
@@ -1170,6 +1181,11 @@ export function mergeAgentToolCallItem(
     ...existing,
     ...(timelineCursor ? { timelineCursor } : {}),
     timestamp,
+    startedAt: existing.startedAt ?? (data.startedAt ? new Date(data.startedAt) : timestamp),
+    endedAt:
+      existing.endedAt ??
+      (data.endedAt ? new Date(data.endedAt) : undefined) ??
+      (isTerminalToolCallStatus(mergedStatus) ? timestamp : undefined),
     payload: {
       source: "agent",
       data: {
@@ -1228,6 +1244,10 @@ function appendAgentToolCall(input: AppendAgentToolCallInput): StreamItem[] {
     ...(timelineCursor ? { timelineCursor } : {}),
     ...(turnId ? { turnId } : {}),
     timestamp,
+    startedAt: data.startedAt ? new Date(data.startedAt) : timestamp,
+    endedAt:
+      (data.endedAt ? new Date(data.endedAt) : undefined) ??
+      (isTerminalToolCallStatus(data.status) ? timestamp : undefined),
     payload: {
       source: "agent",
       data: {
@@ -1450,6 +1470,8 @@ function reduceTimelineToolCall(
       error: item.error,
       detail: item.detail,
       metadata: item.metadata,
+      startedAt: item.startedAt,
+      endedAt: item.endedAt,
     },
     timestamp,
     timelineCursor,

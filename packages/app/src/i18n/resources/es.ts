@@ -1923,6 +1923,9 @@ export const es: TranslationResources = {
     input: "Aporte",
     output: "Producción",
     showMore: "Mostrar más",
+    shellWallLabel: "Duración:",
+    shellTimeoutLabel: "Tiempo límite:",
+    shellTimeoutNone: "ninguno",
   },
   hub: {
     title: {

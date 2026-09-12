@@ -1885,6 +1885,9 @@ export const en = {
     input: "Input",
     output: "Output",
     showMore: "Show more",
+    shellWallLabel: "Wall:",
+    shellTimeoutLabel: "Timeout:",
+    shellTimeoutNone: "none",
   },
   hub: {
     title: {

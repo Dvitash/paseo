@@ -29,6 +29,11 @@ import { getEvalPresentation } from "@/tool-calls/eval";
 import { EvalContent } from "@/tool-calls/activity-content";
 import { getHubPresentation, hasHubContent } from "@/tool-calls/hub";
 import { HubContent } from "@/tool-calls/hub-content";
+import {
+  ShellDetailSection,
+  type DetailStyles,
+  type ShellDetailProps,
+} from "./tool-call-shell-detail";
 
 const ScrollView = isWeb ? RNScrollView : GHScrollView;
 
@@ -41,21 +46,9 @@ interface ToolCallDetailsContentProps {
   maxHeight?: number;
   fillAvailableHeight?: boolean;
   showLoadingSkeleton?: boolean;
-}
-
-interface DetailStyles {
-  sectionFillStyle: StyleProp<ViewStyle>;
-  codeBlockFillStyle: StyleProp<ViewStyle>;
-  codeVerticalScrollStyle: StyleProp<ViewStyle>;
-  scrollAreaFillStyle: StyleProp<ViewStyle>;
-  scrollAreaStyle: StyleProp<ViewStyle>;
-  jsonScrollCombined: StyleProp<ViewStyle>;
-  jsonScrollErrorCombined: StyleProp<ViewStyle>;
-  fullBleedContainerStyle: StyleProp<ViewStyle>;
-  loadingContainerStyle: StyleProp<ViewStyle>;
-  resolvedMaxHeight: number | undefined;
-  shouldFill: boolean;
-  isFullBleed: boolean;
+  status?: "executing" | "running" | "completed" | "failed" | "canceled";
+  startedAt?: Date;
+  endedAt?: Date;
 }
 
 function resolveIsFullBleed(detail: ToolCallDetail | undefined): boolean {
@@ -149,45 +142,6 @@ function useDiffLines(detail: ToolCallDetail | undefined): DiffLine[] | undefine
       : buildLineDiff(detail.oldString ?? "", detail.newString ?? "");
     return highlightDiffLines(diffLines, detail.filePath);
   }, [detail]);
-}
-
-interface ShellDetailProps {
-  command: string;
-  output: string | null | undefined;
-  ds: DetailStyles;
-}
-
-function ShellDetailSection({ command, output, ds }: ShellDetailProps) {
-  const normalizedCommand = command.replace(/\n+$/, "");
-  const commandOutput = (output ?? "").replace(/^\n+/, "");
-  const hasOutput = commandOutput.length > 0;
-  return (
-    <View style={ds.sectionFillStyle}>
-      <View style={ds.codeBlockFillStyle}>
-        <ScrollView
-          style={ds.codeVerticalScrollStyle}
-          contentContainerStyle={styles.codeVerticalContent}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-        >
-          <ScrollView
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator
-            contentContainerStyle={styles.codeHorizontalContent}
-          >
-            <View style={styles.codeLine} dataSet={CODE_SURFACE_DATASET}>
-              <Text selectable style={styles.scrollText}>
-                <Text style={styles.shellPrompt}>$ </Text>
-                {normalizedCommand}
-                {hasOutput ? `\n\n${commandOutput}` : ""}
-              </Text>
-            </View>
-          </ScrollView>
-        </ScrollView>
-      </View>
-    </View>
-  );
 }
 
 interface WorktreeSetupDetailProps {
@@ -675,11 +629,21 @@ function buildDetailSections(
   diffLines: DiffLine[] | undefined,
   ds: DetailStyles,
   t: TFunction,
+  timing?: Pick<ShellDetailProps, "status" | "startedAt" | "endedAt">,
 ): ReactNode[] {
   if (!detail) return [];
   if (detail.type === "shell") {
     return [
-      <ShellDetailSection key="shell" command={detail.command} output={detail.output} ds={ds} />,
+      <ShellDetailSection
+        key="shell"
+        command={detail.command}
+        output={detail.output}
+        timeoutMs={detail.timeoutMs}
+        status={timing?.status}
+        startedAt={timing?.startedAt}
+        endedAt={timing?.endedAt}
+        ds={ds}
+      />,
     ];
   }
   if (detail.type === "worktree_setup") {
@@ -792,6 +756,9 @@ export function ToolCallDetailsContent({
   maxHeight,
   fillAvailableHeight = false,
   showLoadingSkeleton = false,
+  status,
+  startedAt,
+  endedAt,
 }: ToolCallDetailsContentProps) {
   const { t } = useTranslation();
   const resolvedMaxHeight = fillAvailableHeight ? undefined : (maxHeight ?? 300);
@@ -809,7 +776,11 @@ export function ToolCallDetailsContent({
   } else if (hub && hasHubContent(hub)) {
     sections = [<HubContent key="hub" hub={hub} maxHeight={resolvedMaxHeight} />];
   } else {
-    sections = buildDetailSections(toolName, detail, diffLines, ds, t);
+    sections = buildDetailSections(toolName, detail, diffLines, ds, t, {
+      status,
+      startedAt,
+      endedAt,
+    });
   }
 
   if (errorText && !evaluation) {
@@ -965,9 +936,6 @@ const styles = StyleSheet.create((theme) => {
             overflowWrap: "normal",
           }
         : null),
-    },
-    shellPrompt: {
-      color: theme.colors.foregroundMuted,
     },
     subAgentSessionText: {
       fontFamily: theme.fontFamily.mono,

@@ -696,6 +696,7 @@ const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discri
       cwd: z.string().optional(),
       output: z.string().optional(),
       exitCode: z.number().nullable().optional(),
+      timeoutMs: z.number().optional(),
     }),
     z.object({
       type: z.literal("read"),
@@ -791,6 +792,11 @@ const ToolCallBasePayloadSchema = z.object({
   name: z.string(),
   detail: ToolCallDetailPayloadSchema,
   metadata: z.record(z.string(), z.unknown()).optional(),
+  // ISO timestamps for the call's first observation and terminal transition.
+  // Projected rows collapse lifecycle updates into one item, so these carry
+  // the timing the merged row's own timestamp can't.
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
 });
 
 const ToolCallRunningPayloadSchema = ToolCallBasePayloadSchema.extend({

@@ -1909,6 +1909,9 @@ export const ptBR: TranslationResources = {
     input: "Entrada",
     output: "Saída",
     showMore: "Mostrar mais",
+    shellWallLabel: "Duração:",
+    shellTimeoutLabel: "Tempo limite:",
+    shellTimeoutNone: "nenhum",
   },
   hub: {
     title: {

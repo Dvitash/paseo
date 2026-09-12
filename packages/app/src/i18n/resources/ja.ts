@@ -1895,6 +1895,9 @@ export const ja: TranslationResources = {
     input: "入力",
     output: "出力",
     showMore: "もっと表示",
+    shellWallLabel: "経過:",
+    shellTimeoutLabel: "タイムアウト:",
+    shellTimeoutNone: "なし",
   },
   hub: {
     title: {

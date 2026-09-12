@@ -1887,6 +1887,9 @@ export const ko: TranslationResources = {
     input: "입력",
     output: "출력",
     showMore: "더 보기",
+    shellWallLabel: "경과:",
+    shellTimeoutLabel: "타임아웃:",
+    shellTimeoutNone: "없음",
   },
   hub: {
     title: {

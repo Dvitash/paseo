@@ -1908,6 +1908,9 @@ export const ru: TranslationResources = {
     input: "Входные данные",
     output: "Выходные данные",
     showMore: "Показать больше",
+    shellWallLabel: "Время:",
+    shellTimeoutLabel: "Таймаут:",
+    shellTimeoutNone: "нет",
   },
   hub: {
     title: {
