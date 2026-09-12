@@ -16,6 +16,7 @@ import { useSessionStore, type Agent } from "@/stores/session-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { isAgentArchiving, setAgentArchiving } from "@/hooks/use-archive-agent";
 import { queryClient } from "@/data/query-client";
+import { daemonConfigQueryKey } from "@/data/daemon-config";
 import {
   HostRuntimeController,
   HostRuntimeStore,
@@ -1971,7 +1972,44 @@ describe("HostRuntimeStore", () => {
       page: { limit: 200 },
     });
 
+    await store.refreshDirectories(host.serverId);
+    const fetchesBeforeResume = fakeClient.fetchAgentsCalls.length;
+    const epochBeforeResume = store.getSnapshot(host.serverId)?.connectionEpoch;
+    const configKey = daemonConfigQueryKey(host.serverId);
+    queryClient.setQueryData(configKey, { resume: "before" });
+    store.setAppVisible(false);
+    fakeClient.fetchAgentsResponses.push(
+      makeFetchAgentsPayload({
+        entries: [
+          makeFetchAgentsEntry({
+            id: "agent-finished-in-background",
+            cwd: "/tmp/resume",
+            updatedAt: "2026-09-12T10:00:00.000Z",
+          }),
+        ],
+      }),
+    );
+    store.setAppVisible(true);
+    await vi.waitFor(() => {
+      expect(
+        useSessionStore
+          .getState()
+          .sessions[host.serverId]?.agents.has("agent-finished-in-background"),
+      ).toBe(true);
+    });
+    expect(fakeClient.fetchAgentsCalls).toHaveLength(fetchesBeforeResume + 1);
+    expect(store.getSnapshot(host.serverId)?.connectionEpoch).toBe(epochBeforeResume);
+    expect(queryClient.getQueryState(configKey)?.isInvalidated).toBe(true);
+    queryClient.setQueryData(configKey, { resume: "after" });
+    store.setAppVisible(true);
+    expect(fakeClient.fetchAgentsCalls).toHaveLength(fetchesBeforeResume + 1);
+    expect(queryClient.getQueryState(configKey)?.isInvalidated).toBe(false);
+
     releaseDemand();
+    store.setAppVisible(false);
+    store.setAppVisible(true);
+    expect(fakeClient.fetchAgentsCalls).toHaveLength(fetchesBeforeResume + 1);
+    queryClient.removeQueries({ queryKey: configKey });
     store.syncHosts([]);
     useSessionStore.getState().clearSession(host.serverId);
   });

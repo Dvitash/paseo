@@ -433,8 +433,11 @@ function decideCatchUp(input: {
   current: CatchUpState | undefined;
   request: ProjectedTimelineForwardFetchPlan;
   supersede: boolean;
+  resume?: boolean;
 }): CatchUpDecision {
   if (!input.current) return "replace";
+  // A request started before suspension cannot cover resume; queue a fresh tail behind it.
+  if (input.resume) return input.current.status === "running" ? "keep-and-park" : "replace";
   if (input.supersede) {
     if (
       input.current.status === "running" &&
@@ -626,9 +629,10 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     options: {
       request?: ProjectedTimelineForwardFetchPlan;
       supersede?: boolean;
+      resume?: boolean;
     } = {},
   ) => {
-    const { request, supersede = false } = options;
+    const { request, supersede = false, resume = false } = options;
     if (!connected || !isDesired(agentId) || !isAcknowledged(agentId)) {
       if (request) pendingCatchUps.set(agentId, request);
       return;
@@ -640,7 +644,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     }
     const nextRequest = request ?? planTimelineResumeFetch(ports.readCursor(agentId));
     const current = catchUps.get(agentId);
-    const decision = decideCatchUp({ current, request: nextRequest, supersede });
+    const decision = decideCatchUp({ current, request: nextRequest, supersede, resume });
     if (decision === "keep-and-park") {
       pendingCatchUps.set(agentId, nextRequest);
       return;
@@ -850,7 +854,19 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     setActive(nextActive) {
       if (active === nextActive) return;
       active = nextActive;
+      const refreshSurvivingSubscriptions = active && connected && deliveryMode === "selective";
+      const resumeAgentIds = refreshSurvivingSubscriptions
+        ? visibleAgentIds().filter(isAcknowledged)
+        : [];
       publishVisibleMembership();
+      // Selective membership survives backgrounding, so unchanged membership still needs catch-up.
+      for (const agentId of resumeAgentIds) {
+        startCatchUp(agentId, {
+          request: planTimelineResumeFetch(ports.readCursor(agentId)),
+          supersede: true,
+          resume: true,
+        });
+      }
     },
     setConnected(nextConnected) {
       if (connected === nextConnected) return;

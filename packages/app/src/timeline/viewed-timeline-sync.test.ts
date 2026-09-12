@@ -175,6 +175,11 @@ class TimelineWorld {
     return new Promise((resolve) => this.fetchWaiters.push({ agentId, resolve }));
   }
 
+  takeFetch(agentId: string): TimelineFetch | null {
+    const index = this.fetches.findIndex((fetch) => fetch.agentId === agentId);
+    return index >= 0 ? this.fetches.splice(index, 1)[0] : null;
+  }
+
   expectNoPendingMembership(): void {
     expect(this.memberships).toEqual([]);
   }
@@ -703,7 +708,7 @@ test("redeclaring unchanged visibility does not bypass membership backoff", asyn
   expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("error");
 });
 
-test("backgrounding preserves the hot membership without catch-up on return", async () => {
+test("backgrounding preserves the hot membership and resumes only the visible agent", async () => {
   const world = new TimelineWorld();
   world.sync.setConnected(true);
   world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
@@ -725,7 +730,113 @@ test("backgrounding preserves the hot membership without catch-up on return", as
   world.sync.setActive(true);
 
   world.expectNoPendingMembership();
+  const resumed = await world.nextFetch("agent-b");
+  expect(resumed.request).toEqual({ direction: "tail", limit: 40, projection: "projected" });
+  resumed.respond({ hasNewer: false });
+  expect(world.takeFetch("agent-a")).toBeNull();
   world.expectNoPendingFetch();
+});
+
+test("resuming during an in-flight catch-up parks exactly one follow-up tail", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+
+  // A selective stream survives backgrounding, so the catch-up started before background can
+  // still be in flight when the app comes back.
+  const inFlight = await world.nextFetch("agent-a");
+  world.sync.setActive(false);
+  world.sync.setActive(true);
+
+  // The pre-background request may have snapshotted before inactivity, so it is not reused.
+  world.expectNoPendingFetch();
+  world.expectNoPendingMembership();
+
+  inFlight.respond({ hasNewer: false });
+
+  const followUp = await world.nextFetch("agent-a");
+  expect(followUp.request).toEqual({ direction: "tail", limit: 40, projection: "projected" });
+  followUp.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+  world.expectNoPendingFetch();
+});
+
+test("resume after in-app navigation refreshes only the newly visible agent", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const agentACatchUp = await world.nextFetch("agent-a");
+  agentACatchUp.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+
+  // Backgrounding alone never publishes, and neither does the navigation that follows it.
+  world.sync.setActive(false);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-b"]);
+  world.expectNoPendingMembership();
+  world.expectNoPendingFetch();
+
+  world.sync.setActive(true);
+  const resumedMembership = await world.nextMembership();
+  resumedMembership.succeed();
+  const agentBCatchUp = await world.nextFetch("agent-b");
+  expect(agentBCatchUp.request).toEqual({ direction: "tail", limit: 40, projection: "projected" });
+  agentBCatchUp.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-b")).toBe("ready"));
+
+  // The retained hidden agent keeps its live stream and is not refreshed.
+  expect(world.takeFetch("agent-a")).toBeNull();
+  world.expectNoPendingFetch();
+  expect(resumedMembership.agentIds).toEqual(["agent-a", "agent-b"]);
+});
+
+test("an already-active foreground never re-fetches", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const initial = await world.nextFetch("agent-a");
+  initial.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+
+  world.sync.setActive(true);
+  expect(world.takeFetch("agent-a")).toBeNull();
+
+  // A resumed agent settles once; repeating active=true must not owe another tail.
+  world.sync.setActive(false);
+  world.sync.setActive(true);
+  const resumed = await world.nextFetch("agent-a");
+  resumed.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+
+  world.sync.setActive(true);
+  expect(world.takeFetch("agent-a")).toBeNull();
+  world.expectNoPendingMembership();
+});
+
+test("resuming retries a failed visible catch-up without another visibility declaration", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const failed = await world.nextFetch("agent-a");
+  failed.fail("timeline unavailable");
+  await world.nextRetry();
+  expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("error");
+
+  world.sync.setActive(false);
+  world.sync.setActive(true);
+
+  const resumed = await world.nextFetch("agent-a");
+  expect(resumed.request).toEqual({ direction: "tail", limit: 40, projection: "projected" });
+  resumed.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+  world.expectNoPendingMembership();
 });
 
 test("stale membership retry cannot overwrite a newer effective set", async () => {
@@ -1072,9 +1183,15 @@ test("healthy selective subscription preserved through background retains histor
     // Foreground return preserves readiness without artificial generation invalidation
     owner.setActive(true);
 
-    expect(owner.getAgentTimelineStatus(agentId)).toBe("ready");
+    // Foreground returns the agent to readiness, but a selective stream never closed, so the
+    // surviving subscription owes an authoritative tail for the inactivity it could not observe.
+    await vi.waitFor(() => expect(fetches.length).toBe(2));
+    expect(fetches[1]).toEqual({
+      agentId,
+      request: { direction: "tail", limit: 40, projection: "projected" },
+    });
+    await vi.waitFor(() => expect(owner.getAgentTimelineStatus(agentId)).toBe("ready"));
     expect(memberships).toHaveLength(1);
-    expect(fetches).toHaveLength(1);
 
     // Rendered store items retained across backgrounding
     const timeline = selectAgentTimelineState(
@@ -1108,7 +1225,11 @@ test("healthy selective subscription preserved through background retains histor
 
     await vi.waitFor(() => expect(memberships.length).toBe(2));
     expect(memberships[1]).toEqual([agentId]);
-    await vi.waitFor(() => expect(fetches.length).toBe(2));
+    await vi.waitFor(() => expect(fetches.length).toBe(3));
+    expect(fetches[2]).toEqual({
+      agentId,
+      request: { direction: "tail", limit: 40, projection: "projected" },
+    });
 
     owner.applyTimelineResponse({
       requestId: "reconnect-tail",

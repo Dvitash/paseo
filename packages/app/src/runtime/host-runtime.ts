@@ -1386,6 +1386,7 @@ export class HostRuntimeStore {
   private version = 0;
   private hostListVersion = 0;
   private hostRegistryLoaded = false;
+  private appVisible = true;
   private hosts: HostProfile[] = [];
   private hostAppearanceMutationTail: Promise<void> = Promise.resolve();
   private hostRegistryStatus: HostRegistryStatus = "loading";
@@ -2162,13 +2163,15 @@ export class HostRuntimeStore {
       snapshot.connectionStatus === "online" && previousStatus !== "online";
     if (didTransitionOnline) {
       useSessionStore.getState().bumpHistorySyncGeneration(serverId);
-      // Checkout git data is push-driven; pushes emitted while disconnected are gone for
-      // good (the daemon dedupes by snapshot fingerprint). Mark the caches stale so active
-      // queries refetch now and evicted ones on their next mount.
-      void invalidateCheckoutGitQueriesForServer(queryClient, serverId);
-      invalidateServerDataQueriesAfterReconnect({ queryClient, serverId });
-      void queryClient.invalidateQueries({ queryKey: schedulesQueryBaseKey });
+      this.invalidateHostQueries(serverId);
     }
+  }
+
+  private invalidateHostQueries(serverId: string): void {
+    // Pushes missed while disconnected or suspended are not guaranteed to be replayed.
+    void invalidateCheckoutGitQueriesForServer(queryClient, serverId);
+    invalidateServerDataQueriesAfterReconnect({ queryClient, serverId });
+    void queryClient.invalidateQueries({ queryKey: schedulesQueryBaseKey });
   }
 
   drainQueuedAgentMessage(serverId: string, agentId: string): void {
@@ -2332,6 +2335,8 @@ export class HostRuntimeStore {
   }
 
   setAppVisible(visible: boolean): void {
+    const resumed = visible && !this.appVisible;
+    this.appVisible = visible;
     // Keep normal reconnect backoff running while hidden, for as long as the OS
     // lets us execute. Foregrounding bypasses backoff and checks apparently healthy sockets.
     if (!visible) {
@@ -2340,6 +2345,15 @@ export class HostRuntimeStore {
     }
 
     this.ensureConnectedAll();
+    if (!resumed) return;
+    for (const [serverId, controller] of this.controllers) {
+      if (controller.getSnapshot().connectionStatus !== "online") continue;
+      void this.directorySyncByServer
+        .get(serverId)
+        ?.refreshDemand()
+        .catch(() => undefined);
+      this.invalidateHostQueries(serverId);
+    }
   }
 
   runProbeCycleNow(serverId?: string): Promise<void> {
