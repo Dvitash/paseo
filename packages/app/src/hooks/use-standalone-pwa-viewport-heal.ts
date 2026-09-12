@@ -11,6 +11,10 @@ import { isAppleHandheldPlatform } from "@/utils/terminal-keys";
 // reflow in between. See docs/development.md ("PWA viewport").
 const RESTORE_EPSILON_PX = 4;
 const HEAL_DELAY_MS = 140;
+// Only compensate shortfalls in the safe-area range. A larger gap means the
+// keyboard is up, and extending the shell under it would hide the composer.
+const MAX_COMPENSATION_PX = 80;
+const COMPENSATION_VAR = "--paseo-viewport-compensation";
 
 export function useStandalonePwaViewportHeal() {
   useEffect(() => {
@@ -37,6 +41,19 @@ export function useStandalonePwaViewportHeal() {
     let maxHeight = window.innerHeight;
     let lastWidth = window.innerWidth;
     let healTimer: number | undefined;
+
+    // iOS standalone can report innerHeight/100dvh short of the painted area
+    // at launch. visualViewport.height is the actually-visible region by
+    // definition, so the difference is the exact shortfall — it can never
+    // overshoot into unpainted pixels the way screen.height or env() can.
+    const applyCompensation = () => {
+      const visible = window.visualViewport?.height ?? window.innerHeight;
+      const shortfall = visible - window.innerHeight;
+      const compensation =
+        shortfall > RESTORE_EPSILON_PX && shortfall <= MAX_COMPENSATION_PX ? shortfall : 0;
+      document.documentElement.style.setProperty(COMPENSATION_VAR, `${compensation}px`);
+    };
+    applyCompensation();
 
     const healViewport = () => {
       healTimer = undefined;
@@ -71,6 +88,7 @@ export function useStandalonePwaViewportHeal() {
       // while the keyboard is still dismissing, and lowering maxHeight here
       // would permanently disable later healing. The baseline only resets on
       // a width change (rotation), handled in handleResize.
+      applyCompensation();
     };
 
     const scheduleHeal = () => {
@@ -84,19 +102,16 @@ export function useStandalonePwaViewportHeal() {
         // Orientation change: the previous height baseline is meaningless.
         lastWidth = window.innerWidth;
         maxHeight = window.innerHeight;
-        return;
-      }
-      if (window.innerHeight > maxHeight) {
+      } else if (window.innerHeight > maxHeight) {
         maxHeight = window.innerHeight;
-        return;
-      }
-      // A shrink while nothing editable is focused means the viewport is
-      // stuck; a real keyboard-open shrink is followed by a focusout that
-      // schedules the heal. A partial recovery (height grew but is still
-      // short) also lands here and retries.
-      if (document.activeElement == null || document.activeElement === document.body) {
+      } else if (document.activeElement == null || document.activeElement === document.body) {
+        // A shrink while nothing editable is focused means the viewport is
+        // stuck; a real keyboard-open shrink is followed by a focusout that
+        // schedules the heal. A partial recovery (height grew but is still
+        // short) also lands here and retries.
         scheduleHeal();
       }
+      applyCompensation();
     };
 
     const handleFocusOut = (event: FocusEvent) => {
@@ -116,6 +131,7 @@ export function useStandalonePwaViewportHeal() {
       window.removeEventListener("resize", handleResize);
       window.visualViewport?.removeEventListener("resize", handleResize);
       window.removeEventListener("focusout", handleFocusOut);
+      document.documentElement.style.removeProperty(COMPENSATION_VAR);
     };
   }, []);
 }

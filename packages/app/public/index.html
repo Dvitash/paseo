@@ -40,6 +40,17 @@
           background-color: #181b1a;
         }
       }
+      /* iOS standalone PWAs can report 100dvh/innerHeight short of the
+      painted area, leaving a dead band at the bottom. The shortfall is
+      measured at runtime against visualViewport.height (the actually-visible
+      region, so it can never overshoot) and injected through
+      --paseo-viewport-compensation by use-standalone-pwa-viewport-heal.ts.
+      Gated on the `ios-standalone` class so Android/desktop standalone,
+      which report correct heights, are untouched. */
+      .ios-standalone,
+      .ios-standalone body {
+        height: calc(100dvh + var(--paseo-viewport-compensation, 0px));
+      }
       /* These styles make the root element full-height */
       #root {
         display: flex;
@@ -51,6 +62,25 @@
         overflow: hidden;
       }
     </style>
+    <script>
+      // iOS standalone PWAs need the viewport compensation above. This must
+      // run before first paint, so it lives inline rather than in the bundle.
+      // Detection mirrors isAppleHandheldPlatform + the standalone checks in
+      // use-standalone-pwa-viewport-heal.ts.
+      (function () {
+        var nav = window.navigator;
+        var isIos =
+          /iPad|iPhone|iPod/.test(nav.userAgent) ||
+          (/Mac/i.test(nav.platform || "") && nav.maxTouchPoints > 1);
+        var isStandalone =
+          ("standalone" in nav && Boolean(nav.standalone)) ||
+          (typeof window.matchMedia === "function" &&
+            window.matchMedia("(display-mode: standalone)").matches);
+        if (isIos && isStandalone) {
+          document.documentElement.classList.add("ios-standalone");
+        }
+      })();
+    </script>
     <style>
       button,
       a,
