@@ -357,6 +357,131 @@ function updateAgentTasks(
   return next;
 }
 
+/** Returns the same map when it does not hold the agent, preserving state identity. */
+function dropAgentKey<T>(current: Map<string, T>, agentId: string): Map<string, T> {
+  if (!current.has(agentId)) return current;
+  const next = new Map(current);
+  next.delete(agentId);
+  return next;
+}
+
+function hasPendingPermissionForAgent(
+  pendingPermissions: Map<string, PendingPermission>,
+  agentId: string,
+): boolean {
+  for (const pending of pendingPermissions.values()) {
+    if (pending.agentId === agentId) return true;
+  }
+  return false;
+}
+
+function dropPendingPermissionsForAgent(
+  pendingPermissions: Map<string, PendingPermission>,
+  agentId: string,
+): Map<string, PendingPermission> {
+  let next: Map<string, PendingPermission> | null = null;
+  for (const [key, pending] of pendingPermissions) {
+    if (pending.agentId !== agentId) continue;
+    next ??= new Map(pendingPermissions);
+    next.delete(key);
+  }
+  return next ?? pendingPermissions;
+}
+
+/**
+ * Whether any transient per-agent map still holds `agentId`. Every map consulted
+ * here is keyed by agent id, so a missing agent means no map changes and the
+ * session reference can stay untouched.
+ */
+function sessionHoldsAgent(session: SessionState, agentId: string): boolean {
+  return (
+    session.agentStreamTail.has(agentId) ||
+    session.agentStreamHead.has(agentId) ||
+    session.agentTasks.has(agentId) ||
+    session.messageSubmissions.has(agentId) ||
+    session.agentTimelineCursor.has(agentId) ||
+    session.agentTimelineHasOlder.has(agentId) ||
+    session.agentTimelineHasNewer.has(agentId) ||
+    session.agentTimelineOlderFetchInFlight.has(agentId) ||
+    session.agentHistorySyncGeneration.has(agentId) ||
+    session.agentAuthoritativeHistoryApplied.has(agentId) ||
+    session.initializingAgents.has(agentId) ||
+    session.queuedMessages.has(agentId) ||
+    hasPendingPermissionForAgent(session.pendingPermissions, agentId)
+  );
+}
+
+/**
+ * Drops every transient entry owned by `agentId`. Returns null when the session
+ * holds the agent nowhere, so callers keep the previous state identity. Unchanged
+ * maps are carried over by reference.
+ */
+function withoutAgentTransientState(session: SessionState, agentId: string): SessionState | null {
+  if (!sessionHoldsAgent(session, agentId)) return null;
+  return {
+    ...session,
+    agentStreamTail: dropAgentKey(session.agentStreamTail, agentId),
+    agentStreamHead: dropAgentKey(session.agentStreamHead, agentId),
+    agentTasks: dropAgentKey(session.agentTasks, agentId),
+    messageSubmissions: dropAgentKey(session.messageSubmissions, agentId),
+    agentTimelineCursor: dropAgentKey(session.agentTimelineCursor, agentId),
+    agentTimelineHasOlder: dropAgentKey(session.agentTimelineHasOlder, agentId),
+    agentTimelineHasNewer: dropAgentKey(session.agentTimelineHasNewer, agentId),
+    agentTimelineOlderFetchInFlight: dropAgentKey(session.agentTimelineOlderFetchInFlight, agentId),
+    agentHistorySyncGeneration: dropAgentKey(session.agentHistorySyncGeneration, agentId),
+    agentAuthoritativeHistoryApplied: dropAgentKey(
+      session.agentAuthoritativeHistoryApplied,
+      agentId,
+    ),
+    initializingAgents: dropAgentKey(session.initializingAgents, agentId),
+    queuedMessages: dropAgentKey(session.queuedMessages, agentId),
+    pendingPermissions: dropPendingPermissionsForAgent(session.pendingPermissions, agentId),
+  };
+}
+
+/**
+ * Whether the session holds any transcript-owned state for `agentId`. Only the maps dropped by
+ * {@link withoutAgentTranscript} count: directory rows, tasks, submissions, permissions, queued
+ * messages and last activity are per-agent state a cold release keeps.
+ */
+function sessionHoldsAgentTranscript(session: SessionState, agentId: string): boolean {
+  return (
+    session.agentStreamTail.has(agentId) ||
+    session.agentStreamHead.has(agentId) ||
+    session.agentTimelineCursor.has(agentId) ||
+    session.agentTimelineHasOlder.has(agentId) ||
+    session.agentTimelineHasNewer.has(agentId) ||
+    session.agentTimelineOlderFetchInFlight.has(agentId) ||
+    session.agentHistorySyncGeneration.has(agentId) ||
+    session.agentAuthoritativeHistoryApplied.has(agentId)
+  );
+}
+
+/**
+ * Drops one agent's in-memory transcript: display rows, canonical coverage, pagination and sync
+ * markers. Everything else keyed by the agent survives — an agent whose transcript is cold is
+ * still a directory entry with tasks, turn activity, queued messages, permissions, submissions,
+ * last activity and draft. Returns null when the session holds no transcript state, so callers
+ * keep the previous state identity.
+ */
+function withoutAgentTranscript(session: SessionState, agentId: string): SessionState | null {
+  if (!sessionHoldsAgentTranscript(session, agentId)) return null;
+  return {
+    ...session,
+    agentStreamTail: dropAgentKey(session.agentStreamTail, agentId),
+    agentStreamHead: dropAgentKey(session.agentStreamHead, agentId),
+    agentTimelineCursor: dropAgentKey(session.agentTimelineCursor, agentId),
+    agentTimelineHasOlder: dropAgentKey(session.agentTimelineHasOlder, agentId),
+    agentTimelineHasNewer: dropAgentKey(session.agentTimelineHasNewer, agentId),
+    agentTimelineOlderFetchInFlight: dropAgentKey(session.agentTimelineOlderFetchInFlight, agentId),
+    agentHistorySyncGeneration: dropAgentKey(session.agentHistorySyncGeneration, agentId),
+    agentAuthoritativeHistoryApplied: dropAgentKey(
+      session.agentAuthoritativeHistoryApplied,
+      agentId,
+    ),
+  };
+}
+
 export type WorkspaceRestoreStatus = "restoring" | "failed" | "needs-host-upgrade";
 
 // Per-session state
@@ -521,6 +646,8 @@ interface SessionStoreActions {
     agentId: string,
     applied: boolean,
   ) => void;
+  removeAgentTransientState: (serverId: string, agentId: string) => void;
+  releaseAgentTimelineTranscript: (serverId: string, agentId: string) => boolean;
   applyAgentTimelineResponseState: (
     serverId: string,
     agentId: string,
@@ -1377,6 +1504,47 @@ export const useSessionStore = create<SessionStore>()(
             },
           };
         });
+      },
+
+      removeAgentTransientState: (serverId, agentId) => {
+        agentLastActivityCoalescer.deletePending(agentId);
+        set((prev) => {
+          const session = prev.sessions[serverId];
+          const agentLastActivity = dropAgentKey(prev.agentLastActivity, agentId);
+          const activityChanged = agentLastActivity !== prev.agentLastActivity;
+          if (!session) {
+            if (!activityChanged) return prev;
+            return { ...prev, agentLastActivity };
+          }
+
+          const nextSession = withoutAgentTransientState(session, agentId);
+          if (!nextSession) {
+            if (!activityChanged) return prev;
+            return { ...prev, agentLastActivity };
+          }
+
+          return {
+            ...prev,
+            ...(activityChanged ? { agentLastActivity } : {}),
+            sessions: { ...prev.sessions, [serverId]: nextSession },
+          };
+        });
+      },
+
+      releaseAgentTimelineTranscript: (serverId, agentId) => {
+        let released = false;
+        set((prev) => {
+          const session = prev.sessions[serverId];
+          if (!session) return prev;
+          const nextSession = withoutAgentTranscript(session, agentId);
+          if (!nextSession) return prev;
+          released = true;
+          return {
+            ...prev,
+            sessions: { ...prev.sessions, [serverId]: nextSession },
+          };
+        });
+        return released;
       },
 
       applyAgentTimelineResponseState: (serverId, agentId, state) => {

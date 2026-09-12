@@ -8,10 +8,99 @@ export interface AssistantImageMetadata {
   aspectRatio: number;
 }
 
-const assistantImageMetadataCache = new Map<string, AssistantImageMetadata>();
-const assistantImageParseCache = new Map<string, { sources: string[]; hasNonImageText: boolean }>();
+interface AssistantImageMarkdownParse {
+  sources: string[];
+  hasNonImageText: boolean;
+}
+
+// Both caches live for the whole session and are keyed by whole markdown
+// messages, so entry count alone does not bound them. Retained bytes are an
+// estimated budget, not a heap measurement: keys are counted at their UTF16
+// length and values at a conservative per-object overhead.
 const ASSISTANT_IMAGE_METADATA_CACHE_LIMIT = 500;
+const ASSISTANT_IMAGE_METADATA_CACHE_BYTE_BUDGET = 1024 * 1024;
 const ASSISTANT_IMAGE_PARSE_CACHE_LIMIT = 500;
+const ASSISTANT_IMAGE_PARSE_CACHE_BYTE_BUDGET = 1024 * 1024;
+const ASSISTANT_IMAGE_METADATA_BYTES = 32;
+const ASSISTANT_IMAGE_PARSE_BYTES = 48;
+const ASSISTANT_IMAGE_PARSE_SOURCE_BYTES = 16;
+
+interface RetainedEntry<V> {
+  value: V;
+  bytes: number;
+}
+
+// Map iteration order is insertion order, so a read refreshes recency by
+// re-inserting. Byte totals are maintained incrementally: no accounting pass
+// ever walks the retained entries.
+class RetainedEntryCache<V> {
+  private readonly entries = new Map<string, RetainedEntry<V>>();
+  private retainedBytes = 0;
+
+  constructor(
+    private readonly maxEntries: number,
+    private readonly maxBytes: number,
+    private readonly estimateValueBytes: (value: V) => number,
+  ) {}
+
+  get(key: string): V | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+
+  set(key: string, value: V): void {
+    const bytes = key.length * 2 + this.estimateValueBytes(value);
+    // A value larger than the whole budget can never be retained; dropping it
+    // here keeps the existing entries instead of flushing the cache to make
+    // room for something that would immediately be evicted again.
+    if (bytes > this.maxBytes) return;
+
+    const previous = this.entries.get(key);
+    if (previous) {
+      this.entries.delete(key);
+      this.retainedBytes -= previous.bytes;
+    }
+
+    this.entries.set(key, { value, bytes });
+    this.retainedBytes += bytes;
+
+    while (this.entries.size > this.maxEntries || this.retainedBytes > this.maxBytes) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey === undefined) return;
+      const oldest = this.entries.get(oldestKey);
+      this.entries.delete(oldestKey);
+      if (oldest) this.retainedBytes -= oldest.bytes;
+    }
+  }
+
+  clear(): void {
+    this.entries.clear();
+    this.retainedBytes = 0;
+  }
+}
+
+function estimateParseBytes(parsed: AssistantImageMarkdownParse): number {
+  let bytes = ASSISTANT_IMAGE_PARSE_BYTES;
+  for (const source of parsed.sources) {
+    bytes += ASSISTANT_IMAGE_PARSE_SOURCE_BYTES + source.length * 2;
+  }
+  return bytes;
+}
+
+const assistantImageMetadataCache = new RetainedEntryCache<AssistantImageMetadata>(
+  ASSISTANT_IMAGE_METADATA_CACHE_LIMIT,
+  ASSISTANT_IMAGE_METADATA_CACHE_BYTE_BUDGET,
+  () => ASSISTANT_IMAGE_METADATA_BYTES,
+);
+
+const assistantImageParseCache = new RetainedEntryCache<AssistantImageMarkdownParse>(
+  ASSISTANT_IMAGE_PARSE_CACHE_LIMIT,
+  ASSISTANT_IMAGE_PARSE_CACHE_BYTE_BUDGET,
+  estimateParseBytes,
+);
 
 const MARKDOWN_IMAGE_PATTERN = /!\[[^\]]*]\((<[^>]+>|[^)\n]+)\)/g;
 const ASSISTANT_IMAGE_ESTIMATE_WIDTH = MAX_CONTENT_WIDTH - 8;
@@ -20,18 +109,6 @@ const ASSISTANT_IMAGE_BLOCK_GAP = 24;
 const ASSISTANT_MESSAGE_BASE_HEIGHT = 96;
 const ASSISTANT_MESSAGE_MIN_HEIGHT = 220;
 const ASSISTANT_MESSAGE_IMAGE_ONLY_BASE_HEIGHT = 40;
-
-function touchCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, limit: number): void {
-  cache.delete(key);
-  cache.set(key, value);
-  if (cache.size <= limit) {
-    return;
-  }
-  const oldestKey = cache.keys().next().value;
-  if (oldestKey !== undefined) {
-    cache.delete(oldestKey);
-  }
-}
 
 function normalizeAssistantImageSourceToken(value: string): string | null {
   const trimmed = value.trim();
@@ -49,10 +126,7 @@ function normalizeAssistantImageSourceToken(value: string): string | null {
   return source || null;
 }
 
-function parseAssistantImageMarkdown(markdown: string): {
-  sources: string[];
-  hasNonImageText: boolean;
-} {
+function parseAssistantImageMarkdown(markdown: string): AssistantImageMarkdownParse {
   const sources: string[] = [];
   for (const match of markdown.matchAll(MARKDOWN_IMAGE_PATTERN)) {
     const normalized = normalizeAssistantImageSourceToken(match[1] ?? "");
@@ -114,12 +188,6 @@ export function getAssistantImageMetadata(input: {
   for (const key of getAssistantImageMetadataKeys(input)) {
     const metadata = assistantImageMetadataCache.get(key);
     if (metadata) {
-      touchCacheEntry(
-        assistantImageMetadataCache,
-        key,
-        metadata,
-        ASSISTANT_IMAGE_METADATA_CACHE_LIMIT,
-      );
       return metadata;
     }
   }
@@ -146,12 +214,7 @@ export function setAssistantImageMetadata(
   };
 
   for (const key of getAssistantImageMetadataKeys(input)) {
-    touchCacheEntry(
-      assistantImageMetadataCache,
-      key,
-      metadata,
-      ASSISTANT_IMAGE_METADATA_CACHE_LIMIT,
-    );
+    assistantImageMetadataCache.set(key, metadata);
   }
 
   return metadata;
@@ -161,18 +224,12 @@ export function extractAssistantImageSources(markdown: string): string[] {
   const shouldCacheParse = !/data:image\//i.test(markdown);
   const cachedParse = shouldCacheParse ? assistantImageParseCache.get(markdown) : undefined;
   if (cachedParse) {
-    touchCacheEntry(
-      assistantImageParseCache,
-      markdown,
-      cachedParse,
-      ASSISTANT_IMAGE_PARSE_CACHE_LIMIT,
-    );
     return cachedParse.sources;
   }
 
   const parsed = parseAssistantImageMarkdown(markdown);
   if (shouldCacheParse) {
-    touchCacheEntry(assistantImageParseCache, markdown, parsed, ASSISTANT_IMAGE_PARSE_CACHE_LIMIT);
+    assistantImageParseCache.set(markdown, parsed);
   }
   return parsed.sources;
 }

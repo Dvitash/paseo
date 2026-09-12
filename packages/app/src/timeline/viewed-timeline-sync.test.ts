@@ -40,9 +40,19 @@ class TimelineWorld {
   readonly cursors = new Map<string, { epoch: string; endSeq: number }>();
   readonly cacheRequests: string[] = [];
   readonly forcedTimelineTailReplacements = new Set<string>();
+  /** Agents whose transcript the injected release port refuses to drop. */
+  readonly blockedReleases = new Set<string>();
+  readonly releaseAttempts: string[] = [];
+  readonly released: string[] = [];
   cacheGate: Deferred<void> | null = null;
   readonly sync = createViewedTimelineSync({
     replaceDemandedAgentIds: () => undefined,
+    releaseTranscript: (agentId) => {
+      this.releaseAttempts.push(agentId);
+      if (this.blockedReleases.has(agentId)) return false;
+      this.released.push(agentId);
+      return true;
+    },
     prepare: async (agentId) => {
       this.cacheRequests.push(agentId);
       this.cacheRequestWaiters.shift()?.(agentId);
@@ -948,4 +958,396 @@ test("switching from legacy to selective delivery publishes membership and catch
   expect(membership.agentIds).toEqual(["agent-a"]);
   world.expectNoPendingMembership();
   world.expectNoPendingFetch();
+});
+
+const RELEASE_WORKLOAD_AGENT_IDS = [
+  "agent-a",
+  "agent-b",
+  "agent-c",
+  "agent-d",
+  "agent-e",
+  "agent-f",
+];
+
+test("releases the transcript of an agent evicted from the selective hot set", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const membership = await world.nextMembership();
+    membership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+
+  // The sixth agent pushed the first out of the five-agent hot set, and only the acknowledged
+  // membership can say so.
+  expect(world.released).toEqual(["agent-a"]);
+  expect(world.releaseAttempts).toEqual(["agent-a"]);
+});
+
+test("an agent released on eviction is prepared again when it returns", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const membership = await world.nextMembership();
+    membership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  expect(world.released).toEqual(["agent-a"]);
+
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const catchUp = await world.nextFetch("agent-a");
+  catchUp.respond({ hasNewer: false });
+
+  expect(membership.agentIds).toEqual(["agent-a", "agent-c", "agent-d", "agent-e", "agent-f"]);
+  expect(world.cacheRequests.filter((agentId) => agentId === "agent-a")).toHaveLength(2);
+});
+
+test("agents visible in panes are never released", async () => {
+  const world = new TimelineWorld();
+  const visible = ["agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f"];
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", visible);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const catchUps = await Promise.all(visible.map((agentId) => world.nextFetch(agentId)));
+  for (const catchUp of catchUps) catchUp.respond({ hasNewer: false });
+  expect(world.releaseAttempts).toEqual([]);
+
+  world.sync.replaceVisibleAgentIds("workspace", visible.slice(0, 5));
+  const eviction = await world.nextMembership();
+  eviction.succeed();
+
+  expect(eviction.agentIds).toEqual(visible.slice(0, 5));
+  await vi.waitFor(() => expect(world.released).toEqual(["agent-f"]));
+});
+
+test("legacy delivery never releases a transcript", async () => {
+  const world = new TimelineWorld();
+  world.sync.setDeliveryMode("legacy");
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+
+  expect(world.releaseAttempts).toEqual([]);
+});
+
+test("backgrounding retains transcripts until the app returns", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS.slice(0, 5)) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const membership = await world.nextMembership();
+    membership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+
+  world.sync.setActive(false);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-f"]);
+  expect(world.releaseAttempts).toEqual([]);
+
+  world.sync.setActive(true);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const catchUp = await world.nextFetch("agent-f");
+  catchUp.respond({ hasNewer: false });
+
+  await vi.waitFor(() => expect(world.released).toEqual(["agent-a"]));
+});
+
+test("disconnect retains transcripts and releases after the reconnect acknowledgement", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS.slice(0, 5)) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const membership = await world.nextMembership();
+    membership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+
+  world.sync.setConnected(false);
+  world.expectNoPendingMembership();
+  expect(world.releaseAttempts).toEqual([]);
+
+  world.sync.setConnected(true);
+  const restored = await world.nextMembership();
+  restored.succeed();
+
+  expect(restored.agentIds).toEqual(["agent-e"]);
+  await vi.waitFor(() =>
+    expect(world.released).toEqual(["agent-a", "agent-b", "agent-c", "agent-d"]),
+  );
+});
+
+test("defers a release while its fetch is in flight and retries once it settles", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const agentAMembership = await world.nextMembership();
+  agentAMembership.succeed();
+  const agentAFetch = await world.nextFetch("agent-a");
+
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS.slice(1)) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const membership = await world.nextMembership();
+    membership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  expect(world.releaseAttempts).toEqual([]);
+
+  agentAFetch.respond({ hasNewer: false });
+
+  await vi.waitFor(() => expect(world.released).toEqual(["agent-a"]));
+});
+
+test("defers a release until every superseded fetch for the agent settles", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const initialCatchUp = await world.nextFetch("agent-a");
+  initialCatchUp.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+
+  // A second recovery supersedes the first: both fetches are sync-owned and still in flight.
+  world.sync.recoverGap("agent-a", { epoch: "epoch-agent-a", endSeq: 10 });
+  const supersededFetch = await world.nextFetch("agent-a");
+  expect(supersededFetch.request).toEqual({
+    direction: "after",
+    cursor: { epoch: "epoch-agent-a", seq: 10 },
+    limit: 40,
+    projection: "projected",
+  });
+  world.sync.recoverGap("agent-a", { epoch: "epoch-agent-a", endSeq: 20 });
+  const supersedingFetch = await world.nextFetch("agent-a");
+  expect(supersedingFetch.request).toEqual({
+    direction: "after",
+    cursor: { epoch: "epoch-agent-a", seq: 20 },
+    limit: 40,
+    projection: "projected",
+  });
+
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS.slice(1)) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const evictionMembership = await world.nextMembership();
+    evictionMembership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  expect(world.releaseAttempts).toEqual([]);
+
+  supersededFetch.respond({ hasNewer: false });
+  // Drain the settle path: the superseded fetch's `finally` and the abandoned catch-up
+  // continuation both run, so an unchanged release log is real evidence and not just ordering.
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(world.releaseAttempts).toEqual([]);
+
+  supersedingFetch.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.released).toEqual(["agent-a"]));
+});
+
+test("retries a refused release at the next settlement", async () => {
+  const world = new TimelineWorld();
+  world.blockedReleases.add("agent-a");
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    const membership = await world.nextMembership();
+    membership.succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  expect(world.releaseAttempts).toContain("agent-a");
+  expect(world.releaseAttempts.every((agentId) => agentId === "agent-a")).toBe(true);
+  expect(world.released).toEqual([]);
+
+  world.blockedReleases.delete("agent-a");
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-g"]);
+  const membership = await world.nextMembership();
+  membership.succeed();
+  const catchUp = await world.nextFetch("agent-g");
+  catchUp.respond({ hasNewer: false });
+
+  await vi.waitFor(() => expect(world.released).toContain("agent-a"));
+  expect(world.released).not.toContain("agent-f");
+});
+
+test("a deferred release candidate survives a delivery-mode round trip", async () => {
+  const world = new TimelineWorld();
+  world.blockedReleases.add("agent-a");
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    (await world.nextMembership()).succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  // The sixth visible agent pushed the first one out of the five-agent hot set. Its release was
+  // attempted and refused, so it is a deferred candidate with its transcript still loaded.
+  expect(world.releaseAttempts).toEqual(["agent-a"]);
+  expect(world.released).toEqual([]);
+
+  // The transition out releases nothing — legacy delivery cannot sweep — and the transition back
+  // releases nothing either, because the entered policy's membership is not confirmed yet.
+  // Neither may consume the candidate, or `agent-a` would keep its transcript for the session.
+  world.sync.setDeliveryMode("legacy");
+  world.sync.setDeliveryMode("selective");
+  expect(world.releaseAttempts).toEqual(["agent-a"]);
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(false);
+
+  world.blockedReleases.delete("agent-a");
+  (await world.nextMembership()).succeed();
+  // The retained candidate is what makes the acknowledgement sweep retry the refused release;
+  // the other four hot agents the transition dropped are released by the same sweep.
+  await vi.waitFor(() => expect(world.released).toContain("agent-a"));
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+});
+
+test("a released fence outlives a legacy interlude and is cleared only by wanting the agent again", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    (await world.nextMembership()).succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  expect(world.released).toEqual(["agent-a"]);
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+
+  // Legacy delivery never reports a stale transcript, so the fence is unobservable while the
+  // interlude runs — but the bookkeeping behind it must survive, because that interlude is
+  // exactly when legacy hosts push frames for agents released under selective delivery.
+  world.sync.setDeliveryMode("legacy");
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(false);
+
+  world.sync.setDeliveryMode("selective");
+  const membership = await world.nextMembership();
+  // The transition publishes the visible set it knows, and the sixth agent is still visible.
+  expect(membership.agentIds).toEqual(["agent-f"]);
+  // Still fenced: the interlude neither retired the release nor re-wanted the agent.
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+  expect(world.cacheRequests.filter((agentId) => agentId === "agent-a")).toHaveLength(1);
+
+  // Wanting the agent again is what reloads the transcript, and the reload is what retires the
+  // fence — never the mode change by itself.
+  membership.succeed();
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  const reacquire = await world.nextMembership();
+  reacquire.succeed();
+  const reload = await world.nextFetch("agent-a");
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(false);
+  expect(world.cacheRequests.filter((agentId) => agentId === "agent-a")).toHaveLength(2);
+  // Re-wanting is not a new eviction: the released transcript was never re-registered as a
+  // candidate. The other four hot agents the transition dropped are evicted by this sweep, so
+  // only a per-agent check is meaningful here.
+  expect(world.releaseAttempts.filter((agentId) => agentId === "agent-a")).toEqual(["agent-a"]);
+  reload.respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
+});
+
+test("a legacy delivery that repopulated a released transcript is released again", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    (await world.nextMembership()).succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  expect(world.released).toEqual(["agent-a"]);
+
+  // Only legacy delivery reports the transcript as unreleased, so the owner's admission points can
+  // admit frames for it while the fence stands.
+  world.sync.setDeliveryMode("legacy");
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(false);
+
+  // Without this the repopulated arrays are unknown to the sweep: `agent-a` would have no loaded
+  // cache and no candidate left, so it could never be evicted again.
+  world.sync.noteTranscriptUpdate("agent-a");
+
+  world.sync.setDeliveryMode("selective");
+  (await world.nextMembership()).succeed();
+  // The fence is intact, and the legacy repopulation is eligible for eviction again. `agent-a` is
+  // released a second time, alongside the four hidden hot agents the transition dropped.
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+  await vi.waitFor(() =>
+    expect(world.releaseAttempts.filter((agentId) => agentId === "agent-a")).toHaveLength(2),
+  );
+  expect(world.released.filter((agentId) => agentId === "agent-a")).toHaveLength(2);
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+});
+
+test("backgrounding and an unchanged publication both keep a released fence", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  for (const agentId of RELEASE_WORKLOAD_AGENT_IDS) {
+    world.sync.replaceVisibleAgentIds("workspace", [agentId]);
+    (await world.nextMembership()).succeed();
+    const catchUp = await world.nextFetch(agentId);
+    catchUp.respond({ hasNewer: false });
+  }
+  // `agent-f` is the sixth agent and stays visible, so the released agent is never re-wanted.
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+
+  world.sync.setActive(false);
+  world.sync.setActive(true);
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+
+  // An unchanged publication and a repeated non-empty one must both keep the fence: wanting the
+  // released agent again is what would retire it.
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-f"]);
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-f"]);
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(true);
+
+  world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
+  (await world.nextMembership()).succeed();
+  expect(world.sync.isTranscriptReleased("agent-a")).toBe(false);
+  const reload = await world.nextFetch("agent-a");
+  expect(world.cacheRequests.filter((agentId) => agentId === "agent-a")).toHaveLength(2);
+  reload.respond({ hasNewer: false });
+});
+
+test("a delivery-mode transition that drops hot agents keeps them releasable", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  const hot = ["agent-a", "agent-b", "agent-c", "agent-d", "agent-f"];
+  world.sync.replaceVisibleAgentIds("workspace", hot);
+  (await world.nextMembership()).succeed();
+  const initial = await Promise.all(hot.map((agentId) => world.nextFetch(agentId)));
+  for (const fetch of initial) fetch.respond({ hasNewer: false });
+  await vi.waitFor(() => {
+    for (const agentId of hot) expect(world.sync.getAgentTimelineStatus(agentId)).toBe("ready");
+  });
+  expect(world.releaseAttempts).toEqual([]);
+
+  // Narrowing the panes leaves `agent-f` desired as the most recently hidden agent, so it is
+  // still hot and its transcript stays loaded.
+  world.sync.replaceVisibleAgentIds("workspace", hot.slice(0, 4));
+  expect(world.sync.getAgentTimelineStatus("agent-f")).toBe("ready");
+  expect(world.releaseAttempts).toEqual([]);
+
+  // Entering legacy delivery derives desired from the sources alone, so `agent-f` is dropped. The
+  // transition cannot release anything — the entered policy is unconfirmed — but the dropped agent
+  // must stay registered, or the sweep could never evict it.
+  world.sync.setDeliveryMode("legacy");
+  expect(world.releaseAttempts).toEqual([]);
+  world.sync.setDeliveryMode("selective");
+  (await world.nextMembership()).succeed();
+
+  await vi.waitFor(() => expect(world.released).toEqual(["agent-f"]));
+  expect(world.sync.isTranscriptReleased("agent-f")).toBe(true);
 });

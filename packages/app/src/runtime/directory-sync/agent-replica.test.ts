@@ -3,12 +3,102 @@ import type { DaemonClient, FetchAgentsEntry } from "@getpaseo/client/internal/d
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import { selectAgentTurnPresentation, useSessionStore } from "@/stores/session-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
+import { createUserMessage, type TodoEntry } from "@/types/stream";
 import type { DirectoryReplicaMutation } from "@/runtime/replica-cache";
 import { AgentDirectoryReplica } from "./agent-replica";
 
-function payload(title: string): AgentSnapshotPayload {
+function streamMessage(id: string) {
   return {
-    id: "agent",
+    kind: "user_message" as const,
+    id,
+    text: id,
+    timestamp: new Date("2026-07-31T10:00:00.000Z"),
+  };
+}
+
+function task(id: string): TodoEntry {
+  return { id, text: id, status: "pending", completed: false };
+}
+
+function seedTransientState(serverId: string, agentId: string): void {
+  const store = useSessionStore.getState();
+  store.applyAgentTimelineResponseState(serverId, agentId, {
+    items: [streamMessage(`${agentId}-tail`)],
+    head: [],
+    range: { epoch: "epoch", startSeq: 1, endSeq: 2 },
+    older: "available",
+    newer: true,
+    synchronized: true,
+    acknowledgedClientMessageIds: [],
+  });
+  store.setAgentStreamState(serverId, agentId, {
+    head: [streamMessage(`${agentId}-head`)],
+    taskSnapshot: [task(`${agentId}-task`)],
+  });
+  store.setAgentTimelineOlderFetchInFlight(serverId, (prev) => {
+    const next = new Map(prev);
+    next.set(agentId, true);
+    return next;
+  });
+  store.beginAgentMessageSubmission(
+    serverId,
+    agentId,
+    createUserMessage({
+      clientMessageId: `${agentId}-submission`,
+      text: "pending",
+      timestamp: new Date("2026-07-31T10:00:00.000Z"),
+    }),
+  );
+  store.setPendingPermissions(serverId, (prev) => {
+    const next = new Map(prev);
+    const key = `${agentId}-permission`;
+    next.set(key, { key, agentId, request: null as never });
+    return next;
+  });
+  store.setInitializingAgents(serverId, (prev) => {
+    const next = new Map(prev);
+    next.set(agentId, true);
+    return next;
+  });
+  store.setQueuedMessages(serverId, (prev) => {
+    const next = new Map(prev);
+    next.set(agentId, [{ id: `${agentId}-queued`, text: "next", attachments: [] }]);
+    return next;
+  });
+  store.setAgentLastActivityBatch((prev) => {
+    const next = new Map(prev);
+    next.set(agentId, new Date("2026-07-31T10:00:00.000Z"));
+    return next;
+  });
+}
+
+function transientPresence(serverId: string, agentId: string) {
+  const state = useSessionStore.getState();
+  const session = state.sessions[serverId];
+  return {
+    agent: session?.agents.has(agentId),
+    streamHead: session?.agentStreamHead.has(agentId),
+    streamTail: session?.agentStreamTail.has(agentId),
+    tasks: session?.agentTasks.has(agentId),
+    submissions: session?.messageSubmissions.has(agentId),
+    cursor: session?.agentTimelineCursor.has(agentId),
+    hasOlder: session?.agentTimelineHasOlder.has(agentId),
+    hasNewer: session?.agentTimelineHasNewer.has(agentId),
+    olderFetchInFlight: session?.agentTimelineOlderFetchInFlight.has(agentId),
+    historySyncGeneration: session?.agentHistorySyncGeneration.has(agentId),
+    authoritativeHistoryApplied: session?.agentAuthoritativeHistoryApplied.has(agentId),
+    initializing: session?.initializingAgents.has(agentId),
+    queued: session?.queuedMessages.has(agentId),
+    permissions: Array.from(session?.pendingPermissions.values() ?? []).some(
+      (pending) => pending.agentId === agentId,
+    ),
+    lastActivity: state.agentLastActivity.has(agentId),
+  };
+}
+
+function payload(title: string, agentId = "agent"): AgentSnapshotPayload {
+  return {
+    id: agentId,
     provider: "codex",
     cwd: "/repo",
     model: null,
@@ -281,6 +371,79 @@ describe("AgentDirectoryReplica", () => {
       turnId: "turn-1",
       startedAt: new Date("2026-07-17T00:01:00.000Z"),
       cancellationRequestId: null,
+    });
+    store.clearSession(serverId);
+  });
+
+  it("drops every per-agent transient map for the removed agent only", () => {
+    const serverId = "agent-replica-transient-removal";
+    const store = useSessionStore.getState();
+    store.initializeSession(serverId, null as unknown as DaemonClient);
+    const replica = new AgentDirectoryReplica(
+      serverId,
+      () => undefined,
+      () => undefined,
+    );
+    replica.commitSnapshot(
+      [entry(payload("removed", "agent-removed")), entry(payload("kept", "agent-kept"))],
+      [],
+    );
+    seedTransientState(serverId, "agent-removed");
+    seedTransientState(serverId, "agent-kept");
+
+    expect(transientPresence(serverId, "agent-removed")).toEqual({
+      agent: true,
+      streamHead: true,
+      streamTail: true,
+      tasks: true,
+      submissions: true,
+      cursor: true,
+      hasOlder: true,
+      hasNewer: true,
+      olderFetchInFlight: true,
+      historySyncGeneration: true,
+      authoritativeHistoryApplied: true,
+      initializing: true,
+      queued: true,
+      permissions: true,
+      lastActivity: true,
+    });
+
+    replica.remove("agent-removed");
+
+    expect(transientPresence(serverId, "agent-removed")).toEqual({
+      agent: false,
+      streamHead: false,
+      streamTail: false,
+      tasks: false,
+      submissions: false,
+      cursor: false,
+      hasOlder: false,
+      hasNewer: false,
+      olderFetchInFlight: false,
+      historySyncGeneration: false,
+      authoritativeHistoryApplied: false,
+      initializing: false,
+      queued: false,
+      permissions: false,
+      lastActivity: false,
+    });
+    expect(transientPresence(serverId, "agent-kept")).toEqual({
+      agent: true,
+      streamHead: true,
+      streamTail: true,
+      tasks: true,
+      submissions: true,
+      cursor: true,
+      hasOlder: true,
+      hasNewer: true,
+      olderFetchInFlight: true,
+      historySyncGeneration: true,
+      authoritativeHistoryApplied: true,
+      initializing: true,
+      queued: true,
+      permissions: true,
+      lastActivity: true,
     });
     store.clearSession(serverId);
   });

@@ -35,7 +35,10 @@ import {
   type TerminalVirtualKeyboardControl,
 } from "@/terminal/runtime/terminal-virtual-keyboard";
 import { pasteTerminalClipboard } from "@/terminal/runtime/terminal-paste";
-import { getWorkspaceTerminalSession } from "@/terminal/runtime/workspace-terminal-session";
+import {
+  buildWorkspaceTerminalSessionKey,
+  getWorkspaceTerminalSession,
+} from "@/terminal/runtime/workspace-terminal-session";
 import {
   EMPTY_FOCUS_CLAIM_STATE,
   canRequestFocusClaim,
@@ -111,10 +114,6 @@ type PendingTerminalInput =
       type: "key";
       input: TerminalKeyInput;
     };
-
-function terminalScopeKey(input: { serverId: string; cwd: string }): string {
-  return `${input.serverId}:${input.cwd}`;
-}
 
 interface ModifierButtonProps {
   modifier: keyof ModifierState;
@@ -245,7 +244,10 @@ export function TerminalPane({
   );
   const setFocusedTerminalId = useSessionStore((state) => state.setFocusedTerminalId);
 
-  const scopeKey = useMemo(() => terminalScopeKey({ serverId, cwd }), [serverId, cwd]);
+  const scopeKey = useMemo(
+    () => buildWorkspaceTerminalSessionKey({ serverId, cwd }),
+    [serverId, cwd],
+  );
   const terminalStreamKey = useMemo(() => `${scopeKey}:${terminalId}`, [scopeKey, terminalId]);
   // Keep the latest measured size for whichever client currently owns the pane,
   // but only dedupe resizes that this specific client has already pushed.

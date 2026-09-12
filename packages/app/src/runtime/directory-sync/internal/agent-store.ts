@@ -152,23 +152,7 @@ export class AgentStoreProjection {
     clearArchiveAgentPending({ queryClient, serverId: this.serverId, agentId });
     store.setAgents(this.serverId, removeKey);
     store.setAgentDetails(this.serverId, removeKey);
-    store.setQueuedMessages(this.serverId, removeKey);
-    store.setAgentTimelineCursor(this.serverId, removeKey);
-    store.setInitializingAgents(this.serverId, removeKey);
-    store.setPendingPermissions(this.serverId, (current) => {
-      const next = new Map(current);
-      for (const [key, pending] of next) if (pending.agentId === agentId) next.delete(key);
-      return next.size === current.size ? current : next;
-    });
-    store.setAgentAuthoritativeHistoryApplied(this.serverId, agentId, false);
-    store.setAgentStreamTail(this.serverId, removeKey);
-    store.clearAgentStreamHead(this.serverId, agentId);
-    useSessionStore.setState((state) => {
-      if (!state.agentLastActivity.has(agentId)) return state;
-      const agentLastActivity = new Map(state.agentLastActivity);
-      agentLastActivity.delete(agentId);
-      return { ...state, agentLastActivity };
-    });
+    store.removeAgentTransientState(this.serverId, agentId);
     useDraftStore.getState().clearDraftInput({
       draftKey: buildDraftStoreKey({ serverId: this.serverId, agentId }),
     });

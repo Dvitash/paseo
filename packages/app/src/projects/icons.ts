@@ -5,6 +5,7 @@ import type { ProjectIcon } from "@getpaseo/protocol/messages";
 import { useHostFeatureAvailabilityMap } from "@/runtime/host-features";
 import { projectIconCache } from "@/projects/icon-cache";
 import type { ProjectIconTarget } from "@/projects/icon-target";
+import { stableIconData } from "@/projects/stable-icon-data";
 import {
   getHostRuntimeStore,
   isHostRuntimeConnected,
@@ -35,12 +36,11 @@ function iconDataUri(icon: ProjectIcon | null): string | null {
   return `data:${icon.mimeType};base64,${icon.data}`;
 }
 
-function useStableIconData(data: (string | null)[], signature: string): readonly (string | null)[] {
-  const stableRef = useRef<{ signature: string; data: (string | null)[] } | null>(null);
-  if (stableRef.current?.signature !== signature) {
-    stableRef.current = { signature, data };
-  }
-  return stableRef.current.data;
+function useStableIconData(data: readonly (string | null)[]): readonly (string | null)[] {
+  const stableRef = useRef<readonly (string | null)[] | null>(null);
+  const stable = stableRef.current === null ? data : stableIconData(stableRef.current, data);
+  stableRef.current = stable;
+  return stable;
 }
 
 export function useProjectIcon({ serverId, cwd }: { serverId: string; cwd: string }) {
@@ -103,11 +103,7 @@ export function useProjectIcons(input: {
     }),
   });
 
-  const signature = queries.map((query) => query.data ?? "").join("\u0000");
-  const data = useStableIconData(
-    queries.map((query) => query.data ?? null),
-    signature,
-  );
+  const data = useStableIconData(queries.map((query) => query.data ?? null));
 
   return useMemo(() => {
     const byTarget = new Map<string, string | null>();

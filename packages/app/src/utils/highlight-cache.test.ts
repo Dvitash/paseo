@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { HighlightToken } from "@getpaseo/highlight";
 import {
+  clearHighlightCache,
   extensionFromPath,
   highlightToKeyedLines,
   MAX_HIGHLIGHT_CHARS,
@@ -49,6 +51,108 @@ describe("tokenizeToLines", () => {
     const first = tokenizeToLines("const cached = true;", "ts");
     const second = tokenizeToLines("const cached = true;", "ts");
     expect(first).toBe(second);
+  });
+});
+
+// A single long line keeps each entry's cost dominated by its key and token
+// text, so a few documents reach the 4 MiB budget without nearing
+// MAX_HIGHLIGHT_CHARS.
+function largeSource(marker: string, chars: number): string {
+  return `const ${marker} = "${"x".repeat(chars)}";`;
+}
+
+// Unknown extensions take the per-line fallback (one token per line), so an
+// entry's estimated bytes grow with line count independently of any grammar:
+// 50k one-character lines estimate well past 4 MiB while the document itself
+// stays under MAX_HIGHLIGHT_CHARS.
+function overBudgetLines(lineCount: number): string {
+  return Array.from({ length: lineCount }, (_, index) => String(index % 10)).join("\n");
+}
+
+function textOf(lines: HighlightToken[][] | null): string {
+  return (lines ?? []).map((tokens) => tokens.map((token) => token.text).join("")).join("\n");
+}
+
+describe("tokenizeToLines byte budget", () => {
+  it("evicts older documents by retained bytes well before the entry cap", () => {
+    clearHighlightCache();
+    const documents = Array.from({ length: 40 }, (_, index) => largeSource(`bulk${index}`, 60_000));
+    const firstPass = documents.map((document) => tokenizeToLines(document, "ts"));
+    const newest = documents.length - 1;
+
+    // 40 documents of this size are past 4 MiB but nowhere near the 200-entry
+    // cap, so eviction can only have come from the byte budget.
+    expect(tokenizeToLines(documents[0], "ts")).not.toBe(firstPass[0]);
+    expect(tokenizeToLines(documents[newest], "ts")).toBe(firstPass[newest]);
+
+    // A small document inserted after the burst is still served by identity.
+    const small = "const newest = 1;";
+    const cachedSmall = tokenizeToLines(small, "ts");
+    expect(cachedSmall).not.toBeNull();
+    expect(tokenizeToLines(small, "ts")).toBe(cachedSmall);
+  });
+
+  it("keeps a hot document cached while new documents churn around it", () => {
+    clearHighlightCache();
+    const hot = largeSource("hot", 60_000);
+    const hotLines = tokenizeToLines(hot, "ts");
+
+    for (let index = 0; index < 30; index += 1) {
+      tokenizeToLines(largeSource(`churn${index}`, 60_000), "ts");
+      expect(tokenizeToLines(hot, "ts")).toBe(hotLines);
+    }
+  });
+
+  it("returns correct highlighting for an over-budget document without flushing the hot cache", () => {
+    clearHighlightCache();
+    const hot = "const hot = 1;";
+    const hotLines = tokenizeToLines(hot, "ts");
+
+    // One-token-per-line source of this length stays under MAX_HIGHLIGHT_CHARS
+    // but estimates ~6 MiB of tokens, so it cannot be retained — while the
+    // result must still be complete.
+    const oversized = overBudgetLines(50_000);
+    expect(oversized.length).toBeLessThan(MAX_HIGHLIGHT_CHARS);
+    const oversizedLines = tokenizeToLines(oversized, "unknownext");
+    expect(oversizedLines).toHaveLength(50_000);
+    expect(oversizedLines?.[0]).toEqual([{ text: "0", style: null }]);
+    expect(oversizedLines?.[49_999]).toEqual([{ text: "9", style: null }]);
+
+    expect(tokenizeToLines(oversized, "unknownext")).not.toBe(oversizedLines);
+    expect(tokenizeToLines(hot, "ts")).toBe(hotLines);
+  });
+
+  it("never aliases distinct documents that share a prefix", () => {
+    clearHighlightCache();
+    const shared = "const value = 1;".repeat(1_000);
+    const first = `${shared}\nconst tail = 1;`;
+    const second = `${shared}\nconst tail = 2;`;
+
+    const firstLines = tokenizeToLines(first, "ts");
+    const secondLines = tokenizeToLines(second, "ts");
+    expect(firstLines).not.toBe(secondLines);
+    expect(tokenizeToLines(first, "ts")).toBe(firstLines);
+    expect(tokenizeToLines(second, "ts")).toBe(secondLines);
+
+    expect(textOf(firstLines)).toBe(first);
+    expect(textOf(secondLines)).toBe(second);
+  });
+
+  it("releases the retained-byte budget on clear", () => {
+    clearHighlightCache();
+    for (let index = 0; index < 40; index += 1) {
+      tokenizeToLines(largeSource(`before${index}`, 60_000), "ts");
+    }
+
+    clearHighlightCache();
+
+    // Three documents fit the budget only if clear reset the accounting; a
+    // stale total would evict them immediately.
+    const documents = [0, 1, 2].map((index) => largeSource(`after${index}`, 60_000));
+    const lines = documents.map((document) => tokenizeToLines(document, "ts"));
+    documents.forEach((document, index) => {
+      expect(tokenizeToLines(document, "ts")).toBe(lines[index]);
+    });
   });
 });
 

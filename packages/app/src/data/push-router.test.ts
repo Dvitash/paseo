@@ -1,11 +1,16 @@
-import { QueryClient, QueryObserver, skipToken } from "@tanstack/react-query";
+import { QueryClient, QueryObserver, skipToken, type QueryKey } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import type { MutableDaemonConfig, SessionOutboundMessage } from "@getpaseo/protocol/messages";
+import type {
+  MutableDaemonConfig,
+  ParsedDiffFile,
+  SessionOutboundMessage,
+} from "@getpaseo/protocol/messages";
 import { checkoutDiffQueryKey } from "@/git/query-keys";
 import { buildTerminalsQueryKey } from "@/screens/workspace/terminals/state";
 import { daemonConfigQueryKey } from "@/data/daemon-config";
 import { daemonPairingOfferQueryKey } from "@/data/daemon-pairing";
 import { providersSnapshotQueryKey } from "@/data/providers-snapshot";
+import { replicaQueryOptions, REPLICA_QUERY_GC_TIME_MS } from "@/data/query";
 import {
   checkoutDiffPushRoute,
   invalidateServerDataQueriesAfterReconnect,
@@ -33,6 +38,17 @@ type RouterMessage =
 type RouterMessageType = RouterMessage["type"];
 type RouterHandler = (message: RouterMessage) => void;
 type RouterClient = Parameters<typeof mountServerDataPushRouter>[0]["client"];
+type CheckoutDiffResponsePayload = SubscribeCheckoutDiffResponseMessage["payload"];
+type CheckoutDiffCachePayload = Omit<CheckoutDiffResponsePayload, "subscriptionId">;
+
+const remountedDiffFile: ParsedDiffFile = {
+  path: "remounted.ts",
+  isNew: false,
+  isDeleted: false,
+  additions: 1,
+  deletions: 0,
+  hunks: [],
+};
 
 const daemonConfig: MutableDaemonConfig = {
   relay: { enabled: false },
@@ -250,6 +266,99 @@ describe("server data push router", () => {
     unsubscribeObserver();
 
     expect(fake.unsubscribeCheckoutDiffCalls).toEqual([subscriptionId]);
+
+    unmount();
+  });
+
+  it("drops a collected replica subscription and resubscribes on remount with current push data", () => {
+    const queryClient = new QueryClient();
+    const fake = createFakeClient();
+    const serverId = "server-1";
+    const cwd = "/repo";
+    const queryKey: QueryKey = checkoutDiffQueryKey(serverId, cwd, "base", "main", true);
+    const subscriptionId = `checkoutDiff:${JSON.stringify(queryKey)}`;
+    const options = replicaQueryOptions<
+      CheckoutDiffCachePayload,
+      Error,
+      CheckoutDiffCachePayload,
+      QueryKey
+    >({
+      queryKey,
+      pushEvent: "checkout_diff_update",
+      meta: checkoutDiffPushRoute({
+        enabled: true,
+        serverId,
+        subscriptionId,
+        cwd,
+        compare: { mode: "base", baseRef: "main", ignoreWhitespace: true },
+      }),
+    });
+    const observer = new QueryObserver<
+      CheckoutDiffCachePayload,
+      Error,
+      CheckoutDiffCachePayload,
+      CheckoutDiffCachePayload
+    >(queryClient, options);
+    const unsubscribeObserver = observer.subscribe(() => undefined);
+    const unmount = mountServerDataPushRouter({ client: fake.client, queryClient, serverId });
+
+    expect(observer.getCurrentQuery().gcTime).toBe(REPLICA_QUERY_GC_TIME_MS);
+    expect(fake.subscribeCheckoutDiffCalls).toEqual([
+      {
+        cwd,
+        compare: { mode: "base", baseRef: "main", ignoreWhitespace: true },
+        subscriptionId,
+      },
+    ]);
+
+    unsubscribeObserver();
+    expect(fake.unsubscribeCheckoutDiffCalls).toEqual([subscriptionId]);
+
+    // Retained for the minute, so a push still lands on the unobserved replica.
+    fake.emit({
+      type: "checkout_diff_update",
+      payload: { subscriptionId, cwd, files: [remountedDiffFile], error: null },
+    });
+
+    expect(queryClient.getQueryData(queryKey)).toEqual({
+      cwd,
+      files: [remountedDiffFile],
+      error: null,
+      requestId: `subscription:${subscriptionId}`,
+    });
+
+    // Collection evicts the replica; the router has no query left to route into.
+    queryClient.removeQueries({ queryKey, exact: true });
+    fake.emit({
+      type: "checkout_diff_update",
+      payload: { subscriptionId, cwd, files: [], error: null, diffTooLarge: true },
+    });
+    expect(queryClient.getQueryData(queryKey)).toBeUndefined();
+
+    const remountedObserver = new QueryObserver<
+      CheckoutDiffCachePayload,
+      Error,
+      CheckoutDiffCachePayload,
+      CheckoutDiffCachePayload
+    >(queryClient, options);
+    const unsubscribeRemountedObserver = remountedObserver.subscribe(() => undefined);
+
+    expect(fake.subscribeCheckoutDiffCalls).toHaveLength(2);
+
+    fake.emit({
+      type: "checkout_diff_update",
+      payload: { subscriptionId, cwd, files: [remountedDiffFile], error: null },
+    });
+
+    expect(queryClient.getQueryData(queryKey)).toEqual({
+      cwd,
+      files: [remountedDiffFile],
+      error: null,
+      requestId: `subscription:${subscriptionId}`,
+    });
+
+    unsubscribeRemountedObserver();
+    expect(fake.unsubscribeCheckoutDiffCalls).toEqual([subscriptionId, subscriptionId]);
 
     unmount();
   });

@@ -62,6 +62,9 @@ function ReadonlyCodeMirror({
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const initial = useRef({ content, filename, presentation, theme });
+  // This view owns its document outright, so the content last handed to the
+  // editor is the authoritative comparison for external updates.
+  const appliedContent = useRef(initial.current.content);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -81,6 +84,7 @@ function ReadonlyCodeMirror({
       }),
     });
     viewRef.current = view;
+    appliedContent.current = values.content;
     return () => {
       view.destroy();
       viewRef.current = null;
@@ -89,7 +93,8 @@ function ReadonlyCodeMirror({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.state.doc.toString() === content) return;
+    if (!view || appliedContent.current === content) return;
+    appliedContent.current = content;
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
   }, [content]);
 

@@ -58,6 +58,7 @@ import type {
 import { useSessionStore } from "@/stores/session-store";
 import { FileActionsContextMenuContent } from "@/components/file-actions-menu";
 import { ContextMenu, ContextMenuTrigger, useContextMenu } from "@/components/ui/context-menu";
+import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useFileDownload } from "@/hooks/use-file-download";
 import { useFileExplorerActions } from "@/hooks/use-file-explorer-actions";
 import { useIsLocalDaemon } from "@/hooks/use-is-local-daemon";
@@ -415,6 +416,7 @@ export function FileExplorerPane({
 }: FileExplorerPaneProps) {
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
+  const isPanelActive = useRetainedPanelActive();
 
   const normalizedWorkspaceRoot = useMemo(() => workspaceRoot.trim(), [workspaceRoot]);
   const workspaceStateKey = useMemo(
@@ -502,6 +504,9 @@ export function FileExplorerPane({
   }, [workspaceStateKey]);
 
   useEffect(() => {
+    if (!isPanelActive) {
+      return;
+    }
     void initializeExplorer({
       hasWorkspaceScope,
       hasInitializedRef,
@@ -514,6 +519,7 @@ export function FileExplorerPane({
   }, [
     expandedPaths,
     hasWorkspaceScope,
+    isPanelActive,
     requestDirectoryListing,
     setExpandedPathsForWorkspace,
     showHiddenFiles,

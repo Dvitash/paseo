@@ -1,5 +1,11 @@
 import { createPreviewAttachmentId } from "@/attachments/utils";
 
+export interface AssistantImageAcquisitionBudget<T> {
+  /** Estimated retained bytes for inactive entries. Not a heap measurement. */
+  maxWeight: number;
+  getWeight(value: T): number;
+}
+
 export interface AssistantImageAcquisitionCache<T> {
   acquire(key: string, locate: () => Promise<T>): Promise<T>;
   acquireRetained(
@@ -47,30 +53,43 @@ export function createAssistantImageFileAcquisitionKey(input: {
 
 export function createAssistantImageAcquisitionCache<T>(input: {
   capacity: number;
+  budget?: AssistantImageAcquisitionBudget<T>;
   onRetain?: (value: T) => () => void;
 }): AssistantImageAcquisitionCache<T> {
   if (!Number.isInteger(input.capacity) || input.capacity < 1) {
     throw new Error("Assistant image acquisition cache capacity must be a positive integer.");
   }
+  const budget = input.budget;
+  if (budget !== undefined && !(Number.isFinite(budget.maxWeight) && budget.maxWeight > 0)) {
+    throw new Error(
+      "Assistant image acquisition cache budget must be a positive, finite maximum weight.",
+    );
+  }
   interface CacheEntry {
     pending: Promise<T>;
     resolved: boolean;
+    weight: number;
     value?: T;
     release: (() => void) | null;
     activeConsumers: number;
   }
+  const maxWeight = budget?.maxWeight ?? Infinity;
   const entries = new Map<string, CacheEntry>();
+  let totalWeight = 0;
 
   const evict = (key: string, entry: CacheEntry) => {
     if (entries.get(key) === entry) {
       entries.delete(key);
+      totalWeight -= entry.weight;
+      entry.weight = 0;
     }
     entry.release?.();
     entry.release = null;
   };
 
-  const enforceCapacity = () => {
-    while (entries.size > input.capacity) {
+  const enforceLimits = () => {
+    while (true) {
+      if (entries.size <= input.capacity && totalWeight <= maxWeight) return;
       let evicted = false;
       for (const [key, entry] of entries) {
         if (entry.activeConsumers > 0) {
@@ -100,24 +119,36 @@ export function createAssistantImageAcquisitionCache<T>(input: {
     const entry: CacheEntry = {
       pending,
       resolved: false,
+      weight: 0,
       release: null,
       activeConsumers: retain ? 1 : 0,
     };
     entries.set(key, entry);
-    enforceCapacity();
+    enforceLimits();
     void (async () => {
+      let release: (() => void) | null = null;
       try {
         const value = await pending;
-        const release = input.onRetain?.(value) ?? null;
-        if (entries.get(key) === entry) {
-          entry.value = value;
-          entry.resolved = true;
-          entry.release = release;
-        } else {
+        const weight = budget === undefined ? 0 : budget.getWeight(value);
+        release = input.onRetain?.(value) ?? null;
+        const admissible = Number.isFinite(weight) && weight >= 0 && entries.get(key) === entry;
+        if (!admissible) {
+          // A weight that cannot be charged must never enter the cache, and its
+          // retained resources are released exactly once below.
+          evict(key, entry);
           release?.();
+          return;
         }
+        entry.value = value;
+        entry.resolved = true;
+        entry.weight = weight;
+        entry.release = release;
+        release = null;
+        totalWeight += weight;
+        enforceLimits();
       } catch {
         evict(key, entry);
+        release?.();
       }
     })();
     return entry;
@@ -139,7 +170,7 @@ export function createAssistantImageAcquisitionCache<T>(input: {
           }
           released = true;
           entry.activeConsumers = Math.max(0, entry.activeConsumers - 1);
-          enforceCapacity();
+          enforceLimits();
         },
       };
     },

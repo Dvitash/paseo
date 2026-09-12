@@ -61,7 +61,12 @@ export function useFetchQueries<TData>(
   return useQueries({ queries: inputs.map((input) => fetchQueryOptions(input)) });
 }
 
-function replicaQueryOptions<
+// A released replica holds whole diffs and terminal lists. Its observers are the only reason to
+// keep it, so an unobserved replica is retained for one minute of panel churn and then dropped;
+// remounting fetches current state instead of the collected payload.
+export const REPLICA_QUERY_GC_TIME_MS = 60_000;
+
+export function replicaQueryOptions<
   TQueryFnData,
   TError = Error,
   TData = TQueryFnData,
@@ -72,7 +77,7 @@ function replicaQueryOptions<
   const { pushEvent, meta, ...options } = input;
   return {
     ...options,
-    gcTime: Infinity,
+    gcTime: REPLICA_QUERY_GC_TIME_MS,
     meta: {
       ...meta,
       serverDataPolicy: {

@@ -103,7 +103,11 @@ import {
   useWorkspaceSetupStore,
 } from "@/stores/workspace-setup-store";
 import { useWorkspace } from "@/stores/session-store-hooks";
-import { useWorkspaceTerminalSessionRetention } from "@/terminal/hooks/use-workspace-terminal-session-retention";
+import {
+  useWorkspaceTerminalSessionRetention,
+  useWorkspaceTerminalSnapshotPruning,
+} from "@/terminal/hooks/use-workspace-terminal-session-retention";
+import { buildWorkspaceTerminalSessionKey } from "@/terminal/runtime/workspace-terminal-session";
 import type { CheckoutStatusPayload } from "@/git/use-status-query";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { useArchiveAgent } from "@/hooks/use-archive-agent";
@@ -1375,13 +1379,6 @@ function shouldShowWorkspaceScreenHeader(input: {
   return !input.isFocusModeEnabled || input.isMobile;
 }
 
-function buildWorkspaceTerminalScopeKey(serverId: string, workspaceId: string): string | null {
-  if (!serverId || !workspaceId) {
-    return null;
-  }
-  return `${serverId}:${workspaceId}`;
-}
-
 /**
  * A pane the user acted inside owns the tab: it opens there, and an existing tab
  * moves there. No pane means the open has no opinion beyond the focused pane.
@@ -1559,12 +1556,19 @@ function WorkspaceScreenContent({
   const { handleRetryHost, handleManageHost, handleDismissMissingWorkspace } =
     useWorkspaceRouteActions(normalizedServerId);
 
-  const workspaceTerminalScopeKey = useMemo(
-    () => buildWorkspaceTerminalScopeKey(normalizedServerId, normalizedWorkspaceId),
-    [normalizedServerId, normalizedWorkspaceId],
+  const workspaceDirectory = workspaceDescriptor?.workspaceDirectory || null;
+  const workspaceTerminalSessionKey = useMemo(
+    () =>
+      normalizedServerId && workspaceDirectory
+        ? buildWorkspaceTerminalSessionKey({
+            serverId: normalizedServerId,
+            cwd: workspaceDirectory,
+          })
+        : null,
+    [normalizedServerId, workspaceDirectory],
   );
   useWorkspaceTerminalSessionRetention({
-    scopeKey: workspaceTerminalScopeKey,
+    scopeKey: workspaceTerminalSessionKey,
   });
 
   const client = useHostRuntimeClient(normalizedServerId);
@@ -1572,7 +1576,6 @@ function WorkspaceScreenContent({
   const supportsProvidersSnapshot = useSessionStore(
     (state) => state.sessions[normalizedServerId]?.serverInfo?.features?.providersSnapshot === true,
   );
-  const workspaceDirectory = workspaceDescriptor?.workspaceDirectory || null;
   const isMissingWorkspaceDirectory = Boolean(workspaceDescriptor) && !workspaceDirectory;
   const [isImportSheetVisible, setIsImportSheetVisible] = useState(false);
   const canOpenImportSheet = [client, isConnected, workspaceDirectory].every(Boolean);
@@ -1720,6 +1723,18 @@ function WorkspaceScreenContent({
     onTerminalCreateQueued: handleTerminalCreateQueued,
     onTerminalCreateFailed: handleTerminalCreateFailed,
   });
+
+  // A terminal stream exit only reaches a stream this client still has attached,
+  // so a closed or hidden pane would otherwise pin its snapshot forever. The
+  // hydrated list is the same authority the tab reconciler trusts: it stays
+  // non-authoritative until a payload is actually present, so blur, reconnect,
+  // and cold routes never discard retained snapshots.
+  useWorkspaceTerminalSnapshotPruning({
+    scopeKey: workspaceTerminalSessionKey,
+    knownTerminalIds,
+    hasAuthoritativeList: terminalsQuery.data !== undefined,
+  });
+
   const { archiveAgent } = useArchiveAgent();
 
   const { checkoutQuery, isCheckoutStatusLoading } = useWorkspaceCheckoutStatus({

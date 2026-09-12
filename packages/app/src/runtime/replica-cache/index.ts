@@ -66,6 +66,9 @@ export interface CachedTimeline {
   items: StreamItem[];
   range: AgentTimelineCursorState | null;
   hasOlder: boolean;
+  // Live rows that follow `items` in display order. Stream commits pass the store-owned tail and
+  // head by reference; persistence joins them into one bounded window and reads never return it.
+  head?: StreamItem[];
 }
 
 const PERSIST_DELAY_MS = 1_000;
@@ -738,32 +741,97 @@ function isTimelineItemStoredLosslessly(item: StreamItem): boolean {
   }
 }
 
-function serializeTimeline(timeline: CachedTimeline): StoredTimeline | null {
-  const canonicalItems = timeline.items.filter(
-    (item) => item.kind !== "user_message" || !isUnreconciledLocalUserMessage(item),
+/**
+ * Whether an item is both cache-compatible and positioned inside `range`. Persistence uses it to
+ * decide whether retained coverage is real; cold transcript release uses it to decide whether an
+ * item the daemon can re-serve is the only copy, so the two cannot drift.
+ */
+export function isTimelineItemCoveredByRange(
+  item: StreamItem,
+  range: AgentTimelineCursorState,
+): boolean {
+  return (
+    isTimelineItemStoredLosslessly(item) &&
+    item.timelineCursor?.epoch === range.epoch &&
+    item.timelineCursor.seq >= range.startSeq &&
+    item.timelineCursor.seq <= range.endSeq
   );
-  const items = canonicalItems.map(serializeTimelineItem).filter((item) => item !== null);
+}
+
+interface TimelinePersistence {
+  items: StoredTimelineItem[];
+  remaining: number;
+  canonicalCount: number;
+  allItemsCovered: boolean;
+  coversRangeEnd: boolean;
+}
+
+// Commits hand over the live tail and head by reference, so persistence walks them backwards and
+// serializes only the final MAX_TIMELINE_ITEMS rows instead of rebuilding the whole history.
+function accumulateTimelinePersistence(
+  state: TimelinePersistence,
+  items: readonly StreamItem[],
+  range: AgentTimelineCursorState | null,
+): void {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "user_message" && isUnreconciledLocalUserMessage(item)) continue;
+    state.canonicalCount += 1;
+    if (range !== null && state.allItemsCovered && !isTimelineItemCoveredByRange(item, range)) {
+      state.allItemsCovered = false;
+    }
+    if (
+      range !== null &&
+      !state.coversRangeEnd &&
+      item.timelineCursor?.epoch === range.epoch &&
+      item.timelineCursor.seq === range.endSeq
+    ) {
+      state.coversRangeEnd = true;
+    }
+    if (state.remaining > 0) {
+      const stored = serializeTimelineItem(item);
+      if (stored) {
+        state.items.push(stored);
+        state.remaining -= 1;
+      }
+    }
+    const coveragePending =
+      range !== null && state.canonicalCount <= MAX_TIMELINE_ITEMS && state.allItemsCovered;
+    if (state.remaining === 0 && !coveragePending) break;
+  }
+}
+
+function serializeTimeline(timeline: CachedTimeline): StoredTimeline | null {
   const range = timeline.range;
+  const persistence: TimelinePersistence = {
+    items: [],
+    remaining: MAX_TIMELINE_ITEMS,
+    canonicalCount: 0,
+    allItemsCovered: true,
+    coversRangeEnd: false,
+  };
+  if (timeline.head) accumulateTimelinePersistence(persistence, timeline.head, range);
+  accumulateTimelinePersistence(persistence, timeline.items, range);
+  persistence.items.reverse();
   const canPersistCoverage =
     range !== null &&
     range.retainedRanges === undefined &&
-    canonicalItems.length <= MAX_TIMELINE_ITEMS &&
-    items.length === canonicalItems.length &&
-    canonicalItems.every(
-      (item) =>
-        isTimelineItemStoredLosslessly(item) &&
-        item.timelineCursor?.epoch === range.epoch &&
-        item.timelineCursor.seq >= range.startSeq &&
-        item.timelineCursor.seq <= range.endSeq,
-    ) &&
-    canonicalItems.some((item) => item.timelineCursor?.seq === range.endSeq);
+    persistence.canonicalCount <= MAX_TIMELINE_ITEMS &&
+    persistence.allItemsCovered &&
+    persistence.coversRangeEnd;
+  if (range === null || !canPersistCoverage) {
+    return {
+      agentId: timeline.agentId,
+      items: persistence.items,
+      range: null,
+      hasOlder: false,
+    };
+  }
   return {
     agentId: timeline.agentId,
-    items: items.slice(-MAX_TIMELINE_ITEMS),
-    range: canPersistCoverage
-      ? { epoch: range.epoch, startSeq: range.startSeq, endSeq: range.endSeq }
-      : null,
-    hasOlder: canPersistCoverage ? timeline.hasOlder : false,
+    items: persistence.items,
+    range: { epoch: range.epoch, startSeq: range.startSeq, endSeq: range.endSeq },
+    hasOlder: timeline.hasOlder,
   };
 }
 
@@ -1080,6 +1148,8 @@ export class ReplicaCache {
     for (const mutation of mutations) {
       if (mutation.type === "delete") {
         this.queueEntityDelete(serverId, mutation.kind, mutation.id);
+        // A removed agent's transcript must not outlive its directory row in durable storage.
+        if (mutation.kind === "agent") this.queueEntityDelete(serverId, "timeline", mutation.id);
       } else {
         this.queueUpsert({
           serverId,

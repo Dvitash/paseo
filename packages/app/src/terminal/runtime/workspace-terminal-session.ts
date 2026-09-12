@@ -12,6 +12,15 @@ export interface WorkspaceTerminalSession {
   snapshots: WorkspaceTerminalSnapshots;
 }
 
+/**
+ * The workspace terminal panes and the workspace screen that keeps their
+ * snapshots alive must agree on exactly one key. It is the workspace directory,
+ * not the workspace id: a pane only ever receives `serverId` and `cwd`.
+ */
+export function buildWorkspaceTerminalSessionKey(input: { serverId: string; cwd: string }): string {
+  return `${input.serverId}:${input.cwd}`;
+}
+
 interface WorkspaceTerminalSessionRecord {
   snapshotByTerminalId: Map<string, TerminalState>;
   session: WorkspaceTerminalSession;
@@ -61,6 +70,26 @@ export function getWorkspaceTerminalSession(input: { scopeKey: string }): Worksp
     session,
   });
   return session;
+}
+
+/**
+ * Drops snapshots for terminals the workspace no longer lists. `terminalIds` is
+ * `null` while the list is not authoritative (never fetched, query disabled, or
+ * host disconnected): an unknown list is not an empty list. Pruning never
+ * creates a session, so a workspace that holds no snapshots stays absent.
+ */
+export function pruneWorkspaceTerminalSnapshots(input: {
+  scopeKey: string | null;
+  terminalIds: string[] | null;
+}): void {
+  if (!input.scopeKey || input.terminalIds === null) {
+    return;
+  }
+  const record = sessionsByScopeKey.get(input.scopeKey);
+  if (!record) {
+    return;
+  }
+  record.session.snapshots.prune({ terminalIds: input.terminalIds });
 }
 
 export function retainWorkspaceTerminalSession(input: { scopeKey: string }): void {

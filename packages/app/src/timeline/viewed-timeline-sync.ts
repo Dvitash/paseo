@@ -3,16 +3,20 @@ import {
   planTimelineResumeFetch,
   type ProjectedTimelineForwardFetchPlan,
 } from "./timeline-sync-plan";
-import type { CachedTimeline } from "@/runtime/replica-cache";
+import { isTimelineItemCoveredByRange, type CachedTimeline } from "@/runtime/replica-cache";
 import {
   selectAgentTimelineState,
   useSessionStore,
   type AgentTimelineCursorState,
   type AgentTimelineState,
+  type SessionState,
 } from "@/stores/session-store";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
-import { getSendingClientMessageIds } from "@/composer/submission/model";
+import {
+  getActiveMessageSubmissions,
+  getSendingClientMessageIds,
+} from "@/composer/submission/model";
 import {
   getInitDeferred,
   getInitKey,
@@ -94,6 +98,13 @@ export interface TimelineReplica {
   readCursor(agentId: string): { epoch: string; endSeq: number } | undefined;
   readRange(agentId: string): AgentTimelineCursorState | undefined;
   timelineUpdated(agentId: string): void;
+  /**
+   * Forgets the in-memory transcript of an agent the app no longer subscribes to. The durable
+   * snapshot is committed first, so the agent keeps its bounded stored timeline and the store only
+   * loses the copy it can rebuild. Returns false without changing anything when the display is not
+   * safely reconstructible.
+   */
+  release(agentId: string): boolean;
 }
 
 class TimelineReplicaOwner implements TimelineReplica {
@@ -145,13 +156,63 @@ class TimelineReplicaOwner implements TimelineReplica {
     const timeline = selectAgentTimelineState(session, agentId);
     if (timeline.status === "cold") return;
     if (timeline.status === "synced") this.cachedRanges.delete(agentId);
+    // Stream-owned tail and head arrays are immutable snapshots; persistence joins them once, for
+    // the bounded window it writes, instead of copying the visible history on every commit.
+    const head = session?.agentStreamHead.get(agentId);
     this.storage.commitTimeline(this.serverId, agentId, {
       agentId,
-      items: [...timeline.items, ...(session?.agentStreamHead.get(agentId) ?? [])],
+      items: timeline.items,
+      ...(head ? { head } : {}),
       range: timeline.status === "synced" ? timeline.range : null,
       hasOlder: timeline.status === "synced" && timeline.older === "available",
     });
   }
+
+  release(agentId: string): boolean {
+    if (this.preparations.has(agentId)) return false;
+    const session = useSessionStore.getState().sessions[this.serverId];
+    if (!session) return false;
+    if (!isTranscriptReconstructible(session, agentId)) return false;
+    // Commit the exact rows about to be dropped before dropping them: the durable snapshot is the
+    // only remaining copy, and it must describe the display the user last saw.
+    this.timelineUpdated(agentId);
+    if (!useSessionStore.getState().releaseAgentTimelineTranscript(this.serverId, agentId)) {
+      return false;
+    }
+    this.cachedRanges.delete(agentId);
+    return true;
+  }
+}
+
+/**
+ * Whether the store's in-memory display for `agentId` is a transcript the daemon can rebuild:
+ * authoritative coverage exists, every displayed row sits inside that coverage and serializes
+ * losslessly, and no row is local-only presentation the transcript cannot reproduce.
+ *
+ * Streaming is not a disqualifier. A positioned head row is canonical history the daemon still
+ * serves; a cursorless or enriched row is a local artifact it does not. An evicted running agent
+ * whose completion never arrives is exactly the case that must not pin memory forever, provided
+ * nothing it holds is only in memory.
+ */
+function isTranscriptReconstructible(session: SessionState, agentId: string): boolean {
+  const timeline = selectAgentTimelineState(session, agentId);
+  if (timeline.status !== "synced" || !timeline.range) return false;
+  const range = timeline.range;
+  // A retained-range cursor describes discontiguous coverage, which the bounded snapshot cannot
+  // express; releasing would silently shrink what the user can scroll to.
+  if (range.retainedRanges !== undefined) return false;
+  // Unsynced or initializing timelines are still being built, and a pending older page belongs to
+  // the history this release would drop.
+  if (session.initializingAgents.get(agentId) === true) return false;
+  if (session.agentTimelineOlderFetchInFlight.get(agentId) === true) return false;
+  // An unacknowledged submission still owns its local row: the daemon may never confirm it, and a
+  // settled transport error can still roll it back.
+  if (getActiveMessageSubmissions(session.messageSubmissions.get(agentId)).length > 0) return false;
+  const head = session.agentStreamHead.get(agentId) ?? [];
+  for (const item of [...timeline.items, ...head]) {
+    if (!isTimelineItemCoveredByRange(item, range)) return false;
+  }
+  return true;
 }
 
 export function createTimelineReplica(input: {
@@ -320,6 +381,13 @@ export interface ViewedTimelineSyncPorts {
   fetchLatestTail(agentId: string): Promise<TimelinePageResult>;
   reportError(error: unknown): void;
   schedule(task: () => void, delayMs: number): () => void;
+  /**
+   * Attempts to release one inactive agent's in-memory transcript. Returns false while the
+   * transcript is protected — initializing, awaiting an in-flight fetch or cache preparation,
+   * holding local presentation the transcript cannot reproduce, or not covered by an authoritative
+   * range — and the sync model retries at the next settlement.
+   */
+  releaseTranscript(agentId: string): boolean;
 }
 
 export type TimelineDeliveryMode = "legacy" | "selective";
@@ -339,11 +407,27 @@ export interface ViewedTimelineSync extends ViewedTimelineUiBridge {
   setDeliveryMode(mode: TimelineDeliveryMode): void;
   recoverGap(agentId: string, cursor: { epoch: string; endSeq: number }): void;
   dispose(): void;
+  /**
+   * Whether this agent's in-memory transcript was released and the agent has not been wanted
+   * again since. Pages and stream frames issued before that release are stale for it.
+   */
+  isTranscriptReleased(agentId: string): boolean;
+  /**
+   * Records that an accepted delivery repopulated a transcript this sync had released. Legacy
+   * delivery never fences a release, so a frame admitted while a fence stood left resident arrays
+   * that no bookkeeping knew about. The fence is kept; only evictability is restored.
+   */
+  noteTranscriptUpdate(agentId: string): void;
+  /**
+   * Re-attempts release of inactive transcripts. The owner calls it when protected work settles —
+   * an applied response, a committed stream batch — so a deferred release is not pinned forever.
+   */
+  releaseInactiveTranscripts(): void;
 }
 
 export type ViewedTimelineOwnerPorts = Omit<
   ViewedTimelineSyncPorts,
-  "prepare" | "replaceDemandedAgentIds"
+  "prepare" | "replaceDemandedAgentIds" | "releaseTranscript"
 >;
 
 export interface ViewedTimelineOwner extends ViewedTimelineSync {
@@ -364,6 +448,12 @@ export function createViewedTimelineOwner(input: {
     prepare: (agentId) => input.replica.prepare(agentId),
     readCursor: (agentId) => input.replica.readCursor(agentId) ?? input.ports.readCursor(agentId),
     replaceDemandedAgentIds: input.replaceDemandedAgentIds,
+    releaseTranscript: (agentId) => {
+      // Queued deltas belong to the transcript being judged: commit them before the release
+      // decides whether what is displayed is reconstructible, or they would be dropped with it.
+      streamQueue.flushAgent(agentId);
+      return input.replica.release(agentId);
+    },
   });
   const streamQueue = createSessionAgentStreamReducerQueue({
     serverId: input.serverId,
@@ -375,6 +465,7 @@ export function createViewedTimelineOwner(input: {
   return {
     ...sync,
     applyTimelineResponse(payload) {
+      if (sync.isTranscriptReleased(payload.agentId)) return;
       const accepted = applyAuthoritativeTimelineResponse({
         serverId: input.serverId,
         payload,
@@ -382,12 +473,22 @@ export function createViewedTimelineOwner(input: {
         recoverGap: (agentId, cursor) => sync.recoverGap(agentId, cursor),
         drainQueuedAgentMessage: input.drainQueuedAgentMessage,
       });
-      if (accepted) input.replica.timelineUpdated(payload.agentId);
+      if (accepted) {
+        input.replica.timelineUpdated(payload.agentId);
+        // An accepted page is an update to what is displayed, which is exactly what a release
+        // judged; it may have repopulated the released transcript through the legacy hole.
+        sync.noteTranscriptUpdate(payload.agentId);
+      }
+      sync.releaseInactiveTranscripts();
     },
     enqueueStreamEvent(agentId, event) {
+      if (sync.isTranscriptReleased(agentId)) return;
+      // Track admission before buffering: the delivery mode can change before this batch commits.
+      sync.noteTranscriptUpdate(agentId);
       streamQueue.enqueue(agentId, event);
     },
     flushStreamAgent(agentId) {
+      if (sync.isTranscriptReleased(agentId)) return;
       streamQueue.flushAgent(agentId);
     },
     dispose() {
@@ -474,6 +575,18 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
   const manualRetries = new Set<string>();
   const loadedCache = new Set<string>();
   const cacheLoads = new Map<string, Promise<void>>();
+  // Agents that left the requested set and have not been released yet. Releasing needs the
+  // daemon's confirmed membership to exclude the agent, so eviction alone is not enough.
+  const releaseCandidates = new Set<string>();
+  // Transcripts this sync dropped while the agent was outside the selective hot set. A page or
+  // stream frame issued before the release must not rebuild what the daemon still serves on
+  // demand; requiring the agent again clears the fence in `ensureCacheLoaded`.
+  const releasedTranscripts = new Set<string>();
+  // Agents with sync-owned fetches outstanding, counted per agent: a superseding catch-up leaves
+  // the fetch it replaced in flight, so only the last one settling may release the transcript. A
+  // release needs every response already on its way applied to the transcript it belongs to.
+  const inFlightFetches = new Map<string, number>();
+  let releaseSweepRunning = false;
   const listeners = new Set<() => void>();
   let active = true;
   let connected = false;
@@ -550,6 +663,58 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     pendingCatchUps.delete(agentId);
   };
 
+  const isVisibleInAnySource = (agentId: string) => {
+    for (const sourceAgentIds of sources.values()) {
+      if (sourceAgentIds.includes(agentId)) return true;
+    }
+    return false;
+  };
+
+  /**
+   * Drops the in-memory transcript of every agent the daemon's confirmed membership no longer
+   * includes. Only agents this sync prepared are candidates, and only for selective delivery:
+   * legacy hosts keep streaming every agent, so there is nothing to release.
+   *
+   * Protected in-flight work — a fetch or a cache preparation — defers its agent to the next
+   * settlement. There is no per-agent retry timer: every settle point (membership
+   * acknowledgement, fetch, cache load, applied response, foreground) sweeps the same candidates.
+   */
+  const releaseInactiveTranscripts = () => {
+    if (disposed || !connected || !active || deliveryMode !== "selective") return;
+    if (releaseSweepRunning || releaseCandidates.size === 0) return;
+    releaseSweepRunning = true;
+    try {
+      // Snapshot: `releaseTranscript` runs synchronously and its callers can republish
+      // membership, mutating the candidate set while this sweep is iterating it.
+      for (const agentId of Array.from(releaseCandidates)) {
+        if (isDesired(agentId) || isAcknowledged(agentId) || isVisibleInAnySource(agentId)) {
+          continue;
+        }
+        if (cacheLoads.has(agentId) || inFlightFetches.has(agentId)) continue;
+        if (!loadedCache.has(agentId)) continue;
+        if (!ports.releaseTranscript(agentId)) continue;
+        releaseCandidates.delete(agentId);
+        loadedCache.delete(agentId);
+        releasedTranscripts.add(agentId);
+      }
+    } finally {
+      releaseSweepRunning = false;
+    }
+  };
+
+  const runTrackedFetch = async <T>(agentId: string, run: () => Promise<T>): Promise<T> => {
+    inFlightFetches.set(agentId, (inFlightFetches.get(agentId) ?? 0) + 1);
+    try {
+      return await run();
+    } finally {
+      // Defensive read: `dispose` clears the map, and the settle must not revive the count.
+      const remaining = (inFlightFetches.get(agentId) ?? 1) - 1;
+      if (remaining === 0) inFlightFetches.delete(agentId);
+      else inFlightFetches.set(agentId, remaining);
+      releaseInactiveTranscripts();
+    }
+  };
+
   const fetchUntilCurrent = async (
     agentId: string,
     generation: number,
@@ -559,11 +724,11 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     if (!ownsCatchUp(agentId, generation)) return;
 
     try {
-      const page = await ports.fetchPage(agentId, request);
+      const page = await runTrackedFetch(agentId, () => ports.fetchPage(agentId, request));
       if (!ownsCatchUp(agentId, generation)) return;
       if (page.hasNewer && page.endCursor) {
         if (fallbackToLatestTailOnOverflow) {
-          await ports.fetchLatestTail(agentId);
+          await runTrackedFetch(agentId, () => ports.fetchLatestTail(agentId));
           catchUps.set(agentId, { generation, status: "complete" });
           setVisibilityCatchUpReady(agentId);
           return;
@@ -608,15 +773,24 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
   };
 
   const ensureCacheLoaded = (agentId: string): void => {
+    // Preparing an agent means it is wanted again: late frames for a released transcript are no
+    // longer stale, and the durable snapshot is re-painted below.
+    releasedTranscripts.delete(agentId);
     if (loadedCache.has(agentId) || cacheLoads.has(agentId)) return;
     const load = ports
       .prepare(agentId)
       .catch((error) => ports.reportError(error))
       .finally(() => {
         cacheLoads.delete(agentId);
+        // The cache preparation settled, so this agent's display is loaded. It stays true even if
+        // the agent was evicted while the preparation was in flight — otherwise that transcript
+        // could never be released. Only the catch-up needs the agent to still be wanted.
         loadedCache.add(agentId);
-        const pending = pendingCatchUps.get(agentId);
-        startCatchUp(agentId, { request: pending, supersede: Boolean(pending) });
+        if (isDesired(agentId)) {
+          const pending = pendingCatchUps.get(agentId);
+          startCatchUp(agentId, { request: pending, supersede: Boolean(pending) });
+        }
+        releaseInactiveTranscripts();
       });
     cacheLoads.set(agentId, load);
   };
@@ -712,6 +886,8 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     membershipRetryDelayMs = undefined;
     if (disposed || !connected || deliveryMode !== "selective") return;
     acknowledged = requested;
+    // The daemon confirms the agent is outside the subscription: only now may its transcript go.
+    releaseInactiveTranscripts();
     if (generation !== membershipGeneration) {
       await reconcileLatestMembership();
       return;
@@ -782,6 +958,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
     }
     if (sameAgentIds(nextDesired, desired)) {
       if (statusChanged) notifyListeners();
+      releaseInactiveTranscripts();
       return;
     }
 
@@ -791,6 +968,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
         visibilityCatchUpPending.delete(agentId);
         visibilityCatchUpErrors.delete(agentId);
         manualRetries.delete(agentId);
+        releaseCandidates.add(agentId);
       }
     }
     for (const agentId of nextDesired) {
@@ -798,6 +976,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
         visibilityCatchUpPending.add(agentId);
         visibilityCatchUpErrors.delete(agentId);
         manualRetries.delete(agentId);
+        releaseCandidates.delete(agentId);
         ensureCacheLoaded(agentId);
       }
     }
@@ -851,6 +1030,7 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       if (active === nextActive) return;
       active = nextActive;
       publishVisibleMembership();
+      releaseInactiveTranscripts();
     },
     setConnected(nextConnected) {
       if (connected === nextConnected) return;
@@ -886,11 +1066,33 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       for (const agentId of desired) cancelCatchUp(agentId);
       const visible = active ? visibleAgentIds() : [];
       recentlyViewedAgentIds = visible;
+      // This transition replaces `desired` directly instead of going through
+      // `commitDesiredMembership`, so the agents it drops must be registered as release candidates
+      // here. The transition narrows desired whenever the entered mode keeps a smaller set — only
+      // the visible agents in selective delivery, and nothing at all while the app is backgrounded
+      // — and a candidate that is never registered is a transcript the sweep can never evict.
+      const nextDesired = new Set(visible);
+      for (const agentId of desired) {
+        if (!nextDesired.has(agentId)) releaseCandidates.add(agentId);
+      }
       desired = visible;
       ports.replaceDemandedAgentIds(desired);
       visibilityCatchUpPending.clear();
       visibilityCatchUpErrors.clear();
       manualRetries.clear();
+      // The transition itself releases nothing — the entered policy's confirmed membership is not
+      // known yet — so the release bookkeeping is retained rather than rebuilt, because
+      // `releaseInactiveTranscripts` already gates every release on desired, acknowledged, and
+      // visible. Rebuilding it here can only lose information:
+      //
+      // - A selective candidate whose deferred release never ran (an in-flight fetch, a refused
+      //   `releaseTranscript`) would be forgotten instead of retried at the next settlement.
+      // - A released fence is not scoped to the mode that produced it. A page or stream frame
+      //   issued before the release is accepted while the legacy interlude runs (legacy hosts
+      //   stream every agent), and the fence still standing on the way back is what keeps that
+      //   stale frame from repainting the cold transcript. Re-wanting the agent is the only thing
+      //   that clears it, and `ensureCacheLoaded` is the single place that does that and reloads
+      //   the transcript.
       for (const agentId of desired) visibilityCatchUpPending.add(agentId);
       acknowledged = deliveryMode === "legacy" && connected ? desired : [];
       notifyListeners();
@@ -919,12 +1121,30 @@ export function createViewedTimelineSync(ports: ViewedTimelineSyncPorts): Viewed
       recentlyViewedAgentIds = [];
       loadedCache.clear();
       cacheLoads.clear();
+      releaseCandidates.clear();
+      releasedTranscripts.clear();
+      inFlightFetches.clear();
       visibilityCatchUpPending.clear();
       visibilityCatchUpErrors.clear();
       manualRetries.clear();
       notifyListeners();
       listeners.clear();
     },
+    isTranscriptReleased(agentId) {
+      // Only selective delivery evicts a transcript while the daemon keeps serving it; legacy
+      // hosts stream every agent, so their responses are never stale.
+      return deliveryMode === "selective" && releasedTranscripts.has(agentId);
+    },
+    noteTranscriptUpdate(agentId) {
+      // A released transcript is only repopulated through the legacy hole in the fence. Registered
+      // here and nowhere else: recording it under selective delivery would make `ensureCacheLoaded`
+      // skip the `prepare` that re-adopts the agent after a release, leaving its display resident
+      // but unpainted with no durable projection behind it.
+      if (deliveryMode !== "legacy" || !releasedTranscripts.has(agentId)) return;
+      loadedCache.add(agentId);
+      releaseCandidates.add(agentId);
+    },
+    releaseInactiveTranscripts,
     retryVisibleAgentTimeline,
   };
 }

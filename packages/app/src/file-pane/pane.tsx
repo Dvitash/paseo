@@ -33,6 +33,7 @@ import { FileMarkdownPreview } from "./markdown-preview";
 import { FileEditorModel, getFileConflictCallout, type FileConflictCallout } from "./editor/model";
 import { createFileObservationSource } from "./editor/observation-source";
 import { FileEditorView } from "./editor/view";
+import { countContentLines } from "./source/line-count";
 import { FileSourceView } from "./source/view";
 import type { FileConflictAlertState } from "./conflict-alert";
 import type { LiveFileModel } from "./live-file/model";
@@ -286,8 +287,11 @@ export function FilePane({
     supportsEditing,
   });
   const canTogglePreviewMode = isRenderable && !location.lineStart;
-  const lineCount =
-    preview?.kind === "text" ? (preview.content ?? "").split("\n").length : undefined;
+  const previewContent = preview?.kind === "text" ? (preview.content ?? "") : null;
+  const lineCount = useMemo(
+    () => (previewContent === null ? undefined : countContentLines(previewContent)),
+    [previewContent],
+  );
   const errorMessage = previewLifecycle.status === "error" ? previewLifecycle.message : null;
   const isLoading =
     previewLifecycle.status === "initial" ||
@@ -586,6 +590,7 @@ function EditableFilePane({
     }),
     [preview, snapshot.content, snapshot.version],
   );
+  const editorLineCount = useMemo(() => countContentLines(snapshot.content), [snapshot.content]);
   const showSource = mode !== "preview";
 
   return (
@@ -594,7 +599,7 @@ function EditableFilePane({
         size={
           snapshot.observedVersion.status === "ready" ? snapshot.observedVersion.size : preview.size
         }
-        lineCount={snapshot.content.split("\n").length}
+        lineCount={editorLineCount}
         editorStatus={snapshot.status}
         cursor={showSource ? cursor : undefined}
         vimMode={showSource ? vimMode : null}

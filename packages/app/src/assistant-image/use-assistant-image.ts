@@ -112,8 +112,21 @@ interface CachedPreviewUrl {
   uri: string;
 }
 
+const PREVIEW_URL_CACHE_MAX_WEIGHT = 16 * 1024 * 1024;
+
 const previewUrlCache = createAssistantImageAcquisitionCache<CachedPreviewUrl>({
-  capacity: 500,
+  capacity: 64,
+  budget: {
+    maxWeight: PREVIEW_URL_CACHE_MAX_WEIGHT,
+    // An unknown or unusable size is charged the whole budget so idle previews
+    // cannot accumulate outside the retention bound. Known zero bytes stay free.
+    getWeight: ({ attachment }) => {
+      const byteSize = attachment.byteSize;
+      return typeof byteSize === "number" && Number.isFinite(byteSize) && byteSize >= 0
+        ? byteSize
+        : PREVIEW_URL_CACHE_MAX_WEIGHT;
+    },
+  },
   onRetain:
     ({ attachment, uri }) =>
     () => {

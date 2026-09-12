@@ -90,13 +90,23 @@ history start; a response requested from a pre-replacement range is stale and is
 
 ## Client replica lifetime
 
-The session projection remains host-scoped for as long as the host is registered. The viewed-timeline
-owner wraps cached preparation, network catch-up, accepted timeline application, and persistence
-behind one interface. React supplies transport and projection operations without selecting a cache
-path or issuing a separate persistence notification.
+Timeline metadata stays host-scoped for as long as the host is registered. The viewed-timeline owner
+wraps cached preparation, network catch-up, accepted timeline application, and persistence behind one
+interface. React supplies transport and projection operations without selecting a cache path or
+issuing a separate persistence notification.
 
 Removing the host from the registry is the destructive boundary: it stops the runtime and clears the
 session and host-scoped setup state together.
+
+Transcript arrays outside the acknowledged selective hot set can be released when no pane displays
+the agent. Visible and hot agents, local-only presentation, and unresolved submissions stay resident.
+Backgrounding or disconnecting alone never releases transcripts; legacy global delivery is unchanged.
+Delivery-mode transitions preserve release tracking. Legacy updates to previously released agents
+remain eligible for cleanup when selective delivery resumes.
+
+Release keeps the durable cached tail and per-agent metadata. Returning paints the available cache
+and resumes authoritative catch-up; older history remains available through backward pagination.
+Only actual agent deletion removes its durable timeline row.
 
 The timeline owner asks durable replica storage for an agent when that agent becomes visible. An
 accepted row paints immediately before subscription acknowledgement or timeline fetch. The stored

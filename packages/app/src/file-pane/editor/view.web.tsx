@@ -42,6 +42,9 @@ export function FileEditorView({
   const viewRef = useRef<EditorView | null>(null);
   const snapshot = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
   const initial = useRef({ filename, model, theme, vimEnabled, content: snapshot.content });
+  // This view owns its document, and every doc change lands in the update
+  // listener below, so the content last handed to the editor is authoritative.
+  const appliedContent = useRef(initial.current.content);
   const onCursorChangeRef = useRef(onCursorChange);
   onCursorChangeRef.current = onCursorChange;
 
@@ -64,7 +67,9 @@ export function FileEditorView({
               !update.transactions.some((tr) => tr.annotation(remoteUpdate))
             ) {
               const { lineSeparator } = values.model.getSnapshot();
-              values.model.edit(update.state.doc.sliceString(0, undefined, lineSeparator));
+              const edited = update.state.doc.sliceString(0, undefined, lineSeparator);
+              appliedContent.current = edited;
+              values.model.edit(edited);
             }
             if (update.selectionSet || update.docChanged) {
               const head = update.state.selection.main.head;
@@ -76,6 +81,7 @@ export function FileEditorView({
       }),
     });
     viewRef.current = view;
+    appliedContent.current = values.content;
     onCursorChangeRef.current({ line: 1, column: 1 });
     return () => {
       view.destroy();
@@ -85,9 +91,10 @@ export function FileEditorView({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view || appliedContent.current === snapshot.content) return;
     const document = view.state.toText(snapshot.content);
     if (view.state.doc.eq(document)) return;
+    appliedContent.current = snapshot.content;
     const head = Math.min(view.state.selection.main.head, document.length);
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: document },

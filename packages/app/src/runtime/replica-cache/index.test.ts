@@ -201,6 +201,56 @@ function timeline(text = "Cached") {
   };
 }
 
+function textItem(text: string, seq: number): StreamItem {
+  return {
+    kind: "assistant_message",
+    id: `${text}-${seq}`,
+    text,
+    timestamp: new Date("2026-07-18T08:02:00.000Z"),
+    timelineCursor: { epoch: "epoch-1", seq },
+  };
+}
+
+function isAssistantMessage(
+  item: StreamItem,
+): item is Extract<StreamItem, { kind: "assistant_message" }> {
+  return item.kind === "assistant_message";
+}
+
+interface TrackedTimelineItems {
+  items: StreamItem[];
+  reads(): number;
+}
+
+function trackedItems(text: string, count: number): TrackedTimelineItems {
+  const items: StreamItem[] = [];
+  let reads = 0;
+  for (let index = 0; index < count; index += 1) {
+    Object.defineProperty(items, index, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return textItem(`${text}-${index}`, index);
+      },
+    });
+  }
+  return { items, reads: () => reads };
+}
+
+interface StoredTimelinePayload {
+  agentId: string;
+  items: Array<{ text: string }>;
+  range: { epoch: string; startSeq: number; endSeq: number } | null;
+  hasOlder: boolean;
+}
+
+function storedTimelinePayload(storage: MemoryStorage): StoredTimelinePayload {
+  const row = [...storage.rows.values()].find((candidate) => candidate.kind === "timeline");
+  if (!row) throw new Error("timeline row was not written");
+  return JSON.parse(row.payload) as StoredTimelinePayload;
+}
+
 function commitDirectory(
   cache: ReplicaCache,
   serverId: string,
@@ -401,6 +451,119 @@ describe("ReplicaCache", () => {
     ]);
   });
 
+  it("persists the live head after the displayed tail", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    writer.commitTimeline(SERVER_ID, "agent-1", {
+      agentId: "agent-1",
+      items: [textItem("tail-1", 1), textItem("tail-2", 2)],
+      head: [textItem("head-1", 3)],
+      range: { epoch: "epoch-1", startSeq: 1, endSeq: 3 },
+      hasOlder: true,
+    });
+    await writer.flush();
+
+    expect(storedTimelinePayload(storage)).toMatchObject({
+      items: [{ text: "tail-1" }, { text: "tail-2" }, { text: "head-1" }],
+      range: { epoch: "epoch-1", startSeq: 1, endSeq: 3 },
+      hasOlder: true,
+    });
+    expect(await createCache(storage).readTimeline(SERVER_ID, "agent-1")).toEqual({
+      agentId: "agent-1",
+      items: [textItem("tail-1", 1), textItem("tail-2", 2), textItem("head-1", 3)],
+      range: { epoch: "epoch-1", startSeq: 1, endSeq: 3 },
+      hasOlder: true,
+    });
+  });
+
+  it("serializes only the latest committed window of a split tail and head", async () => {
+    const storage = new MemoryStorage();
+    const cache = createCache(storage);
+    const superseded = trackedItems("superseded", 120);
+    const latest = trackedItems("latest", 120);
+    const head = trackedItems("head", 3);
+
+    cache.commitTimeline(SERVER_ID, "agent-1", {
+      agentId: "agent-1",
+      items: superseded.items,
+      range: null,
+      hasOlder: false,
+    });
+    cache.commitTimeline(SERVER_ID, "agent-1", {
+      agentId: "agent-1",
+      items: latest.items,
+      head: head.items,
+      range: null,
+      hasOlder: false,
+    });
+    const readsBeforeFlush = {
+      superseded: superseded.reads(),
+      latest: latest.reads(),
+      head: head.reads(),
+    };
+    await cache.flush();
+
+    expect(readsBeforeFlush).toEqual({ superseded: 0, latest: 0, head: 0 });
+    expect({
+      superseded: superseded.reads(),
+      latest: latest.reads(),
+      head: head.reads(),
+    }).toEqual({ superseded: 0, latest: 47, head: 3 });
+    expect(storedTimelinePayload(storage).items.map((item) => item.text)).toEqual([
+      ...Array.from({ length: 47 }, (_, index) => `latest-${73 + index}`),
+      ...Array.from({ length: 3 }, (_, index) => `head-${index}`),
+    ]);
+  });
+
+  it("persists only the display window and drops coverage when the tail and head exceed it", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const items = Array.from({ length: 45 }, (_, index) => textItem(`tail-${index}`, index));
+    const head = Array.from({ length: 10 }, (_, index) => textItem(`head-${index}`, 45 + index));
+    writer.commitTimeline(SERVER_ID, "agent-1", {
+      agentId: "agent-1",
+      items,
+      head,
+      range: { epoch: "epoch-1", startSeq: 0, endSeq: 54 },
+      hasOlder: true,
+    });
+    await writer.flush();
+
+    const payload = storedTimelinePayload(storage);
+    expect(payload.items.map((item) => item.text)).toEqual([
+      ...items
+        .slice(-40)
+        .filter(isAssistantMessage)
+        .map((item) => item.text),
+      ...head.filter(isAssistantMessage).map((item) => item.text),
+    ]);
+    expect(payload.range).toBeNull();
+    expect(payload.hasOlder).toBe(false);
+  });
+
+  it("keeps coverage when the displayed tail and head exactly fit the persisted window", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    const items = Array.from({ length: 49 }, (_, index) => textItem(`tail-${index}`, index));
+    const head = [textItem("head-0", 49)];
+    writer.commitTimeline(SERVER_ID, "agent-1", {
+      agentId: "agent-1",
+      items,
+      head,
+      range: { epoch: "epoch-1", startSeq: 0, endSeq: 49 },
+      hasOlder: true,
+    });
+    await writer.flush();
+
+    const payload = storedTimelinePayload(storage);
+    expect(payload.items.map((item) => item.text)).toEqual([
+      ...items.filter(isAssistantMessage).map((item) => item.text),
+      "head-0",
+    ]);
+    expect(payload.range).toEqual({ epoch: "epoch-1", startSeq: 0, endSeq: 49 });
+    expect(payload.hasOlder).toBe(true);
+  });
+
   it("never reads directory rows older than an accepted deferred deletion", async () => {
     const storage = new MemoryStorage();
     const cache = createCache(storage);
@@ -453,6 +616,68 @@ describe("ReplicaCache", () => {
     cache.commitTimeline(SERVER_ID, "agent-1", timeline("New"));
 
     expect((await cache.readTimeline(SERVER_ID, "agent-1"))?.items).toEqual([timelineItem("New")]);
+  });
+
+  it("deletes the durable timeline row when its agent is removed", async () => {
+    const storage = new MemoryStorage();
+    const cache = createCache(storage);
+    commitDirectory(cache, SERVER_ID, directory());
+    cache.commitTimeline(SERVER_ID, "agent-1", timeline());
+    await cache.flush();
+    expect(storage.rows.has(`${SERVER_ID}:timeline:agent-1`)).toBe(true);
+
+    cache.commitDirectoryMutations(SERVER_ID, [{ kind: "agent", type: "delete", id: "agent-1" }]);
+    await cache.flush();
+
+    expect(storage.rows.has(`${SERVER_ID}:timeline:agent-1`)).toBe(false);
+    expect(storage.rows.has(`${SERVER_ID}:agent:agent-1`)).toBe(false);
+    expect(storage.rows.has(`${SERVER_ID}:workspace:workspace-1`)).toBe(true);
+    expect(await cache.readTimeline(SERVER_ID, "agent-1")).toBeUndefined();
+  });
+
+  it("cancels a pending timeline snapshot on deletion and persists an explicit recreation", async () => {
+    const storage = new MemoryStorage();
+    const cache = createCache(storage);
+    cache.commitTimeline(SERVER_ID, "agent-1", timeline("Pending"));
+    cache.commitDirectoryMutations(SERVER_ID, [{ kind: "agent", type: "delete", id: "agent-1" }]);
+    await cache.flush();
+
+    expect([...storage.rows.values()].some((row) => row.kind === "timeline")).toBe(false);
+    expect(await cache.readTimeline(SERVER_ID, "agent-1")).toBeUndefined();
+
+    cache.commitTimeline(SERVER_ID, "agent-1", timeline("Recreated"));
+    await cache.flush();
+
+    expect(storedTimelinePayload(storage).items.map((item) => item.text)).toEqual(["Recreated"]);
+    expect(await cache.readTimeline(SERVER_ID, "agent-1")).toEqual(timeline("Recreated"));
+  });
+
+  it("carries a pending timeline removal across a host rekey", async () => {
+    const storage = new MemoryStorage();
+    const writer = createCache(storage);
+    commitDirectory(writer, SERVER_ID, directory());
+    writer.commitTimeline(SERVER_ID, "agent-1", timeline());
+    await writer.flush();
+
+    writer.commitDirectoryMutations(SERVER_ID, [{ kind: "agent", type: "delete", id: "agent-1" }]);
+    writer.reconcileServerId(SERVER_ID, "renamed-host");
+    await writer.flush();
+
+    expect(storage.rows.has("renamed-host:timeline:agent-1")).toBe(false);
+    expect(storage.rows.has("renamed-host:agent:agent-1")).toBe(false);
+    expect(await writer.readTimeline("renamed-host", "agent-1")).toBeUndefined();
+  });
+
+  it("drops a pending timeline snapshot when its host is removed", async () => {
+    const storage = new MemoryStorage();
+    const cache = createCache(storage);
+    cache.commitTimeline(SERVER_ID, "agent-1", timeline("Pending"));
+
+    cache.setHosts([]);
+    await cache.flush();
+
+    expect(storage.rows.size).toBe(0);
+    expect(storage.changes).toEqual([]);
   });
 
   it("round-trips plugin timeline items", async () => {
