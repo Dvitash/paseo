@@ -9,7 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { DesktopPermissionRow } from "@/desktop/components/desktop-permission-row";
 import { useDesktopPermissions } from "@/desktop/permissions/use-desktop-permissions";
 import { useDesktopSettings } from "@/desktop/settings/desktop-settings";
+import { useAppSettings } from "@/hooks/use-settings";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
+import { isWeb } from "@/constants/platform";
 import { settingsStyles } from "@/styles/settings";
 
 const ThemedRotateCw = withUnistyles(RotateCw, (theme) => ({
@@ -20,6 +22,7 @@ const ThemedRotateCw = withUnistyles(RotateCw, (theme) => ({
 export function DesktopNotificationsSection() {
   const { t } = useTranslation();
   const { settings, isSaving, updateSettings } = useDesktopSettings();
+  const { settings: appSettings, updateSettings: updateAppSettings } = useAppSettings();
   const {
     isDesktopApp,
     snapshot,
@@ -41,11 +44,22 @@ export function DesktopNotificationsSection() {
 
   const handlePlaySoundChange = useCallback(
     (playSound: boolean) => {
-      void updateSettings({ notifications: { playSound } }).catch(() => {
-        // useDesktopSettings owns the user-visible IPC error.
-      });
+      if (isDesktopApp) {
+        void updateSettings({ notifications: { playSound } }).catch(() => {
+          // useDesktopSettings owns the user-visible IPC error.
+        });
+      } else {
+        void updateAppSettings({ notificationSounds: playSound });
+      }
     },
-    [updateSettings],
+    [isDesktopApp, updateSettings, updateAppSettings],
+  );
+
+  const handleFlashChange = useCallback(
+    (notificationFlash: boolean) => {
+      void updateAppSettings({ notificationFlash });
+    },
+    [updateAppSettings],
   );
 
   const handleSendTestNotification = useCallback(() => {
@@ -79,11 +93,14 @@ export function DesktopNotificationsSection() {
     [t],
   );
 
-  if (!isDesktopApp) {
+  if (!isWeb) {
     return null;
   }
 
   const notificationsGranted = snapshot?.notifications.state === "granted";
+  const playSound = isDesktopApp
+    ? settings.notifications.playSound
+    : appSettings.notificationSounds;
 
   return (
     <SettingsSection title={t("settings.notifications.title")} trailing={refreshButton}>
@@ -101,11 +118,23 @@ export function DesktopNotificationsSection() {
             <Text style={settingsStyles.rowHint}>{t("settings.notifications.playSoundHint")}</Text>
           </View>
           <Switch
-            value={settings.notifications.playSound}
+            value={playSound}
             onValueChange={handlePlaySoundChange}
             disabled={isSaving}
             accessibilityLabel={t("settings.notifications.playSound")}
             testID="desktop-notifications-play-sound-switch"
+          />
+        </View>
+        <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>{t("settings.notifications.flash")}</Text>
+            <Text style={settingsStyles.rowHint}>{t("settings.notifications.flashHint")}</Text>
+          </View>
+          <Switch
+            value={appSettings.notificationFlash}
+            onValueChange={handleFlashChange}
+            accessibilityLabel={t("settings.notifications.flash")}
+            testID="notifications-flash-switch"
           />
         </View>
         <View style={[settingsStyles.row, settingsStyles.rowBorder]}>

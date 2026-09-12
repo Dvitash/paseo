@@ -193,6 +193,25 @@ export function registerWindowManager(input: { mode: DesktopWindowChromeMode }):
     }
   });
 
+  ipcMain.handle("paseo:window:requestAttention", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed() || win.isFocused()) {
+      return;
+    }
+    if (process.platform === "darwin") {
+      app.dock?.bounce("informational");
+      return;
+    }
+    win.flashFrame(true);
+    // flashFrame stops on focus per Electron docs; the once() guard covers
+    // platforms where that auto-stop doesn't happen.
+    win.once("focus", () => {
+      if (!win.isDestroyed()) {
+        win.flashFrame(false);
+      }
+    });
+  });
+
   ipcMain.handle("paseo:window:updateChrome", (event, update?: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) {

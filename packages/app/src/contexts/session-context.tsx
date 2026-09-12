@@ -43,6 +43,7 @@ import {
 } from "@/stores/session-store";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { sendOsNotification } from "@/utils/os-notifications";
+import { signalAgentAttentionAlert } from "@/utils/attention-alerts";
 import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
 import {
   getInitKey,
@@ -290,18 +291,22 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       if (params.reason === "error") {
         return;
       }
-      const isActivelyVisible = getIsAppActivelyVisible(appState);
-      const isAwayFromAgent = !isActivelyVisible || attentionFocusedAgentId !== params.agentId;
-      if (!isAwayFromAgent) {
-        return;
-      }
-
       const timestampMs = new Date(params.timestamp).getTime();
       const lastNotified = attentionNotifiedRef.current.get(params.agentId);
       if (lastNotified && lastNotified >= timestampMs) {
         return;
       }
       attentionNotifiedRef.current.set(params.agentId, timestampMs);
+
+      // The chime/flash fire even while the user is watching the agent — the
+      // OS notification below is the part that's suppressed for active viewers.
+      signalAgentAttentionAlert(params.reason);
+
+      const isActivelyVisible = getIsAppActivelyVisible(appState);
+      const isAwayFromAgent = !isActivelyVisible || attentionFocusedAgentId !== params.agentId;
+      if (!isAwayFromAgent) {
+        return;
+      }
 
       const head = session?.agentStreamHead.get(params.agentId) ?? [];
       const tail = session?.agentStreamTail.get(params.agentId) ?? [];
@@ -514,6 +519,19 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         event.type === "turn_canceled"
       ) {
         voiceRuntime?.onTurnEvent(serverId, agentId, event.type);
+      }
+      // The attention path never reaches a client that's actively watching the
+      // agent (the server picks another in-app recipient), so the completion
+      // chime for that case fires here instead. agent_stream only reaches this
+      // client for viewed agents, and the away case is covered by
+      // notifyAgentAttention — the two conditions are mutually exclusive.
+      if (event.type === "turn_completed") {
+        const session = useSessionStore.getState().sessions[serverId];
+        const isWatchingAgent =
+          getIsAppActivelyVisible(appStateRef.current) && session?.focusedAgentId === agentId;
+        if (isWatchingAgent) {
+          signalAgentAttentionAlert("finished");
+        }
       }
       const turnLiveness = deriveAgentStreamTurnLiveness([
         { event: streamEvent, seq, epoch, timestamp: parsedTimestamp },
