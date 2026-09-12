@@ -171,7 +171,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     id: "notifications",
     labelKey: "settings.sections.notifications",
     icon: Bell,
-    desktopOnly: true,
+    webOnly: true,
   },
   {
     id: "permissions",
@@ -292,7 +292,7 @@ function renderSettingsSectionContent(props: SettingsSectionContentProps): React
     case "integrations":
       return isDesktopApp ? <IntegrationsSection /> : null;
     case "notifications":
-      return isDesktopApp ? <DesktopNotificationsSection /> : null;
+      return isWeb ? <DesktopNotificationsSection /> : null;
     case "permissions":
       return isDesktopApp ? <DesktopPermissionsSection /> : null;
     case "diagnostics":

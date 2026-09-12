@@ -2139,7 +2139,10 @@ export const es: TranslationResources = {
       permission: "Permiso de notificaciones",
       refreshAccessibility: "Actualizar permiso de notificaciones",
       playSound: "Reproducir sonido",
-      playSoundHint: "Reproduce un sonido cuando llega una notificación de escritorio",
+      playSoundHint: "Reproduce un sonido cuando un agente necesita atención",
+      flash: "Destello del icono de la app",
+      flashHint:
+        "Hace parpadear el icono de la barra de tareas y el título cuando un agente necesita información",
       test: "Probar notificación",
       testHint: "Envía una notificación con esta configuración",
       permissionRequired: "Permite el acceso a las notificaciones antes de probar",

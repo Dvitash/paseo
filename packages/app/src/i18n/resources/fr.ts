@@ -2144,7 +2144,10 @@ export const fr: TranslationResources = {
       permission: "Autorisation des notifications",
       refreshAccessibility: "Actualiser l’autorisation des notifications",
       playSound: "Émettre un son",
-      playSoundHint: "Émet un son lorsqu’une notification de bureau arrive",
+      playSoundHint: "Émet un son lorsqu’un agent a besoin d’attention",
+      flash: "Faire clignoter l’icône de l’app",
+      flashHint:
+        "Fait clignoter l’icône de la barre des tâches et le titre lorsqu’un agent attend une saisie",
       test: "Tester la notification",
       testHint: "Envoie une notification avec ces réglages",
       permissionRequired: "Autorisez l’accès aux notifications avant le test",

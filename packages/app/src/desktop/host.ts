@@ -111,6 +111,8 @@ export interface DesktopWindowBridge {
     handler: (event: TEvent) => void,
   ) => Promise<() => void> | (() => void);
   setBadgeCount?: (count?: number) => Promise<void>;
+  /** Flash the taskbar button / bounce the dock icon until the window is focused. */
+  requestAttention?: () => Promise<void>;
   onDragDropEvent?: <TEvent = unknown>(
     handler: (event: TEvent) => void,
   ) => Promise<() => void> | (() => void);
