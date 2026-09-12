@@ -1313,8 +1313,11 @@ async function resolveWorktreeSourcePlan({
       await validateGitBranchName(cwd, branchName);
       const normalizedBaseBranch = normalizeRequiredBaseBranch(source.baseBranch);
       const resolvedBaseBranch = await resolveBaseBranchForWorktree(cwd, source.baseBranch);
+      // The base is always the requested base. An earlier version substituted a
+      // local branch that happened to share the requested name, which silently cut
+      // the worktree from a stale leftover branch — archiving a worktree leaves its
+      // branch behind — while worktree.json still recorded the base the user picked.
       const branchExists = await localBranchExists(cwd, branchName);
-      const base = branchExists ? branchName : resolvedBaseBranch;
       const candidateBranch = branchExists ? desiredSlug : branchName;
       const newBranchName = await resolveUniqueLocalBranchName(cwd, candidateBranch);
 
@@ -1326,7 +1329,7 @@ async function resolveWorktreeSourcePlan({
           headRef: newBranchName,
           localBranchName: newBranchName,
         }),
-        addArguments: ["-b", newBranchName, "--no-track", base],
+        addArguments: ["-b", newBranchName, "--no-track", resolvedBaseBranch],
       };
     }
     case "checkout-branch": {

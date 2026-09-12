@@ -566,6 +566,47 @@ describe.skipIf(isPlatform("win32"))("worktree-core POSIX-only", () => {
       expect(mergeBase).toBe(devTip);
     });
 
+    test("ignores a stale local branch that shares the new branch name", async () => {
+      const { tempDir, repoDir, paseoHome } = createGitRepoWithDevBranch();
+      cleanupPaths.push(tempDir);
+      const devTip = execFileSync("git", ["rev-parse", "dev"], { cwd: repoDir, stdio: "pipe" })
+        .toString()
+        .trim();
+      // An archived Paseo worktree leaves its branch behind. Reusing that name must
+      // still branch off the requested base rather than the leftover tip.
+      execFileSync("git", ["branch", "rebirth-tweaks"], { cwd: repoDir, stdio: "pipe" });
+
+      const result = await createCoreWorktree(
+        {
+          cwd: repoDir,
+          worktreeSlug: "rebirth-tweaks",
+          action: "branch-off",
+          refName: "dev",
+          paseoHome,
+          runSetup: false,
+        },
+        createCoreDeps(),
+      );
+
+      const mergeBase = execFileSync("git", ["merge-base", "HEAD", devTip], {
+        cwd: result.worktree.worktreePath,
+        stdio: "pipe",
+      })
+        .toString()
+        .trim();
+      expect(result.intent).toEqual({
+        kind: "branch-off",
+        baseBranch: "dev",
+        // The intent carries the requested name; the created ref is deduped.
+        branchName: "rebirth-tweaks",
+      });
+      expect(result.worktree.branchName).toBe("rebirth-tweaks-1");
+      expect(mergeBase).toBe(devTip);
+      expect(readPaseoWorktreeMetadata(result.worktree.worktreePath)).toMatchObject({
+        baseRefName: "dev",
+      });
+    });
+
     test("checks out an explicit existing branch", async () => {
       const { tempDir, repoDir, paseoHome } = createGitRepoWithDevBranch();
       cleanupPaths.push(tempDir);
