@@ -1,4 +1,14 @@
 export const PARENT_AGENT_ID_LABEL = "paseo.parent-agent-id";
+export const ORIGIN_DEVICE_LABEL = "paseo.origin-device";
+
+export type AgentOriginDevice = "mobile" | "desktop";
+
+export function getOriginDeviceFromLabels(
+  labels: Record<string, unknown> | null | undefined,
+): AgentOriginDevice | null {
+  const value = labels?.[ORIGIN_DEVICE_LABEL];
+  return value === "mobile" || value === "desktop" ? value : null;
+}
 const OPEN_AGENT_TAB_LABEL_PREFIX = "paseo.open-agent-tab.";
 
 export function getOpenAgentTabLabel(clientId: string): string {

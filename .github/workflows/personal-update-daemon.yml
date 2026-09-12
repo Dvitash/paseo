@@ -2,6 +2,8 @@ name: Update Personal Daemon
 run-name: ${{ inputs.request_id != '' && format('Personal update {0}', inputs.request_id) || 'Update Personal Daemon' }}
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       desktop:
@@ -27,7 +29,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'Dvitash/paseo' && github.ref == 'refs/heads/main' && github.actor == 'Dvitash'
+    if: github.repository == 'Dvitash/paseo' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.actor == 'Dvitash'))
     uses: ./.github/workflows/personal-build.yml
     with:
       desktop: ${{ inputs.desktop || 'none' }}
@@ -49,7 +51,7 @@ jobs:
             echo "Commit: \`$COMMIT\`"
             echo "Artifact: \`$ARTIFACT\`"
             echo
-            echo 'The personal updater on your box checks for successful manual runs every minute.'
+            echo 'The personal updater on your box checks for successful main push or manual runs every minute.'
             echo 'It stages this bundle separately, waits for idle agents, then restarts paseo.service.'
             echo 'Pause new agent work while an update is pending; idle checks are not an atomic maintenance lock.'
             echo 'Workflow success means the bundle is ready, not that the daemon has restarted.'

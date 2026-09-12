@@ -1,28 +1,12 @@
 import { useMemo } from "react";
 import { Text, View } from "react-native";
-import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { getProviderIcon } from "@/components/provider-icons";
+import { StyleSheet } from "react-native-unistyles";
 import { StatusBadge } from "@/components/ui/status-badge";
-import type { Theme } from "@/styles/theme";
 import { ProviderUsageBalanceBar } from "./balance-bar";
 import { formatAgo } from "./format";
+import { ThemedProviderUsageIcon, providerUsageIconColorMapping } from "./provider-usage-icon";
 import type { ProviderUsage } from "./types";
 import { ProviderUsageWindowBar } from "./window-bar";
-
-interface ProviderUsageIconProps {
-  iconKey: string;
-  size: number;
-  color?: string;
-}
-
-function ProviderUsageIcon({ iconKey, size, color = "" }: ProviderUsageIconProps) {
-  const Icon = getProviderIcon(iconKey);
-  return <Icon size={size} color={color} />;
-}
-
-const ThemedProviderUsageIcon = withUnistyles(ProviderUsageIcon);
-
-const mutedIconColor = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
 function statusText(usage: ProviderUsage): string | null {
   if (usage.status === "available") return null;
@@ -39,9 +23,11 @@ function footerText(usage: ProviderUsage): string | null {
 
 export function ProviderUsageCard({
   usage,
+  serverId,
   compact = false,
 }: {
   usage: ProviderUsage;
+  serverId?: string | null;
   compact?: boolean;
 }) {
   const status = statusText(usage);
@@ -65,7 +51,12 @@ export function ProviderUsageCard({
   return (
     <View style={containerStyle}>
       <View style={styles.header}>
-        <ThemedProviderUsageIcon iconKey={usage.providerId} size={14} uniProps={mutedIconColor} />
+        <ThemedProviderUsageIcon
+          iconKey={usage.providerId}
+          serverId={serverId}
+          size={14}
+          uniProps={providerUsageIconColorMapping}
+        />
         <Text style={styles.name} numberOfLines={1}>
           {usage.displayName}
         </Text>

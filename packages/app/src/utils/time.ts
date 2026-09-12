@@ -168,3 +168,32 @@ export function formatDuration(durationMs: number): string {
   const remMinutes = totalMinutes % 60;
   return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
 }
+
+/**
+ * Format a duration as seconds with two decimals ("21.74s"). Used for the
+ * per-command wall clock where sub-second precision is the point.
+ */
+export function formatWallClockSeconds(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return "0.00s";
+  }
+  return `${(durationMs / 1000).toFixed(2)}s`;
+}
+
+/**
+ * Format a command timeout compactly ("300s", "1.5s", "500ms", "none" when
+ * the tool reports no deadline).
+ */
+export function formatTimeoutSeconds(timeoutMs: number): string {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    return "none";
+  }
+  if (timeoutMs === 0) {
+    return "none";
+  }
+  if (timeoutMs < 1000) {
+    return `${Math.round(timeoutMs)}ms`;
+  }
+  const seconds = timeoutMs / 1000;
+  return `${Number.isInteger(seconds) ? seconds : Number(seconds.toFixed(1))}s`;
+}

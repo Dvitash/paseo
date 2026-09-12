@@ -5,6 +5,7 @@ import type { Logger } from "pino";
 
 import { writeJsonFileAtomic } from "../atomic-file.js";
 import { AgentFeatureSchema, AgentStatusSchema } from "../messages.js";
+import { ProviderPaseoToolsPolicySchema } from "@getpaseo/protocol/provider-config";
 import { toStoredAgentRecord } from "./agent-projections.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { AgentSessionConfig } from "./agent-sdk-types.js";
@@ -29,6 +30,8 @@ const SERIALIZABLE_CONFIG_SCHEMA = z
     systemPrompt: z.string().nullable().optional(),
     mcpServers: z.record(z.string(), z.any()).nullable().optional(),
     readOnly: z.boolean().nullable().optional(),
+    durableInternal: z.boolean().nullable().optional(),
+    paseoToolPolicy: ProviderPaseoToolsPolicySchema.nullable().optional(),
   })
   .nullable()
   .optional();
@@ -77,7 +80,6 @@ const STORED_AGENT_SCHEMA = z.object({
   archivedAt: z.string().nullable().optional(),
   owner: AgentOwnerSchema.optional(),
 });
-
 export type SerializableAgentConfig = Pick<
   AgentSessionConfig,
   | "modeId"
@@ -89,6 +91,8 @@ export type SerializableAgentConfig = Pick<
   | "systemPrompt"
   | "mcpServers"
   | "readOnly"
+  | "durableInternal"
+  | "paseoToolPolicy"
 >;
 
 export type StoredAgentRecord = z.infer<typeof STORED_AGENT_SCHEMA>;

@@ -1,20 +1,22 @@
 import { memo, useCallback, type ReactElement } from "react";
+import { View } from "react-native";
+import { StyleSheet } from "react-native-unistyles";
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
+import { AgentModelTurnMetricsPill, useHasModelTurnMetrics } from "@/composer/model-turn-metrics";
 import { AgentTaskList } from "@/composer/task-list";
-import { ComposerTrackBar } from "@/composer/tracks";
-import { supportsDesktopPaneSplits, useIsCompactFormFactor } from "@/constants/layout";
+import {
+  MAX_CONTENT_WIDTH,
+  supportsDesktopPaneSplits,
+  useIsCompactFormFactor,
+} from "@/constants/layout";
 import { usePaneContext } from "@/panels/pane-context";
 import { useSettings } from "@/hooks/use-settings";
 import { PluginComposerPills } from "@/plugins";
 import { useSessionStore } from "@/stores/session-store";
-import {
-  type ArchiveFinishedStatus,
-  useArchiveSubagent,
-  useDetachSubagent,
-  type SubagentRow,
-} from "@/subagents";
+import { useArchiveSubagent, useDetachSubagent, type SubagentRow } from "@/subagents";
 import { SubagentsTrack } from "@/subagents/track";
+import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
 import type { TodoEntry } from "@/types/stream";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
@@ -35,8 +37,6 @@ export const AgentTracks = memo(function AgentTracks({
   cwd,
   subagentRows,
   tasks,
-  archiveFinishedStatus,
-  onArchiveFinished,
   hasPluginComposerPills,
 }: {
   serverId: string;
@@ -45,12 +45,11 @@ export const AgentTracks = memo(function AgentTracks({
   cwd: string;
   subagentRows: SubagentRow[];
   tasks: TodoEntry[] | undefined;
-  archiveFinishedStatus: ArchiveFinishedStatus;
-  onArchiveFinished: () => void;
   hasPluginComposerPills: boolean;
 }): ReactElement | null {
   const { tabId, openTab } = usePaneContext();
   const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
+  const hasModelTurnMetrics = useHasModelTurnMetrics(serverId, agentId);
   const isCompact = useIsCompactFormFactor();
   const canSplit = supportsDesktopPaneSplits() && !isCompact;
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
@@ -112,61 +111,81 @@ export const AgentTracks = memo(function AgentTracks({
     });
   }, [cwd, isCompact, openInSidePane, serverId, workspaceKey]);
 
-  if (
-    !hasWorkspaceDiffStat &&
-    !hasAgentTracks({
-      subagentRows,
-      tasks,
-      archiveFinishedStatus,
-      hasPluginComposerPills,
-    })
-  ) {
+  const hasPills =
+    Boolean(tasks?.length) || hasPluginComposerPills || hasWorkspaceDiffStat || hasModelTurnMetrics;
+  const hasSubagents = subagentRows.some(isSubagentActiveOrAttention);
+
+  if (!hasPills && !hasSubagents) {
     return null;
   }
 
   return (
-    <ComposerTrackBar>
-      <AgentTaskList tasks={tasks} />
-      <SubagentsTrack
-        serverId={serverId}
-        rows={subagentRows}
-        onOpenSubagent={handleOpenSubagent}
-        onOpenProviderSubagent={handleOpenProviderSubagent}
-        onArchiveSubagent={archiveSubagent}
-        onArchiveFinished={onArchiveFinished}
-        archiveFinishedStatus={archiveFinishedStatus}
-        onDetachSubagent={canDetachSubagents ? detachSubagent : undefined}
-      />
-      <PluginComposerPills
-        serverId={serverId}
-        workspaceId={workspaceId}
-        agentId={agentId}
-        compact={isCompact}
-      />
-      <WorkspaceDiffStatPill
-        serverId={serverId}
-        workspaceId={workspaceId}
-        onPress={handleOpenChanges}
-      />
-    </ComposerTrackBar>
+    <View style={styles.container} pointerEvents="box-none">
+      {hasSubagents ? (
+        <SubagentsTrack
+          serverId={serverId}
+          rows={subagentRows}
+          onOpenSubagent={handleOpenSubagent}
+          onOpenProviderSubagent={handleOpenProviderSubagent}
+          onArchiveSubagent={archiveSubagent}
+          onDetachSubagent={canDetachSubagents ? detachSubagent : undefined}
+        />
+      ) : null}
+      {hasPills ? (
+        <View style={styles.pillsRow} pointerEvents="box-none">
+          <AgentTaskList tasks={tasks} />
+          <PluginComposerPills
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            compact={isCompact}
+          />
+          <WorkspaceDiffStatPill
+            serverId={serverId}
+            workspaceId={workspaceId}
+            onPress={handleOpenChanges}
+          />
+          {hasModelTurnMetrics ? (
+            <AgentModelTurnMetricsPill serverId={serverId} agentId={agentId} />
+          ) : null}
+        </View>
+      ) : null}
+    </View>
   );
 });
 
 export function hasAgentTracks({
   subagentRows,
   tasks,
-  archiveFinishedStatus,
   hasPluginComposerPills = false,
+  hasModelTurnMetrics = false,
 }: {
   subagentRows: readonly SubagentRow[];
   tasks: readonly TodoEntry[] | undefined;
-  archiveFinishedStatus: ArchiveFinishedStatus;
   hasPluginComposerPills?: boolean;
+  hasModelTurnMetrics?: boolean;
 }): boolean {
   return (
-    subagentRows.length > 0 ||
+    subagentRows.some(isSubagentActiveOrAttention) ||
     Boolean(tasks?.length) ||
-    archiveFinishedStatus.kind !== "idle" ||
-    hasPluginComposerPills
+    hasPluginComposerPills ||
+    hasModelTurnMetrics
   );
 }
+
+const styles = StyleSheet.create((theme) => ({
+  container: {
+    width: "100%",
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[4],
+    paddingBottom: theme.spacing[2],
+    gap: theme.spacing[1.5],
+  },
+  pillsRow: {
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+  },
+}));

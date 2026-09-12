@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { Session } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import type { SessionOptions } from "./session.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { createTestPaseoDaemon } from "./test-utils/paseo-daemon.js";
@@ -148,6 +149,7 @@ describe("snapshot mutation ownership boundary", () => {
         tts: null,
         providerSnapshotManager: createProviderSnapshotManagerStub().manager,
         terminalManager: null,
+        hostPerformanceSampler: new HostPerformanceSampler(),
       }),
     );
 

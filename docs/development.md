@@ -685,6 +685,16 @@ PWA install metadata lives in `packages/app/public/manifest.json` and is linked
 from `packages/app/public/index.html`. Keep the install icons in `public/` so
 Cloudflare serves them from stable root URLs after `expo export`.
 
+On iOS standalone PWAs, `viewport-fit=cover` + `black-translucent` can make
+WebKit report `100dvh`/`window.innerHeight` short of the painted area at
+launch, leaving a dead band at the bottom. `useStandalonePwaViewportHeal`
+measures the real shortfall as `visualViewport.height - innerHeight` — the
+visual viewport is the actually-visible region, so it can never overshoot
+the way `env(safe-area-inset-*)` or `screen.height` arithmetic can — and
+extends the shell through `--paseo-viewport-compensation` in `index.html`.
+Separately, the first software-keyboard open can shrink the layout viewport
+until force-quit; the same hook forces a viewport re-measure for that.
+
 Do not add service-worker caching casually. Paseo is a live control surface for
 agents, and an aggressive service worker can strand installed users on stale web
 code. If offline behavior becomes a product requirement, add it deliberately

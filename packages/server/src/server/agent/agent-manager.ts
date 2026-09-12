@@ -182,6 +182,12 @@ function buildStoredAgentConfig(record: StoredAgentRecord): AgentSessionConfig {
   }
   if (record.config.mcpServers != null) config.mcpServers = record.config.mcpServers;
   if (record.config.readOnly != null) config.readOnly = record.config.readOnly;
+  if (record.config.durableInternal != null) {
+    config.durableInternal = record.config.durableInternal;
+  }
+  if (record.config.paseoToolPolicy != null) {
+    config.paseoToolPolicy = record.config.paseoToolPolicy;
+  }
   if (record.internal != null) config.internal = record.internal;
   if (config.readOnly) config.mcpServers = {};
   return stripInternalPaseoMcpServer(config);
@@ -289,6 +295,12 @@ export interface CreateAgentOptions {
   // undefined is an explicit decision: the agent never appears in the sidebar.
   workspaceId: string | undefined;
   owner?: AgentOwner;
+  /**
+   * Fork the new agent's native session from this source session, inheriting
+   * its transcript. Ignored unless the provider client advertises
+   * supportsSessionFork.
+   */
+  forkFrom?: AgentPersistenceHandle;
 }
 
 export interface AgentManagerOptions {
@@ -1249,10 +1261,15 @@ export class AgentManager {
 
   private buildCreateSessionOptions(options?: {
     persistSession?: boolean;
+    forkFrom?: AgentPersistenceHandle;
   }): AgentCreateSessionOptions | undefined {
-    return options?.persistSession === undefined
-      ? undefined
-      : { persistSession: options.persistSession };
+    if (options?.persistSession === undefined && options?.forkFrom === undefined) {
+      return undefined;
+    }
+    return {
+      ...(options.persistSession === undefined ? {} : { persistSession: options.persistSession }),
+      ...(options.forkFrom === undefined ? {} : { forkFrom: options.forkFrom }),
+    };
   }
 
   // Reconstruct an agent from provider persistence. Callers should explicitly
@@ -1450,7 +1467,12 @@ export class AgentManager {
     if (existingConfig.readOnly) {
       return { ...existingConfig, ...overrides, provider, readOnly: true, mcpServers: {} };
     }
-    return { ...existingConfig, ...overrides, provider };
+    const merged = { ...existingConfig, ...overrides, provider };
+    if (existingConfig.durableInternal === true) merged.durableInternal = true;
+    if (existingConfig.paseoToolPolicy !== undefined && merged.paseoToolPolicy === undefined) {
+      merged.paseoToolPolicy = existingConfig.paseoToolPolicy;
+    }
+    return merged;
   }
 
   private async reloadAgentSessionInternal(
@@ -3734,8 +3756,9 @@ export class AgentManager {
     if (!this.registry) {
       return;
     }
-    // Don't persist internal agents unless they are durable read-only auxiliary agents (e.g. Side chat)
-    if (agent.internal && !agent.config.readOnly) {
+    // Don't persist internal agents unless they are durable auxiliary agents (e.g. Side chat).
+    // Read-only internals are the legacy durable marker.
+    if (agent.internal && !agent.config.readOnly && agent.config.durableInternal !== true) {
       return;
     }
     await this.registry.applySnapshot(agent, options);
@@ -4978,16 +5001,24 @@ export class AgentManager {
     if (isReadOnly) {
       storedConfig.mcpServers = {};
     }
-    const paseoToolPolicy =
-      this.paseoToolsEnabled && !isReadOnly
-        ? this.resolvePaseoToolPolicy(storedConfig.provider)
-        : { enabled: false };
+    // Read-only agents only get daemon tools through an explicit per-agent
+    // policy (e.g. Side's fixed read-only allowlist); provider-level policy is
+    // ignored so a provider config cannot widen a confined agent.
+    let paseoToolPolicy: ProviderPaseoToolsPolicy | undefined;
+    if (!this.paseoToolsEnabled) {
+      paseoToolPolicy = { enabled: false };
+    } else if (isReadOnly) {
+      paseoToolPolicy = storedConfig.paseoToolPolicy ?? { enabled: false };
+    } else {
+      paseoToolPolicy =
+        storedConfig.paseoToolPolicy ?? this.resolvePaseoToolPolicy(storedConfig.provider);
+    }
     const launchConfig = this.applyDaemonAppendSystemPrompt(
       withRuntimePaseoMcpServer({
         config: isReadOnly ? { ...storedConfig, mcpServers: {} } : storedConfig,
         agentId,
         mcpBaseUrl:
-          this.paseoToolsEnabled && !isReadOnly && isPaseoToolPolicyEnabled(paseoToolPolicy)
+          this.paseoToolsEnabled && isPaseoToolPolicyEnabled(paseoToolPolicy)
             ? this.mcpBaseUrl
             : null,
         mcpAuthToken: this.mcpAuthToken,

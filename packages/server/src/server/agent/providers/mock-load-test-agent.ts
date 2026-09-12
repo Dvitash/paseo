@@ -252,6 +252,53 @@ function parseSteeringReplayShape(prompt: AgentPromptInput): SteeringReplayShape
   return match?.[1] === "claude" || match?.[1] === "codex" ? match[1] : null;
 }
 
+export const TOOL_ACTIVITY_PREVIEWS_PROMPT = "replay tool activity previews";
+
+export interface ToolActivityPreviewsRequest {
+  intervalMs: number;
+}
+
+export function parseToolActivityPreviewsPrompt(
+  prompt: AgentPromptInput,
+): ToolActivityPreviewsRequest | null {
+  const text = promptToText(prompt);
+  const match = /replay tool activity previews(?: with (\d+)ms tick interval)?/i.exec(text);
+  if (!match) {
+    return null;
+  }
+  const customInterval = Number(match[1]);
+  return {
+    intervalMs: Number.isSafeInteger(customInterval) && customInterval > 0 ? customInterval : 40,
+  };
+}
+
+export const ONE_LINE_JS_EVAL_TITLE = "Process DoubleCoins Purchase";
+export const ONE_LINE_JS_EVAL_SENTINEL = "COMPLETED_EVAL_SENTINEL_OUTPUT_END";
+export const ONE_LINE_JS_EVAL_TOKEN =
+  "PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz";
+export const ONE_LINE_JS_EVAL_ACTIONABLE_ERROR = "Paid pass: DoubleCoins";
+export const ONE_LINE_JS_EVAL_STACK_FRAME = "js-cell-example.js:6:16";
+
+export const HUB_ACTIVITY_PREVIEWS_PROMPT = "replay hub activity previews";
+
+export interface HubActivityPreviewsRequest {
+  intervalMs: number;
+}
+
+export function parseHubActivityPreviewsPrompt(
+  prompt: AgentPromptInput,
+): HubActivityPreviewsRequest | null {
+  const text = promptToText(prompt);
+  const match = /replay hub activity previews(?: with (\d+)ms tick interval)?/i.exec(text);
+  if (!match) {
+    return null;
+  }
+  const customInterval = Number(match[1]);
+  return {
+    intervalMs: Number.isSafeInteger(customInterval) && customInterval > 0 ? customInterval : 40,
+  };
+}
+
 function parseSettledAssistantImageMarkdown(prompt: AgentPromptInput): string | null {
   const match = /^emit settled assistant image markdown:\s*(!\[[^\]\r\n]*\]\(.+\))\s*$/i.exec(
     promptToText(prompt),
@@ -637,12 +684,43 @@ function createToolCall(input: {
   name: string;
   status: ToolCallTimelineItem["status"];
   detail: ToolCallDetail;
+  error?: unknown;
 }): ToolCallTimelineItem {
+  if (input.status === "failed") {
+    return {
+      type: "tool_call",
+      callId: input.callId,
+      name: input.name,
+      status: "failed",
+      error: input.error ?? "Failed",
+      detail: input.detail,
+    };
+  }
+  if (input.status === "running") {
+    return {
+      type: "tool_call",
+      callId: input.callId,
+      name: input.name,
+      status: "running",
+      error: null,
+      detail: input.detail,
+    };
+  }
+  if (input.status === "canceled") {
+    return {
+      type: "tool_call",
+      callId: input.callId,
+      name: input.name,
+      status: "canceled",
+      error: null,
+      detail: input.detail,
+    };
+  }
   return {
     type: "tool_call",
     callId: input.callId,
     name: input.name,
-    status: input.status,
+    status: "completed",
     error: null,
     detail: input.detail,
   };
@@ -822,11 +900,17 @@ export class MockLoadTestAgentSession implements AgentSession {
     const structuredBranchName = parseStructuredBranchNamePrompt(prompt);
     const settledAssistantImageMarkdown = parseSettledAssistantImageMarkdown(prompt);
     const steeringReplayShape = parseSteeringReplayShape(prompt);
+    const toolActivityPreviews = parseToolActivityPreviewsPrompt(prompt);
+    const hubActivityPreviews = parseHubActivityPreviewsPrompt(prompt);
     const scheduleTurn = () => {
       if (shouldEmitTurnFailure(prompt)) {
         this.scheduleFailedTurn(turn);
       } else if (steeringReplayShape) {
         this.scheduleSteeringReplayTurn(turn, steeringReplayShape);
+      } else if (toolActivityPreviews) {
+        this.scheduleToolActivityPreviewsTurn(turn, toolActivityPreviews);
+      } else if (hubActivityPreviews) {
+        this.scheduleHubActivityPreviewsTurn(turn, hubActivityPreviews);
       } else if (this.streamingAssistantResponse !== null) {
         this.scheduleStreamingAssistantTurn(turn, this.streamingAssistantResponse);
       } else if (this.assistantResponse !== null) {
@@ -1174,6 +1258,773 @@ export class MockLoadTestAgentSession implements AgentSession {
       }, 5_000);
       turn.timer.unref?.();
     }, 0);
+    turn.timer.unref?.();
+  }
+
+  private scheduleToolActivityPreviewsTurn(
+    turn: ActiveTurn,
+    request: ToolActivityPreviewsRequest,
+  ): void {
+    const evalCallId = `${turn.turnId}:eval:python`;
+    const pythonCode = [
+      "def fibonacci(n):",
+      "    if n <= 1:",
+      "        return n",
+      "    return fibonacci(n - 1) + fibonacci(n - 2)",
+      "",
+      "result = [fibonacci(i) for i in range(8)]",
+      "print(result)",
+    ].join("\n");
+    const notesText =
+      "Paseo activity previews provide immediate visibility into file operations and tool invocations without requiring manual expansion of every badge in the timeline.";
+    const longWriteContent = [
+      "// Activity preview configuration module",
+      "export interface ActivityPreviewConfig {",
+      "  readonly maxLines: number;",
+      "  readonly maxChars: number;",
+      "  readonly wrapProse: boolean;",
+      "}",
+      "",
+      "export const DEFAULT_PREVIEW_CONFIG: ActivityPreviewConfig = {",
+      "  maxLines: 8,",
+      "  maxChars: 2400,",
+      "  wrapProse: true,",
+      "};",
+      "",
+      "export const PREVIEW_SENTINEL = 'UNIQUE_PREVIEW_SENTINEL_OK';",
+    ].join("\n");
+    const jsCode = "const config = unknownEnvironment.getConfig();\nconsole.log(config);";
+    const jsError = "ReferenceError: unknownEnvironment is not defined";
+    const oneLineJsCode =
+      'const transactionToken = "PASEO_TX_TOKEN_UNBROKEN_LONG_SECRET_IDENTIFIER_STRING_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"; function verifyTransaction(receipt) { const { user, passId, quantity } = receipt; const metadata = { pass: passId, count: quantity, timestamp: Date.now(), audit: { source: "game_store", verified: true, tags: ["iap", "coins", "premium"] } }; return { valid: true, user, metadata }; } const pendingReceipt = { user: "player_9942", passId: "DoubleCoins", quantity: 2 }; const processedRecord = verifyTransaction(pendingReceipt); console.log("COMPLETED_EVAL_SENTINEL_OUTPUT_END");';
+    const wrappedRawError =
+      'Error: {"ok":false,"bridge":"ok","error":"user_code:1: Paid pass: DoubleCoins\\nuser_code:1 (at end of input)","output":[]}\n    at <anonymous> (js-cell-example.js:6:16)';
+    const jsonStringifiedContentEnvelope = JSON.stringify({
+      content: [
+        {
+          type: "text",
+          text: wrappedRawError,
+        },
+      ],
+      isError: true,
+    });
+
+    const steps: Array<() => void> = [
+      // 0: Running eval (Python input code with language/title; running unknown detail including code, output: null)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: evalCallId,
+            name: "eval",
+            status: "running",
+            detail: {
+              type: "unknown",
+              input: {
+                language: "python",
+                title: "Calculate Fibonacci",
+                code: pythonCode,
+              },
+              output: null,
+            },
+          }),
+        );
+      },
+      // 1: Update eval output details.cells (still running)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: evalCallId,
+            name: "eval",
+            status: "running",
+            detail: {
+              type: "unknown",
+              input: {
+                language: "python",
+                title: "Calculate Fibonacci",
+                code: pythonCode,
+              },
+              output: {
+                details: {
+                  language: "python",
+                  title: "Calculate Fibonacci",
+                  cells: [
+                    {
+                      id: "cell-0",
+                      title: "Calculate Fibonacci",
+                      language: "python",
+                      code: pythonCode,
+                      output: "[0, 1, 1, 2, 3, 5, 8, 13]",
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        );
+      },
+      // 2: Complete eval with output details.cells and completed result
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: evalCallId,
+            name: "eval",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                language: "python",
+                title: "Calculate Fibonacci",
+                code: pythonCode,
+              },
+              output: {
+                details: {
+                  language: "python",
+                  title: "Calculate Fibonacci",
+                  cells: [
+                    {
+                      id: "cell-0",
+                      title: "Calculate Fibonacci",
+                      language: "python",
+                      code: pythonCode,
+                      output: "[0, 1, 1, 2, 3, 5, 8, 13]",
+                    },
+                  ],
+                },
+                content: [{ type: "text", text: "[0, 1, 1, 2, 3, 5, 8, 13]" }],
+              },
+            },
+          }),
+        );
+      },
+      // 3: Write to notes.txt (paragraph that soft-wraps)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:write:notes`,
+            name: "write",
+            status: "completed",
+            detail: {
+              type: "write",
+              filePath: "notes.txt",
+              content: notesText,
+            },
+          }),
+        );
+      },
+      // 4: Edit notes.txt old/new diff
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:edit:notes`,
+            name: "edit",
+            status: "completed",
+            detail: {
+              type: "edit",
+              filePath: "notes.txt",
+              oldString: notesText,
+              newString:
+                "Paseo activity previews provide immediate visibility into file operations and tool invocations with instant inline previews for quick review.",
+              unifiedDiff: [
+                "--- notes.txt",
+                "+++ notes.txt",
+                "@@ -1,1 +1,1 @@",
+                `-${notesText}`,
+                "+Paseo activity previews provide immediate visibility into file operations and tool invocations with instant inline previews for quick review.",
+              ].join("\n"),
+            },
+          }),
+        );
+      },
+      // 5: Long write src/preview.ts (>8 lines ending unique sentinel)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:write:preview`,
+            name: "write",
+            status: "completed",
+            detail: {
+              type: "write",
+              filePath: "src/preview.ts",
+              content: longWriteContent,
+            },
+          }),
+        );
+      },
+      // 6: Failed JS eval carrying explicit error plus code/output
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:eval:failed-js`,
+            name: "eval",
+            status: "failed",
+            error: jsError,
+            detail: {
+              type: "unknown",
+              input: {
+                language: "javascript",
+                title: "Inspect Environment",
+                code: jsCode,
+              },
+              output: {
+                details: {
+                  language: "javascript",
+                  title: "Inspect Environment",
+                  cells: [
+                    {
+                      id: "cell-0",
+                      title: "Inspect Environment",
+                      language: "javascript",
+                      code: jsCode,
+                      output: jsError,
+                      error: jsError,
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        );
+      },
+      // 7: Failed one-line JS eval with long unbroken token and wrapped JSON error envelope
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:eval:wrapped-failure-js`,
+            name: "eval",
+            status: "failed",
+            error: jsonStringifiedContentEnvelope,
+            detail: {
+              type: "unknown",
+              input: {
+                language: "javascript",
+                title: ONE_LINE_JS_EVAL_TITLE,
+                code: oneLineJsCode,
+              },
+              output: {
+                details: {
+                  language: "javascript",
+                  title: ONE_LINE_JS_EVAL_TITLE,
+                  cells: [
+                    {
+                      id: "cell-0",
+                      title: ONE_LINE_JS_EVAL_TITLE,
+                      language: "javascript",
+                      code: oneLineJsCode,
+                      output: jsonStringifiedContentEnvelope,
+                      error: jsonStringifiedContentEnvelope,
+                    },
+                  ],
+                },
+                error: jsonStringifiedContentEnvelope,
+                content: [
+                  {
+                    type: "text",
+                    text: wrappedRawError,
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 8: Unrelated unknown and read tool (header-only)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:unknown:unrelated`,
+            name: "custom_lookup",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: { query: "status" },
+              output: { ok: true },
+            },
+          }),
+        );
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:read:config`,
+            name: "read",
+            status: "completed",
+            detail: {
+              type: "read",
+              filePath: "package.json",
+              content: '{\n  "name": "mock-app"\n}',
+            },
+          }),
+        );
+      },
+      // 9: Finish turn
+      () => {
+        this.finishTurnWithText(turn, "Replay tool activity previews complete.");
+      },
+    ];
+
+    let stepIndex = 0;
+    const executeNextStep = () => {
+      if (this.activeTurn !== turn) return;
+      this.clearTurnTimer(turn);
+      if (stepIndex === 0) {
+        this.emitTurnStarted(turn);
+      }
+      if (stepIndex < steps.length) {
+        const step = steps[stepIndex];
+        stepIndex += 1;
+        step();
+        if (stepIndex < steps.length) {
+          turn.timer = setTimeout(executeNextStep, request.intervalMs);
+          turn.timer.unref?.();
+        }
+      }
+    };
+
+    turn.timer = setTimeout(executeNextStep, 0);
+    turn.timer.unref?.();
+  }
+
+  private scheduleHubActivityPreviewsTurn(
+    turn: ActiveTurn,
+    request: HubActivityPreviewsRequest,
+  ): void {
+    const peerSendCallId = `${turn.turnId}:hub:send-peer`;
+    const logsCallId = `${turn.turnId}:hub:logs`;
+
+    const logLines = [
+      "[web-server] ready on port 3000",
+      "[web-server] database pool connected",
+      "[web-server] compiled client bundle in 180ms",
+      "[web-server] listening for incoming connections",
+      "[web-server] GET /api/health -> 200 OK",
+      "[web-server] GET /api/v1/projects -> 200 OK",
+      "[web-server] worker 1 ready",
+      "[web-server] worker 2 ready",
+      "[web-server] worker 3 ready",
+      "[web-server] worker 4 ready",
+      "[web-server] background scheduler initialized",
+      "[web-server] LOG_SENTINEL_SERVER_READY_OK",
+    ].join("\n");
+
+    const steps: Array<() => void> = [
+      // 0: Running peer send (to/message)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: peerSendCallId,
+            name: "hub",
+            status: "running",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "send",
+                to: "Worker",
+                message: "Deploying build v2.1 to staging cluster",
+                await: false,
+              },
+              output: null,
+            },
+          }),
+        );
+      },
+      // 1: Completed peer send with receipts
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: peerSendCallId,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "send",
+                to: "Worker",
+                message: "Deploying build v2.1 to staging cluster",
+                await: false,
+              },
+              output: {
+                op: "send",
+                from: "Main",
+                to: "Worker",
+                details: {
+                  receipts: [
+                    {
+                      to: "Worker",
+                      outcome: "injected",
+                    },
+                  ],
+                },
+                receipts: [
+                  {
+                    to: "Worker",
+                    outcome: "injected",
+                  },
+                ],
+                content: [
+                  {
+                    type: "text",
+                    text: "Delivered to 1 peer(s):\n- Worker: injected",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 2: Empty inbox
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:inbox`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "inbox",
+                peek: false,
+              },
+              output: {
+                op: "inbox",
+                from: "Main",
+                details: {
+                  inbox: [],
+                },
+                inbox: [],
+                content: [
+                  {
+                    type: "text",
+                    text: "Inbox empty.",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 3: Peer roster (list) with details.peers
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:list`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "list",
+                status: "running",
+              },
+              output: {
+                op: "list",
+                from: "Main",
+                details: {
+                  peers: [
+                    {
+                      id: "Worker",
+                      displayName: "task",
+                      kind: "sub",
+                      status: "running",
+                      parentId: "Main",
+                      unread: 0,
+                      activity: "Compiling production assets",
+                    },
+                  ],
+                  counts: {
+                    running: 1,
+                    idle: 0,
+                    parked: 0,
+                    shown: 1,
+                    truncated: 0,
+                  },
+                },
+                peers: [
+                  {
+                    id: "Worker",
+                    displayName: "task",
+                    kind: "sub",
+                    status: "running",
+                    parentId: "Main",
+                    unread: 0,
+                    activity: "Compiling production assets",
+                  },
+                ],
+                counts: {
+                  running: 1,
+                  idle: 0,
+                  parked: 0,
+                  shown: 1,
+                  truncated: 0,
+                },
+                content: [
+                  {
+                    type: "text",
+                    text: "1 peer(s) (running 1, idle 0, parked 0; shown 1, truncated 0):\n- Worker [task · sub · running] — Compiling production assets",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 4: Completed jobs with details.jobs resultText
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:jobs`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "jobs",
+              },
+              output: {
+                op: "jobs",
+                details: {
+                  jobs: [
+                    {
+                      id: "BuildJob",
+                      type: "task",
+                      status: "completed",
+                      label: "AssetBuilder",
+                      durationMs: 4200,
+                      resultText: "Artifacts built successfully: bundle.js (142KB)",
+                    },
+                  ],
+                },
+                jobs: [
+                  {
+                    id: "BuildJob",
+                    type: "task",
+                    status: "completed",
+                    label: "AssetBuilder",
+                    durationMs: 4200,
+                    resultText: "Artifacts built successfully: bundle.js (142KB)",
+                  },
+                ],
+                content: [
+                  {
+                    type: "text",
+                    text: "## Completed (1)\n\n### BuildJob [task] — completed\nArtifacts built successfully: bundle.js (142KB)",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 5: Process start (application/args + daemon)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:start`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "start",
+                name: "web-server",
+                application: "bun",
+                args: ["run", "dev"],
+              },
+              output: {
+                op: "start",
+                details: {
+                  daemon: {
+                    name: "web-server",
+                    id: "daemon-web-server-1",
+                    state: "ready",
+                    pid: 4120,
+                    createdAt: 1785350209652,
+                    startedAt: 1785350209655,
+                  },
+                },
+                daemon: {
+                  name: "web-server",
+                  id: "daemon-web-server-1",
+                  state: "ready",
+                  pid: 4120,
+                  createdAt: 1785350209652,
+                  startedAt: 1785350209655,
+                },
+                content: [
+                  {
+                    type: "text",
+                    text: "Started web-server: ready pid=4120 uptime=1.2s restarts=0",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 6: Process logs (running with input)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: logsCallId,
+            name: "hub",
+            status: "running",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "logs",
+                name: "web-server",
+                lines: 100,
+              },
+              output: null,
+            },
+          }),
+        );
+      },
+      // 7: Process logs (completed with multiline text and cursor/state)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: logsCallId,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "logs",
+                name: "web-server",
+                lines: 100,
+              },
+              output: {
+                op: "logs",
+                details: {
+                  cursor: 1042,
+                  state: "ready",
+                  timedOut: false,
+                },
+                cursor: 1042,
+                state: "ready",
+                timedOut: false,
+                content: [
+                  {
+                    type: "text",
+                    text: logLines,
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      // 8: Process send (name/keys CTRL_C + daemon)
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:send-process`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: {
+                op: "send",
+                name: "web-server",
+                keys: ["CTRL_C"],
+              },
+              output: {
+                op: "send",
+                details: {
+                  daemon: {
+                    name: "web-server",
+                    id: "daemon-web-server-1",
+                    state: "ready",
+                    pid: 4120,
+                  },
+                },
+                daemon: {
+                  name: "web-server",
+                  id: "daemon-web-server-1",
+                  state: "ready",
+                  pid: 4120,
+                },
+                content: [
+                  {
+                    type: "text",
+                    text: "Sent input to web-server: ready pid=4120",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+      },
+      () => {
+        this.emitTimeline(
+          turn.turnId,
+          createToolCall({
+            callId: `${turn.turnId}:hub:wait-peer`,
+            name: "hub",
+            status: "completed",
+            detail: {
+              type: "unknown",
+              input: { op: "wait", ids: ["OverlayGuard"] },
+              output: {
+                content: [{ type: "text", text: "OverlayGuard is still running" }],
+                details: {
+                  jobs: [
+                    {
+                      id: "OverlayGuard",
+                      type: "task",
+                      label: "OverlayGuard",
+                      status: "running",
+                      durationMs: 233000,
+                      resolvedModel: "google-antigravity/gemini-3.8-flash:high",
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        );
+      },
+      () => {
+        this.finishTurnWithText(turn, "Replay hub activity previews complete.");
+      },
+    ];
+
+    let stepIndex = 0;
+    const executeNextStep = () => {
+      if (this.activeTurn !== turn) return;
+      this.clearTurnTimer(turn);
+      if (stepIndex === 0) {
+        this.emitTurnStarted(turn);
+      }
+      if (stepIndex < steps.length) {
+        const step = steps[stepIndex];
+        stepIndex += 1;
+        step();
+        if (stepIndex < steps.length) {
+          turn.timer = setTimeout(executeNextStep, request.intervalMs);
+          turn.timer.unref?.();
+        }
+      }
+    };
+
+    turn.timer = setTimeout(executeNextStep, 0);
     turn.timer.unref?.();
   }
 

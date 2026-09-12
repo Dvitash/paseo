@@ -176,6 +176,83 @@ describe("projectTimelineRows", () => {
     expect(tool?.collapsed).toContain("tool_lifecycle");
   });
 
+  test("stamps startedAt and endedAt when collapsing tool lifecycle rows", () => {
+    const rows: AgentTimelineRow[] = [
+      {
+        seq: 1,
+        timestamp: "2026-02-13T00:00:00.000Z",
+        item: {
+          type: "tool_call",
+          callId: "call_timed",
+          name: "shell",
+          status: "running",
+          error: null,
+          detail: { type: "shell", command: "sleep 1" },
+        },
+      },
+      {
+        seq: 2,
+        timestamp: "2026-02-13T00:00:00.500Z",
+        item: {
+          type: "tool_call",
+          callId: "call_timed",
+          name: "shell",
+          status: "running",
+          error: null,
+          detail: { type: "shell", command: "sleep 1", output: "tick" },
+        },
+      },
+      {
+        seq: 3,
+        timestamp: "2026-02-13T00:00:01.000Z",
+        item: {
+          type: "tool_call",
+          callId: "call_timed",
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "sleep 1", output: "tick", exitCode: 0 },
+        },
+      },
+    ];
+
+    const projected = projectTimelineRows({ rows, mode: "projected" });
+
+    expect(projected).toHaveLength(1);
+    const tool = projected[0];
+    expect(tool?.item.type).toBe("tool_call");
+    if (tool?.item.type === "tool_call") {
+      expect(tool.item.startedAt).toBe("2026-02-13T00:00:00.000Z");
+      expect(tool.item.endedAt).toBe("2026-02-13T00:00:01.000Z");
+    }
+  });
+
+  test("stamps startedAt and endedAt on a single terminal tool call row", () => {
+    const rows: AgentTimelineRow[] = [
+      {
+        seq: 1,
+        timestamp: "2026-02-13T00:00:02.000Z",
+        item: {
+          type: "tool_call",
+          callId: "call_done",
+          name: "shell",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "ls", output: "ok", exitCode: 0 },
+        },
+      },
+    ];
+
+    const projected = projectTimelineRows({ rows, mode: "projected" });
+
+    const tool = projected[0];
+    expect(tool?.item.type).toBe("tool_call");
+    if (tool?.item.type === "tool_call") {
+      expect(tool.item.startedAt).toBe("2026-02-13T00:00:02.000Z");
+      expect(tool.item.endedAt).toBe("2026-02-13T00:00:02.000Z");
+    }
+  });
+
   test("replaces plugin rows with the same identity across turns", () => {
     const rows: AgentTimelineRow[] = [
       {

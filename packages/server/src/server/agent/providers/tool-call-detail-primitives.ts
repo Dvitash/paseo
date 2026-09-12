@@ -73,6 +73,10 @@ export const ToolShellInputSchema = z
         command: CommandValueSchema,
         cwd: z.string().optional(),
         directory: z.string().optional(),
+        // Claude/Codex/OpenCode report command timeouts in milliseconds.
+        timeout: z.number().finite().nonnegative().optional(),
+        timeoutMs: z.number().finite().nonnegative().optional(),
+        timeout_ms: z.number().finite().nonnegative().optional(),
       })
       .passthrough(),
     z
@@ -80,6 +84,9 @@ export const ToolShellInputSchema = z
         cmd: CommandValueSchema,
         cwd: z.string().optional(),
         directory: z.string().optional(),
+        timeout: z.number().finite().nonnegative().optional(),
+        timeoutMs: z.number().finite().nonnegative().optional(),
+        timeout_ms: z.number().finite().nonnegative().optional(),
       })
       .passthrough(),
   ])
@@ -102,6 +109,7 @@ export const ToolShellInputSchema = z
     return {
       command,
       cwd: nonEmptyString(value.cwd) ?? nonEmptyString(value.directory),
+      timeoutMs: value.timeoutMs ?? value.timeout_ms ?? value.timeout,
     };
   });
 
@@ -821,6 +829,7 @@ export function toShellToolDetail(
     ...(input?.cwd ? { cwd: input.cwd } : {}),
     ...(output?.output ? { output: output.output } : {}),
     ...(output?.exitCode !== undefined ? { exitCode: output.exitCode } : {}),
+    ...(input?.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
   };
 }
 

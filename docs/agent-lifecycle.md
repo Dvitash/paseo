@@ -78,6 +78,14 @@ Permission requests are notification checkpoints, not the end of that subscripti
 The permission notification includes the normalized request plus the child and request IDs, so the caller can inspect it and respond without fetching agent status.
 A watched child that closes before its finish event also notifies the caller so delegated work cannot disappear silently during archive or workspace teardown.
 
+## Attention and push routing
+
+`AgentManager` raises attention on three transitions: `running → idle` (finished), `→ error`, and the first pending permission. `computeNotificationPlan` (`packages/server/src/server/agent-attention-policy.ts`) then decides who hears about it.
+
+Clients report two clocks in `client_heartbeat`: `lastActivityAt` is a presence clock (Electron inflates it with OS idle time so a backgrounded desktop window still counts as present), and `lastAppActivityAt` only advances on real input inside the app window. Presence picks the single most-recently-active in-app recipient for `agent_attention_required`. Push scope is decided separately: `"all"` when no client is present, `"mobile"` when clients are present but no desktop app interaction is recent, and `"mobile"` again when a desktop is in use but `mobilePushOverride` applies (permission prompts and agents stamped `paseo.origin-device=mobile` at creation). A client actively watching the target — visible, focused, recently interacted — suppresses its own delivery; a mobile viewer suppresses push entirely, a desktop viewer only narrows it to mobile scope.
+
+`scope: "mobile"` reaches Expo tokens plus web-push subscriptions whose stored `deviceClass` is `"mobile"` (native apps and mobile browsers report `"mobile"`; subscriptions without a class are treated as desktop). Web-push subscriptions carry a 48h lease renewed only on client activity/reconnect — never on delivery, since a push service accepting an endpoint does not prove the client is still active.
+
 ## Provider-managed child agents
 
 Some providers can create their own child sessions inside one provider runtime. OMP's task tool reports these with `child_session` events; `AgentManager` imports the live provider handle, stamps `paseo.parent-agent-id`, and surfaces the result as a normal subagent in the parent's subagents track.
@@ -150,7 +158,16 @@ Running provider-native subagents contribute `running` to the workspace owned by
 
 ## The subagents track
 
-The track is a pill at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`): a count you can read at a glance, and a panel behind it — a popover on wide screens, a sheet on compact ones — holding the rows. It floats over the transcript rather than sitting in a band above the composer, so the timeline scrolls underneath it; `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the pill frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
+The track sits at the foot of an agent's pane (`packages/app/src/subagents/track.tsx`), listing its rows and floating over the transcript so the timeline scrolls underneath it. `packages/app/src/panels/agent-tracks.tsx` owns that placement, and the frame is shared with the task list in `packages/app/src/composer/tracks.tsx`.
+
+It has two shapes, chosen by form factor, because the same panel cannot serve both:
+
+- **Wide** — a card, open by default: a header with the count, then the rows. There is room above the composer, and the rows are the point.
+- **Compact** — a pull tab, collapsed to the header by default. The header states the count and is the pull handle; tapping it reveals the rows in place. A phone pane is mostly transcript, and an always-open card spends a third of the screen on a list that is usually just "running".
+
+Both shapes report the count with `buildSubagentPillPresentation`, so the header reads the same either way. The collapsed/expanded choice is a per-mount `useState`, not persisted: a fresh pane starts closed on compact.
+
+Rows carry the live activity from the child's own stream — the latest tool call or thought. On compact it gets the row's second line rather than sharing the first with the task and the elapsed counter, which squeezed all three to a few characters each.
 
 The rows combine two kinds of children:
 
@@ -184,7 +201,7 @@ Claude Code announces subagent lifecycle on the SDK stream (`task_started` / `ta
 
 Archived Paseo subagents disappear from the track, by design. To remove one from the track without closing its tab, use the **archive button** on the row — it opens a confirm dialog and archives the subagent on confirm. Provider-owned rows have no individual Paseo lifecycle controls.
 
-The **Archive finished** row at the foot of the panel covers every finished row. It archives idle or errored managed Paseo subagents one at a time, and hides completed, failed, or canceled provider-owned rows in the current app session. Native sessions and timelines are untouched. Running and initializing children remain in the track. If a hidden provider child starts running again, the app brings it back to the track.
+Finished rows are hidden from the track entirely — idle, errored, or closed managed children and completed, failed, or canceled provider-owned children do not render. Terminal status wins over `requiresAttention`, so a completed agent flagged `finished` stays hidden. To clean up a finished managed subagent, archive it from the sidebar agent list.
 
 To keep the agent alive but remove it from the parent's track, use **detach**. The daemon clears the relationship lifecycle labels, emits the normal agent update, and every client reclassifies the agent from subagent to root/sibling from that updated snapshot.
 
@@ -204,7 +221,7 @@ We considered universal decoupling (no tab close ever archives, archive is alway
 
 ### Subagent accumulation under long-lived parents
 
-A parent that spawns many subagents will see the panel's list grow; the pill only counts them. Managed Paseo subagents can be archived individually or with **Archive finished**. That action hides finished provider-owned rows locally; this presentation state resets when the app restarts.
+Finished children are hidden from the track, so the list only grows while subagents are running or need attention. Managed Paseo subagents can be archived individually from the sidebar agent list.
 
 ### Cross-client tab dismissal
 

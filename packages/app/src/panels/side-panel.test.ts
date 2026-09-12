@@ -252,6 +252,7 @@ describe("side-panel pure unit tests", () => {
       expect(SIDE_CHAT_TEST_IDS.capabilityMissing).toBe("side-panel-capability-missing");
       expect(SIDE_CHAT_TEST_IDS.input).toBe("side-input");
       expect(SIDE_CHAT_TEST_IDS.sendButton).toBe("side-send-button");
+      expect(SIDE_CHAT_TEST_IDS.statusButton).toBe("side-status-button");
       expect(SIDE_CHAT_TEST_IDS.providerTrigger).toBe("side-provider-trigger");
       expect(SIDE_CHAT_TEST_IDS.providerBadge).toBe("side-provider-badge");
       expect(SIDE_CHAT_TEST_IDS.unsupportedBanner).toBe("side-unsupported-provider-banner");

@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { getIsElectronRuntimeMac } from "@/constants/layout";
-import { useAggregatedAgents } from "./use-aggregated-agents";
+import { useAggregatedAgents, type AggregatedAgent } from "./use-aggregated-agents";
+import { useAppActivelyVisible } from "./use-app-visible";
+import { useSettings } from "./use-settings";
 import { getDesktopHost } from "@/desktop/host";
 import { useWorkspaceStatusesForBadges } from "@/stores/session-store-hooks";
 import { deriveMacDockBadgeCountFromWorkspaceStatuses } from "@/utils/desktop-badge-state";
+import {
+  ATTENTION_ALERT_TITLE,
+  setDocumentTitleAlert,
+  updateWebAppBadge,
+} from "@/utils/attention-alerts";
 import { isNative } from "@/constants/platform";
 
 type FaviconStatus = "none" | "running" | "attention";
@@ -24,16 +31,22 @@ const FAVICON_IMAGES: Record<ColorScheme, Record<FaviconStatus, { uri: string } 
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-function deriveFaviconStatus(
-  agents: ReturnType<typeof useAggregatedAgents>["agents"],
-): FaviconStatus {
+/** Agents blocked on a permission/question — the "needs input" alert state. */
+function deriveNeedsInput(agents: AggregatedAgent[]): boolean {
+  return agents.some(
+    (agent) =>
+      (agent.pendingPermissionCount ?? 0) > 0 ||
+      (agent.requiresAttention === true && agent.attentionReason === "permission"),
+  );
+}
+
+function deriveFaviconStatus(agents: AggregatedAgent[]): FaviconStatus {
   const hasRunning = agents.some((agent) => agent.status === "running");
   if (hasRunning) {
     return "running";
   }
   const hasAttention = agents.some((agent) => agent.requiresAttention);
-  const hasNeedsInput = agents.some((agent) => (agent.pendingPermissionCount ?? 0) > 0);
-  if (hasAttention || hasNeedsInput) {
+  if (hasAttention || deriveNeedsInput(agents)) {
     return "attention";
   }
   return "none";
@@ -96,8 +109,11 @@ async function updateMacDockBadge(count?: number) {
 export function useFaviconStatus() {
   const { agents } = useAggregatedAgents({ demand: !isNative });
   const workspaceStatuses = useWorkspaceStatusesForBadges();
+  const isActivelyVisible = useAppActivelyVisible();
+  const notificationFlash = useSettings((settings) => settings.notificationFlash);
   const [colorScheme, setColorScheme] = useState<ColorScheme>(getSystemColorScheme);
   const lastDockBadgeCountRef = useRef<number | undefined>(undefined);
+  const lastWebBadgeCountRef = useRef<number | undefined>(undefined);
 
   // Listen for system color scheme changes
   useEffect(() => {
@@ -124,5 +140,21 @@ export function useFaviconStatus() {
       lastDockBadgeCountRef.current = dockBadgeCount;
       void updateMacDockBadge(dockBadgeCount);
     }
+    if (dockBadgeCount !== lastWebBadgeCountRef.current) {
+      lastWebBadgeCountRef.current = dockBadgeCount;
+      void updateWebAppBadge(dockBadgeCount);
+    }
   }, [agents, colorScheme, workspaceStatuses]);
+
+  // Flash the document title while an agent needs input and the window is unfocused.
+  useEffect(() => {
+    if (isNative) return;
+
+    setDocumentTitleAlert({
+      active: notificationFlash && deriveNeedsInput(agents),
+      text: ATTENTION_ALERT_TITLE,
+      focused: isActivelyVisible,
+    });
+    return () => setDocumentTitleAlert({ active: false, text: "", focused: true });
+  }, [agents, isActivelyVisible, notificationFlash]);
 }

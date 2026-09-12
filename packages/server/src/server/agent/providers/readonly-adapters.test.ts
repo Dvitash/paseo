@@ -92,6 +92,46 @@ describe("Claude ReadOnly Adapter Enforcement", () => {
     await session.close();
   });
 
+  test("read-only sessions keep only the internal Paseo MCP server and pre-approve it", async () => {
+    const queryReturn = vi.fn().mockResolvedValue(undefined);
+    const queryFactory = vi.fn(() => ({
+      close: vi.fn(),
+      return: queryReturn,
+      supportedCommands: vi.fn().mockResolvedValue([]),
+      setPermissionMode: vi.fn().mockResolvedValue(undefined),
+    }));
+
+    const claudeClient = new ClaudeAgentClient({
+      logger,
+      resolveBinary: async () => "/bin/claude",
+      queryFactory: queryFactory as unknown as ClaudeQueryFactory,
+    });
+
+    const session = await claudeClient.createSession({
+      provider: "claude",
+      cwd: process.cwd(),
+      readOnly: true,
+      mcpServers: {
+        paseo: {
+          type: "http",
+          url: "http://127.0.0.1:6767/mcp/agents?callerAgentId=agent-1",
+        },
+        testMcp: { type: "stdio", command: "test", args: [] },
+      },
+    });
+
+    // ensureQuery is a private test seam on the session implementation.
+    const sessionInternals = session as unknown as { ensureQuery(): Promise<unknown> };
+    await sessionInternals.ensureQuery();
+
+    const options = queryFactory.mock.calls[0]?.[0].options as ClaudeOptions;
+    expect(Object.keys(options.mcpServers ?? {})).toEqual(["paseo"]);
+    expect(options.allowedTools).toEqual(expect.arrayContaining(["mcp__paseo"]));
+    expect(options.tools).toEqual(["Read", "Grep", "Glob"]);
+
+    await session.close();
+  });
+
   test("setMode is rejected with error in read-only mode", async () => {
     const claudeClient = new ClaudeAgentClient({
       logger,

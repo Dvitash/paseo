@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as waitForImmediate, setTimeout as delay } from "node:timers/promises";
@@ -22,12 +23,14 @@ import {
   type AgentProvider,
   type AgentRunOptions,
   type AgentRunResult,
+  type AgentCreateSessionOptions,
   type AgentRuntimeInfo,
   type AgentSession,
   type AgentSessionConfig,
   type AgentSlashCommand,
   type AgentStreamEvent,
   type AgentTimelineItem,
+  type AgentUsage,
   type FetchCatalogOptions,
   type ImportableProviderSession,
   type ImportProviderSessionContext,
@@ -105,6 +108,7 @@ import {
 import { OmpSubagentIndex } from "./subagent-index.js";
 import { mapOmpToolDetail } from "./tool-call-mapper.js";
 import { OmpUsagePoller, type OmpUsagePollScheduler } from "./usage-poller.js";
+import { ModelTurnTracker } from "../model-turn-tracker.js";
 import {
   buildOmpRpcUiPermissionResponse,
   mapOmpRpcUiPermissionRequest,
@@ -127,6 +131,7 @@ const OMP_CORE_CAPABILITIES: AgentCapabilityFlags = {
   supportsToolInvocations: true,
   supportsRewindConversation: true,
   supportsRewindFiles: false,
+  supportsSessionFork: true,
   supportsRewindBoth: false,
 };
 
@@ -139,6 +144,7 @@ export interface OmpAgentClientOptions {
   providerIdleScheduler?: OmpProviderIdleScheduler;
   noTurnScheduler?: OmpNoTurnScheduler;
   usagePollScheduler?: OmpUsagePollScheduler;
+  now?: () => number;
 }
 
 export interface OmpProviderIdleScheduler {
@@ -196,6 +202,7 @@ interface OmpAgentSessionOptions {
    */
   live?: boolean;
   cleanup?: () => void;
+  now?: () => number;
 }
 
 function createOmpProviderIdleScheduler(): OmpProviderIdleScheduler {
@@ -614,6 +621,39 @@ export default function paseoReadOnlyGuard(api) {
     path: filePath,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
+}
+
+/**
+ * Read the `providerPromptCacheKey` (falling back to the session id) from an
+ * OMP session file header. Best-effort: a missing or unreadable file yields
+ * undefined and the fork proceeds without an explicit cache key.
+ */
+async function readOmpSessionPromptCacheKey(sessionFile: string): Promise<string | undefined> {
+  try {
+    const handle = await open(sessionFile, "r");
+    try {
+      const buffer = Buffer.alloc(64 * 1024);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      const head = buffer.subarray(0, bytesRead).toString("utf8");
+      for (const line of head.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const entry = JSON.parse(trimmed) as {
+          type?: string;
+          providerPromptCacheKey?: string;
+          id?: string;
+        };
+        if (entry.type === "session") {
+          return entry.providerPromptCacheKey ?? entry.id;
+        }
+      }
+      return undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 function extractToolName(tool: unknown): string | null {
   if (tool && typeof tool === "object" && "name" in tool && typeof tool.name === "string") {
@@ -1075,6 +1115,8 @@ export class OmpAgentSession implements AgentSession {
   private readonly providerIdleScheduler: OmpProviderIdleScheduler;
   private readonly noTurnScheduler: OmpNoTurnScheduler;
   private readonly usagePoller: OmpUsagePoller;
+  private latestUsageTotals: AgentUsage = {};
+  private readonly modelTurnTracker: ModelTurnTracker;
   private closed = false;
   private live: boolean;
   private readonly emittedUserMessageIds = new Set<string>();
@@ -1091,21 +1133,21 @@ export class OmpAgentSession implements AgentSession {
     this.cleanup = options.cleanup;
     this.providerIdleScheduler = options.providerIdleScheduler ?? createOmpProviderIdleScheduler();
     this.noTurnScheduler = options.noTurnScheduler ?? createOmpNoTurnScheduler();
+    this.modelTurnTracker = new ModelTurnTracker({ now: options.now });
     this.usagePoller = new OmpUsagePoller({
       scheduler: options.usagePollScheduler,
       readStats: () => this.runtimeSession.getSessionStats(),
       onUsage: (usage, turnId) => {
-        this.emit({
-          type: "usage_updated",
-          provider: this.provider,
-          usage,
-          ...(turnId === undefined ? {} : { turnId }),
-        });
+        this.latestUsageTotals = { ...this.latestUsageTotals, ...usage };
+        this.emitUsageUpdate(turnId);
       },
       onPollError: (error) => {
         this.logger.debug({ err: error }, "OMP context usage poll failed");
       },
     });
+    if (this.live === false) {
+      void this.restoreModelTurnFromMessages();
+    }
     this.subagentCardTracker = new OmpSubagentCardTracker({
       scheduler: options.subagentCardScheduler,
     });
@@ -1234,7 +1276,37 @@ export class OmpAgentSession implements AgentSession {
     };
   }
 
+  private emitUsageUpdate(turnId?: string): void {
+    const modelTurn = this.modelTurnTracker.currentModelTurn();
+    const usage: AgentUsage = {
+      ...this.latestUsageTotals,
+      ...(modelTurn ? { modelTurn } : {}),
+    };
+    if (Object.keys(usage).length === 0) {
+      return;
+    }
+    this.emit({
+      type: "usage_updated",
+      provider: this.provider,
+      usage,
+      ...(turnId === undefined ? {} : { turnId }),
+    });
+  }
+
+  private async restoreModelTurnFromMessages(): Promise<void> {
+    try {
+      const messages = await this.runtimeSession.getMessages();
+      const restored = this.modelTurnTracker.hydrateFromMessages(messages);
+      if (restored) {
+        this.emitUsageUpdate();
+      }
+    } catch (error) {
+      this.logger.debug({ err: error }, "Failed to restore model turn from OMP get_messages");
+    }
+  }
+
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
+    await this.restoreModelTurnFromMessages();
     yield* streamOmpHistory({
       sessionFile: this.state.sessionFile,
       runtimeSession: this.runtimeSession,
@@ -1346,6 +1418,9 @@ export class OmpAgentSession implements AgentSession {
       this.activeAssistantMessageId = null;
       this.activeTurnTerminalAssistantMessage = null;
       this.clearNoTurnBuffers();
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.emit({
         type: "turn_canceled",
         provider: this.provider,
@@ -2006,6 +2081,9 @@ export class OmpAgentSession implements AgentSession {
     this.activeTurnHasUserMessage = false;
     this.activeTurnTerminalAssistantMessage = null;
     this.clearNoTurnBuffers();
+    if (this.modelTurnTracker.finalizeRunning()) {
+      this.emitUsageUpdate(this.activeTurnId ?? undefined);
+    }
     this.emit({
       type: "turn_failed",
       provider: this.provider,
@@ -2030,11 +2108,13 @@ export class OmpAgentSession implements AgentSession {
       case "turn_start":
         this.activeTurnStarted = true;
         this.clearNoTurnBuffers();
+        this.modelTurnTracker.onTurnStart();
         this.emit({
           type: "turn_started",
           provider: this.provider,
           turnId,
         });
+        this.emitUsageUpdate(turnId);
         return;
       case "message_start":
         this.handleMessageStart(event);
@@ -2181,6 +2261,17 @@ export class OmpAgentSession implements AgentSession {
     if (event.message.role !== "assistant") {
       return;
     }
+    const eventType = event.assistantMessageEvent.type;
+    if (
+      eventType === "text_delta" ||
+      eventType === "thinking_delta" ||
+      eventType === "toolcall_delta"
+    ) {
+      const updated = this.modelTurnTracker.onContentDelta();
+      if (updated) {
+        this.emitUsageUpdate(turnId);
+      }
+    }
     if (event.assistantMessageEvent.type === "text_delta") {
       // Omp-compatible runtimes may emit updates without a preceding message_start.
       this.activeAssistantMessageId ??= event.message.responseId || randomUUID();
@@ -2227,6 +2318,8 @@ export class OmpAgentSession implements AgentSession {
       if (turnId) {
         this.activeTurnTerminalAssistantMessage = event.message;
       }
+      this.modelTurnTracker.onAssistantMessageEnd(event.message);
+      this.emitUsageUpdate(turnId);
       return;
     }
     if (event.message.role === "custom") {
@@ -2350,6 +2443,9 @@ export class OmpAgentSession implements AgentSession {
     const errorMessage = latestOmpErrorMessage(messages);
     if (typeof errorMessage === "string" && errorMessage.length > 0) {
       this.usagePoller.stopTurn();
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.emit({
         type: "turn_failed",
         provider: this.provider,
@@ -2407,6 +2503,7 @@ export class OmpAgentClient implements AgentClient {
   private readonly providerIdleScheduler?: OmpProviderIdleScheduler;
   private readonly noTurnScheduler?: OmpNoTurnScheduler;
   private readonly usagePollScheduler?: OmpUsagePollScheduler;
+  private readonly now?: () => number;
   private readonly runtime: OmpRuntime;
 
   constructor(options: OmpAgentClientOptions) {
@@ -2430,6 +2527,7 @@ export class OmpAgentClient implements AgentClient {
     this.providerIdleScheduler = options.providerIdleScheduler;
     this.noTurnScheduler = options.noTurnScheduler;
     this.usagePollScheduler = options.usagePollScheduler;
+    this.now = options.now;
     this.runtime =
       options.runtime ?? createRuntime(options.logger, runtimeSettings, this.providerParams);
   }
@@ -2444,96 +2542,149 @@ export class OmpAgentClient implements AgentClient {
     await setOmpHostTools(runtimeSession, catalog);
   }
 
+  /**
+   * Fail-closed check that the read-only guard extension loaded and the live
+   * tool surface contains nothing beyond read/grep/glob plus host tools.
+   */
+  private async verifyReadOnlyConfinement(
+    runtimeSession: OmpRuntimeSession,
+    hostToolNames: string[],
+  ): Promise<void> {
+    const commands = await runtimeSession.getCommands();
+    const guardLoaded = commands.some((cmd) => cmd.name === PASEO_OMP_READONLY_GUARD_COMMAND);
+    if (!guardLoaded) {
+      throw new Error(
+        "OMP read-only guard extension failed to load: sentinel command not registered",
+      );
+    }
+    const state = await runtimeSession.getState();
+    const rawDumpTools = (state as Record<string, unknown>).dumpTools;
+    if (Array.isArray(rawDumpTools)) {
+      const allowed = new Set(["read", "grep", "glob", ...hostToolNames]);
+      const disallowed = rawDumpTools
+        .map(extractToolName)
+        .filter((name): name is string => typeof name === "string" && !allowed.has(name));
+      if (disallowed.length > 0) {
+        throw new Error(
+          `OMP read-only tool confinement verification failed: unexpected tools present (${disallowed.join(", ")})`,
+        );
+      }
+    }
+  }
+
   async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,
+    options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
     const launchMode = this.resolveLaunchMode(config.modeId);
     const isReadOnly = config.readOnly === true;
+    // --fork takes a session file path; a bare sessionId (in-memory sessions)
+    // cannot be resolved, so only a nativeHandle qualifies.
+    const forkSource = options?.forkFrom?.nativeHandle;
     const hostToolNames = launchContext?.paseoTools
       ? [...launchContext.paseoTools.tools.keys()]
       : [];
 
-    let readOnlyConfig: OmpTempFile | null = null;
-    let readOnlyGuard: OmpTempFile | null = null;
-    if (isReadOnly) {
-      readOnlyConfig = createOmpReadOnlyConfigFile();
-      readOnlyGuard = createOmpReadOnlyGuardExtensionFile({ hostToolNames });
-    }
-
-    let runtimeSession: OmpRuntimeSession;
-    try {
-      runtimeSession = await this.runtime.startSession({
-        cwd: config.cwd,
-        protocolMode: "rpc-ui",
-        model: config.model,
-        thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
-        noSession: config.internal === true && !isReadOnly,
-        modeId: launchMode.modeId,
-        extraArgs: launchMode.extraArgs,
-        systemPrompt: composeSystemPromptParts(
-          config.systemPrompt,
-          config.daemonAppendSystemPrompt,
-        ),
-        env: launchContext?.env,
-        readOnly: isReadOnly,
-        configFilePath: readOnlyConfig?.path,
-        extensionPaths: readOnlyGuard ? [readOnlyGuard.path] : undefined,
-      });
-    } catch (error) {
-      readOnlyConfig?.cleanup();
-      readOnlyGuard?.cleanup();
-      throw error;
-    }
-
+    const readOnlyConfig = isReadOnly ? createOmpReadOnlyConfigFile() : null;
+    const readOnlyGuard = isReadOnly
+      ? createOmpReadOnlyGuardExtensionFile({ hostToolNames })
+      : null;
     const cleanupFiles = () => {
       readOnlyConfig?.cleanup();
       readOnlyGuard?.cleanup();
     };
 
+    // OMP suppresses the inherited providerPromptCacheKey whenever the fork
+    // launch passes shape flags (--model/--thinking/--tools/…). Carry the
+    // parent's key explicitly so the fork still routes to its cache pool.
+    const promptCacheKey = forkSource ? await readOmpSessionPromptCacheKey(forkSource) : undefined;
+
+    let runtimeSession: OmpRuntimeSession;
+    try {
+      runtimeSession = await this.startRuntimeSession({
+        config,
+        launchMode,
+        isReadOnly,
+        forkSource,
+        promptCacheKey,
+        launchContext,
+        readOnlyConfigPath: readOnlyConfig?.path,
+        readOnlyGuardPath: readOnlyGuard?.path,
+      });
+    } catch (error) {
+      cleanupFiles();
+      throw error;
+    }
+
     try {
       if (isReadOnly) {
-        const commands = await runtimeSession.getCommands();
-        const guardLoaded = commands.some((cmd) => cmd.name === PASEO_OMP_READONLY_GUARD_COMMAND);
-        if (!guardLoaded) {
-          throw new Error(
-            "OMP read-only guard extension failed to load: sentinel command not registered",
-          );
-        }
-        const state = await runtimeSession.getState();
-        const rawDumpTools = (state as Record<string, unknown>).dumpTools;
-        if (Array.isArray(rawDumpTools)) {
-          const allowed = new Set(["read", "grep", "glob", ...hostToolNames]);
-          const disallowed = rawDumpTools
-            .map(extractToolName)
-            .filter((name): name is string => typeof name === "string" && !allowed.has(name));
-          if (disallowed.length > 0) {
-            throw new Error(
-              `OMP read-only tool confinement verification failed: unexpected tools present (${disallowed.join(", ")})`,
-            );
-          }
-        }
+        await this.verifyReadOnlyConfinement(runtimeSession, hostToolNames);
       }
-
       await this.configureNativePaseoTools(runtimeSession, launchContext?.paseoTools);
-      return new OmpAgentSession({
+      return this.buildSession(
         runtimeSession,
         config,
-        initialState: await runtimeSession.getState(),
-        currentModeId: launchMode.modeId,
-        logger: this.logger,
-        subagentCardScheduler: this.subagentCardScheduler,
-        providerIdleScheduler: this.providerIdleScheduler,
-        noTurnScheduler: this.noTurnScheduler,
-        usagePollScheduler: this.usagePollScheduler,
-        paseoTools: launchContext?.paseoTools,
-        cleanup: cleanupFiles,
-      });
+        launchMode.modeId,
+        launchContext,
+        cleanupFiles,
+      );
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
       cleanupFiles();
       throw error;
     }
+  }
+
+  private async buildSession(
+    runtimeSession: OmpRuntimeSession,
+    config: AgentSessionConfig,
+    modeId: string | null,
+    launchContext: AgentLaunchContext | undefined,
+    cleanup: () => void,
+  ): Promise<OmpAgentSession> {
+    return new OmpAgentSession({
+      runtimeSession,
+      config,
+      initialState: await runtimeSession.getState(),
+      currentModeId: modeId,
+      logger: this.logger,
+      subagentCardScheduler: this.subagentCardScheduler,
+      providerIdleScheduler: this.providerIdleScheduler,
+      noTurnScheduler: this.noTurnScheduler,
+      usagePollScheduler: this.usagePollScheduler,
+      now: this.now,
+      paseoTools: launchContext?.paseoTools,
+      cleanup,
+    });
+  }
+  private async startRuntimeSession(input: {
+    config: AgentSessionConfig;
+    launchMode: { modeId: string | null; extraArgs?: string[] };
+    isReadOnly: boolean;
+    forkSource?: string;
+    promptCacheKey?: string;
+    launchContext?: AgentLaunchContext;
+    readOnlyConfigPath?: string;
+    readOnlyGuardPath?: string;
+  }): Promise<OmpRuntimeSession> {
+    const { config, launchMode, isReadOnly, forkSource, promptCacheKey, launchContext } = input;
+    return this.runtime.startSession({
+      cwd: config.cwd,
+      ...(forkSource ? { fork: forkSource } : {}),
+      ...(promptCacheKey ? { promptCacheKey } : {}),
+      protocolMode: "rpc-ui",
+      model: config.model,
+      thinkingOptionId: normalizeOmpThinkingOption(config.thinkingOptionId) ?? undefined,
+      noSession: config.internal === true && !isReadOnly && config.durableInternal !== true,
+      modeId: launchMode.modeId ?? undefined,
+      extraArgs: launchMode.extraArgs,
+      systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
+      env: launchContext?.env,
+      readOnly: isReadOnly,
+      configFilePath: input.readOnlyConfigPath,
+      extensionPaths: input.readOnlyGuardPath ? [input.readOnlyGuardPath] : undefined,
+    });
   }
 
   async resumeSession(
@@ -2619,6 +2770,7 @@ export class OmpAgentClient implements AgentClient {
         providerIdleScheduler: this.providerIdleScheduler,
         noTurnScheduler: this.noTurnScheduler,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
         paseoTools: launchContext?.paseoTools,
         live: false,
         cleanup: cleanupFiles,

@@ -59,14 +59,15 @@ test("systemd quoting preserves spaces and escapes specifiers", () => {
   assert.throws(() => quoteSystemd("path\0bad"), /single-line/);
 });
 
-test("daemon update requests are manual and owner/main restricted", () => {
+test("daemon update requests allow trusted main push or owner manual dispatch", () => {
   const workflow = load(
     readFileSync(
       new URL("../.github/workflows/personal-update-daemon.yml", import.meta.url),
       "utf8",
     ),
   );
-  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  assert.deepEqual(Object.keys(workflow.on), ["push", "workflow_dispatch"]);
+  assert.deepEqual(workflow.on.push.branches, ["main"]);
   assert.equal(workflow.on.workflow_dispatch.inputs.desktop.default, "none");
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.desktop.options, ["none", "windows-x64"]);
   assert.equal(typeof workflow.on.workflow_dispatch.inputs.request_id, "object");
@@ -75,6 +76,8 @@ test("daemon update requests are manual and owner/main restricted", () => {
   assert.match(workflow.jobs.build.if, /github\.repository == 'Dvitash\/paseo'/);
   assert.match(workflow.jobs.build.if, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow.jobs.build.if, /github\.actor == 'Dvitash'/);
+  assert.match(workflow.jobs.build.if, /github\.event_name == 'push'/);
+  assert.match(workflow.jobs.build.if, /github\.event_name == 'workflow_dispatch'/);
   assert.equal(workflow.jobs.build.uses, "./.github/workflows/personal-build.yml");
   assert.equal(workflow.jobs.build.with.desktop, "${{ inputs.desktop || 'none' }}");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);

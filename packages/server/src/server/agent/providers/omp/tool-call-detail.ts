@@ -313,6 +313,8 @@ export function mapToolDetail(
         command: toolCall.args.command,
         output: summary.output,
         exitCode: summary.exitCode,
+        // OMP's bash timeout arg is seconds; the wire detail carries ms.
+        ...(toolCall.args.timeout !== undefined ? { timeoutMs: toolCall.args.timeout * 1000 } : {}),
       };
     }
     case "read":

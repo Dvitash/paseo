@@ -288,3 +288,42 @@ describe("sendOsNotification", () => {
     });
   });
 });
+
+describe("shouldPresentForegroundNotification", () => {
+  it("presents server-routed agent attention pushes", async () => {
+    const { shouldPresentForegroundNotification } = await loadModuleForPlatform("ios");
+    expect(
+      shouldPresentForegroundNotification({
+        serverId: "srv-1",
+        agentId: "agent-1",
+        reason: "finished",
+      }),
+    ).toBe(true);
+    expect(
+      shouldPresentForegroundNotification({
+        serverId: "srv-1",
+        agentId: "a",
+        reason: "permission",
+      }),
+    ).toBe(true);
+  });
+
+  it("presents server-routed terminal attention pushes", async () => {
+    const { shouldPresentForegroundNotification } = await loadModuleForPlatform("ios");
+    expect(
+      shouldPresentForegroundNotification({
+        serverId: "srv-1",
+        terminalId: "term-1",
+        cwd: "/repo",
+      }),
+    ).toBe(true);
+  });
+
+  it("suppresses everything else while foregrounded", async () => {
+    const { shouldPresentForegroundNotification } = await loadModuleForPlatform("ios");
+    expect(shouldPresentForegroundNotification(undefined)).toBe(false);
+    expect(shouldPresentForegroundNotification({})).toBe(false);
+    expect(shouldPresentForegroundNotification({ serverId: "srv-1" })).toBe(false);
+    expect(shouldPresentForegroundNotification({ reason: "unknown" })).toBe(false);
+  });
+});

@@ -188,6 +188,25 @@ If you serve the UI over HTTPS but the app tries to connect over `ws://` (and th
 
 For the remote/relay path (driving a daemon through the Paseo relay rather than a reverse proxy), the relay has its own public-vs-internal TLS settings, see [Security](/docs/security).
 
+## PWA notifications
+
+The self-hosted web app can receive background notifications without keeping a tab or WebSocket
+open. Serve the updated app and daemon over **HTTPS**; plain HTTP on a LAN does not support Web Push.
+
+On iPhone or iPad, use iOS/iPadOS 16.4 or newer, add Paseo to your Home Screen, then launch it from
+that icon. You do not need an Apple Developer account or a native build.
+
+Open **Settings → your host → Overview → Web Push Notifications**, choose **Enable**, and allow notifications.
+Use **Send test** to check delivery. Enable each host separately. **Disable** removes that host's
+subscription without changing your other hosts or the native app.
+
+The daemon sends encrypted notifications through your browser's push provider (Apple, Google,
+Mozilla, or Microsoft), so it needs outbound HTTPS access to that service. Signing keys stay in
+your Paseo home directory; keep that directory private and preserve it across daemon updates.
+Notification subscriptions use a 48-hour lease: reopen Paseo and connect to the host at least once
+every two days to keep receiving them. Existing attention rules still suppress pushes while you
+are actively using Paseo.
+
 ## Tunnels
 
 If you don't want to manage a reverse proxy or open ports, a tunnel gives you an HTTPS URL that forwards to your local daemon.

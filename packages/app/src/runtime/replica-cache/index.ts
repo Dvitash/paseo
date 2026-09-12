@@ -18,6 +18,7 @@ import {
   isUnreconciledLocalUserMessage,
   type AgentToolCallData,
   type StreamItem,
+  type TimelinePosition,
 } from "@/types/stream";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { clearLegacyReplicaCache } from "./legacy-cleanup";
@@ -161,6 +162,9 @@ const StoredTimelineItemSchema = z.discriminatedUnion("kind", [
     ...TimelineItemBaseShape,
     kind: z.literal("tool_call"),
     provider: AgentProviderSchema,
+    // COMPAT(tool-call-timing): absent on caches written before wall-clock tracking.
+    startedAt: IsoDateSchema.optional(),
+    endedAt: IsoDateSchema.optional(),
     item: AgentTimelineItemPayloadSchema.refine((item) => item.type === "tool_call"),
   }),
   z.strictObject({
@@ -410,6 +414,8 @@ function serializeAgentToolCall(data: AgentToolCallData): StoredToolCall {
     name: data.name,
     detail: data.detail,
     ...(data.metadata ? { metadata: data.metadata } : {}),
+    ...(data.startedAt ? { startedAt: data.startedAt } : {}),
+    ...(data.endedAt ? { endedAt: data.endedAt } : {}),
   };
   switch (data.status) {
     case "running":
@@ -473,6 +479,8 @@ function serializeTimelineItem(item: StreamItem): StoredTimelineItem | null {
         ...base,
         kind: item.kind,
         provider: item.payload.data.provider,
+        ...(item.startedAt ? { startedAt: item.startedAt.toISOString() } : {}),
+        ...(item.endedAt ? { endedAt: item.endedAt.toISOString() } : {}),
         item: serializeAgentToolCall(item.payload.data),
       };
     case "plugin":
@@ -559,29 +567,44 @@ function deserializeBuiltinTimelineItem(
         ...(item.trigger ? { trigger: item.trigger } : {}),
         ...(item.preTokens !== undefined ? { preTokens: item.preTokens } : {}),
       };
-    case "tool_call": {
-      const tool = item.item;
-      if (tool.type !== "tool_call") {
-        throw new Error("Stored tool call contains a non-tool timeline item");
-      }
-      return {
-        ...base,
-        kind: item.kind,
-        payload: {
-          source: "agent",
-          data: {
-            provider: item.provider,
-            callId: tool.callId,
-            name: tool.name,
-            status: tool.status,
-            error: tool.error,
-            detail: tool.detail,
-            ...(tool.metadata ? { metadata: tool.metadata } : {}),
-          },
-        },
-      };
-    }
+    case "tool_call":
+      return deserializeStoredToolCall(item, base);
   }
+}
+
+function deserializeStoredToolCall(
+  item: Extract<StoredTimelineItem, { kind: "tool_call" }>,
+  base: {
+    id: string;
+    timelineCursor?: TimelinePosition;
+    turnId?: string;
+    timestamp: Date;
+  },
+): StreamItem {
+  const tool = item.item;
+  if (tool.type !== "tool_call") {
+    throw new Error("Stored tool call contains a non-tool timeline item");
+  }
+  return {
+    ...base,
+    kind: item.kind,
+    ...(item.startedAt || tool.startedAt
+      ? { startedAt: new Date(item.startedAt ?? tool.startedAt!) }
+      : {}),
+    ...(item.endedAt || tool.endedAt ? { endedAt: new Date(item.endedAt ?? tool.endedAt!) } : {}),
+    payload: {
+      source: "agent",
+      data: {
+        provider: item.provider,
+        callId: tool.callId,
+        name: tool.name,
+        status: tool.status,
+        error: tool.error,
+        detail: tool.detail,
+        ...(tool.metadata ? { metadata: tool.metadata } : {}),
+      },
+    },
+  };
 }
 
 function serializeProjectPlacement(agent: Agent): StoredAgent["projectPlacement"] {

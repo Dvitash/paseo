@@ -24,6 +24,8 @@ import {
   SessionInboundMessageSchema,
   type ActiveTurnBehavior,
   type ServerInfoStatusPayload,
+  type WebPushSubscription,
+  type HostPerformanceSnapshot,
 } from "@getpaseo/protocol/messages";
 import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
 import type {
@@ -949,6 +951,7 @@ const DEFAULT_LIVENESS_TIMEOUT_MS = 5000;
 const LIVENESS_HEARTBEAT_INTERVAL_MS = 10_000;
 const LIVENESS_HEARTBEAT_TIMEOUT_MS = 15_000;
 const LIVENESS_FAILURE_RECONNECT_THRESHOLD = 2;
+export const ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS = 5000;
 
 /** Default timeout for waiting for connection before sending queued messages */
 const DEFAULT_SEND_QUEUE_TIMEOUT_MS = DEFAULT_SESSION_RPC_TIMEOUT_MS;
@@ -1150,6 +1153,7 @@ export class DaemonClient {
   private livenessHeartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLivenessRttMs: number | null = null;
   private consecutiveLivenessFailures = 0;
+  private activeEnsureConnectedCheck: DaemonTransport | null = null;
 
   constructor(private config: DaemonClientConfig) {
     this.logger = config.logger ?? consoleLogger;
@@ -1423,6 +1427,7 @@ export class DaemonClient {
       this.runtimeMetrics?.flush({ final: true });
       this.runtimeMetrics = null;
     }
+    this.activeEnsureConnectedCheck = null;
     this.updateConnectionState(
       { status: "disposed" },
       { event: "DISPOSE", reason: "Client closed", reasonCode: "disposed" },
@@ -1436,10 +1441,16 @@ export class DaemonClient {
     if (!this.shouldReconnect) {
       this.shouldReconnect = true;
     }
-    if (
-      this.connectionState.status === "connected" ||
-      this.connectionState.status === "connecting"
-    ) {
+    if (this.connectionState.status === "connecting") {
+      return;
+    }
+    if (this.connectionState.status === "connected") {
+      const currentTransport = this.transport;
+      if (!currentTransport || this.activeEnsureConnectedCheck === currentTransport) {
+        return;
+      }
+      this.activeEnsureConnectedCheck = currentTransport;
+      void this.verifyConnectedTransportHealth(currentTransport).catch(() => {});
       return;
     }
     if (this.reconnectTimeout) {
@@ -1450,7 +1461,34 @@ export class DaemonClient {
       this.attemptConnect();
       return;
     }
-    void this.connect();
+    void this.connect().catch(() => {});
+  }
+
+  private async verifyConnectedTransportHealth(currentTransport: DaemonTransport): Promise<void> {
+    // A correlated reply proves this foreground check reached the host; an old
+    // heartbeat pong buffered while the app was suspended must not satisfy it.
+    try {
+      await this.ping({ timeoutMs: ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS });
+    } catch (error) {
+      if (this.connectionState.status !== "connected" || this.transport !== currentTransport) {
+        return;
+      }
+      const reason =
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message.trim()
+          : "Health check failed";
+      this.disposeTransport(1001, reason);
+      this.scheduleReconnect({
+        reason,
+        event: "HEALTH_CHECK_FAILED",
+        reasonCode: "health_check_failed",
+      });
+      this.ensureConnected();
+    } finally {
+      if (this.activeEnsureConnectedCheck === currentTransport) {
+        this.activeEnsureConnectedCheck = null;
+      }
+    }
   }
 
   getConnectionState(): ConnectionState {
@@ -1911,18 +1949,22 @@ export class DaemonClient {
 
   sendHeartbeat(params: {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId?: string | null;
     lastActivityAt: string;
+    lastAppActivityAt?: string;
     appVisible: boolean;
     appVisibilityChangedAt?: string;
   }): void {
     this.sendSessionMessage({
       type: "client_heartbeat",
       deviceType: params.deviceType,
+      deviceClass: params.deviceClass,
       focusedAgentId: params.focusedAgentId,
       focusedTerminalId: params.focusedTerminalId ?? null,
       lastActivityAt: params.lastActivityAt,
+      lastAppActivityAt: params.lastAppActivityAt,
       appVisible: params.appVisible,
       appVisibilityChangedAt: params.appVisibilityChangedAt,
     });
@@ -1942,6 +1984,43 @@ export class DaemonClient {
       message: { type: "push.unregister.request", token, requestId },
       responseType: "push.unregister.response",
       timeout: PUSH_TOKEN_REVOCATION_TIMEOUT_MS,
+    });
+  }
+
+  async getWebPushConfig(requestId?: string): Promise<{ publicKey: string }> {
+    const reqId = requestId ?? this.createRequestId();
+    const payload = await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.get_config.request", requestId: reqId },
+      responseType: "push.web.get_config.response",
+    });
+    return { publicKey: payload.publicKey };
+  }
+
+  async subscribeWebPush(subscription: WebPushSubscription, requestId?: string): Promise<void> {
+    const reqId = requestId ?? this.createRequestId();
+    await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.subscribe.request", subscription, requestId: reqId },
+      responseType: "push.web.subscribe.response",
+    });
+  }
+
+  async unsubscribeWebPush(endpoint: string, requestId?: string): Promise<void> {
+    const reqId = requestId ?? this.createRequestId();
+    await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.unsubscribe.request", endpoint, requestId: reqId },
+      responseType: "push.web.unsubscribe.response",
+    });
+  }
+
+  async testWebPush(endpoint: string, requestId?: string): Promise<void> {
+    const reqId = requestId ?? this.createRequestId();
+    await this.sendCorrelatedSessionRequest({
+      requestId: reqId,
+      message: { type: "push.web.test.request", endpoint, requestId: reqId },
+      responseType: "push.web.test.response",
     });
   }
 
@@ -4937,7 +5016,11 @@ export class DaemonClient {
   async patchDaemonConfig(
     config: MutableDaemonConfigPatch,
     requestId?: string,
-  ): Promise<{ requestId: string; config: MutableDaemonConfig }> {
+  ): Promise<{
+    requestId: string;
+    config: MutableDaemonConfig;
+    restartRequiredPaths?: string[];
+  }> {
     return this.sendCorrelatedSessionRequest({
       requestId,
       message: {
@@ -5015,6 +5098,21 @@ export class DaemonClient {
         type: "provider.usage.list.request",
       },
     });
+  }
+
+  async getHostPerformanceSnapshot(options?: {
+    requestId?: string;
+    timeout?: number;
+  }): Promise<HostPerformanceSnapshot> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"host.performance.get_snapshot.response">({
+        requestId: options?.requestId,
+        timeout: options?.timeout,
+        message: {
+          type: "host.performance.get_snapshot.request",
+        },
+      });
+    return payload.snapshot;
   }
 
   async listCommands(options: ListCommandsOptions): Promise<ListCommandsPayload>;

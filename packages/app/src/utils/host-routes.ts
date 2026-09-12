@@ -494,6 +494,7 @@ export const SETTINGS_SECTION_SLUGS = [
   "appearance",
   "layout",
   "editor",
+  "voice",
   "shortcuts",
   "integrations",
   "notifications",

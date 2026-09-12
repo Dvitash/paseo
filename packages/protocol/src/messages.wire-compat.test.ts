@@ -389,3 +389,116 @@ test("blocked setup preserves the legacy failed shape and optional provenance", 
     legacySnapshot.parse(failed),
   );
 });
+
+test("agent snapshots preserve modelTurn metrics and accept payloads without modelTurn", () => {
+  const baseSnapshot = {
+    id: "agent-1",
+    provider: "omp",
+    cwd: "/workspace",
+    status: "idle",
+    model: null,
+    persistence: null,
+    lastUserMessageAt: null,
+    createdAt: "2026-09-09T12:00:00.000Z",
+    updatedAt: "2026-09-09T12:00:00.000Z",
+    capabilities: {
+      supportsStreaming: true,
+      supportsSessionPersistence: true,
+      supportsDynamicModes: true,
+      supportsMcpServers: true,
+      supportsReasoningStream: true,
+      supportsToolInvocations: true,
+    },
+    availableModes: [],
+    currentModeId: null,
+    pendingPermissions: [],
+    activeTurn: null,
+    title: null,
+    labels: {},
+    lastUsage: {
+      inputTokens: 100,
+      outputTokens: 50,
+      modelTurn: {
+        status: "completed",
+        ttftMs: 250,
+        tokensPerSecond: 45.2,
+      },
+    },
+  };
+
+  const parsed = AgentSnapshotPayloadSchema.parse(baseSnapshot);
+  expect(parsed.lastUsage?.modelTurn).toEqual({
+    status: "completed",
+    ttftMs: 250,
+    tokensPerSecond: 45.2,
+  });
+
+  // Older snapshot without modelTurn still parses cleanly
+  const olderSnapshot = {
+    ...baseSnapshot,
+    lastUsage: { inputTokens: 100, outputTokens: 50 },
+  };
+  expect(AgentSnapshotPayloadSchema.parse(olderSnapshot).lastUsage?.modelTurn).toBeUndefined();
+});
+
+test("server_info accepts modelTurnMetrics feature flag", () => {
+  const serverInfo = {
+    type: "server_info",
+    payload: {
+      version: "0.8.0",
+      status: "server_info",
+      serverId: "server-1",
+      features: {
+        modelTurnMetrics: true,
+      },
+    },
+  };
+  expect(ServerInfoStatusPayloadSchema.parse(serverInfo.payload).features?.modelTurnMetrics).toBe(
+    true,
+  );
+});
+
+test("attention notifications preserve agentTitle in both wire variants", () => {
+  const notification = {
+    title: "Agent finished",
+    body: "Refactor auth: Done.",
+    data: {
+      serverId: "srv-1",
+      workspaceId: "ws-1",
+      agentId: "agent-1",
+      agentTitle: "Refactor auth",
+      reason: "finished",
+    },
+  };
+
+  const legacy = {
+    type: "agent_stream",
+    payload: {
+      agentId: "agent-1",
+      event: {
+        type: "attention_required",
+        provider: "claude",
+        reason: "finished",
+        timestamp: "2026-09-10T00:00:00.000Z",
+        shouldNotify: false,
+        notification,
+      },
+      timestamp: "2026-09-10T00:00:00.000Z",
+    },
+  };
+  const parsedLegacy = SessionOutboundMessageSchema.parse(legacy);
+  expect(parsedLegacy).toEqual(legacy);
+
+  const dedicated = {
+    type: "agent_attention_required",
+    payload: {
+      agentId: "agent-1",
+      reason: "finished",
+      timestamp: "2026-09-10T00:00:00.000Z",
+      shouldNotify: false,
+      notification,
+    },
+  };
+  const parsedDedicated = SessionOutboundMessageSchema.parse(dedicated);
+  expect(parsedDedicated).toEqual(dedicated);
+});

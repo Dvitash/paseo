@@ -57,7 +57,7 @@ test.describe("provider usage tooltip", () => {
       });
       await expect(page.getByText("Test plan")).toBeVisible();
       await expect(page.getByText("Session", { exact: true })).toBeVisible();
-      await expect(page.getByText("42%")).toBeVisible();
+      await expect(page.locator("#overlay-root").getByText("58%")).toBeVisible();
     } finally {
       await session.cleanup();
     }
@@ -97,7 +97,7 @@ test.describe("provider usage tooltip", () => {
 
       await meter.hover();
       await usageFixture.waitForRequestCount(1);
-      await expect(page.getByText("41%")).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator("#overlay-root").getByText("59%")).toBeVisible({ timeout: 10_000 });
 
       await page.mouse.move(0, 0);
       await expect(page.getByText("Mock provider", { exact: true })).toHaveCount(0);
@@ -105,7 +105,7 @@ test.describe("provider usage tooltip", () => {
       await meter.hover();
       await usageFixture.waitForRequestCount(2);
       expect(usageFixture.requestCount()).toBe(2);
-      await expect(page.getByText("64%")).toBeVisible();
+      await expect(page.locator("#overlay-root").getByText("36%")).toBeVisible();
     } finally {
       await session.cleanup();
     }

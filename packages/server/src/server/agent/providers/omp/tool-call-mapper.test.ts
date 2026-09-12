@@ -20,6 +20,18 @@ describe("OMP tool call mapper", () => {
     });
     expect(
       mapOmpToolDetail(
+        parseToolArgs("bash", { command: "sleep 5", timeout: 300 }),
+        parseToolResult({ content: [{ type: "text", text: "done" }] }),
+      ),
+    ).toEqual({
+      type: "shell",
+      command: "sleep 5",
+      output: "done",
+      exitCode: null,
+      timeoutMs: 300_000,
+    });
+    expect(
+      mapOmpToolDetail(
         parseToolArgs("read", { path: "fixture.txt" }),
         parseToolResult({
           content: [{ type: "text", text: "[fixture.txt#0063]\n1:alpha\n2:beta\n3:" }],

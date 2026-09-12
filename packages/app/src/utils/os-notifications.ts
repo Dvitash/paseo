@@ -19,6 +19,25 @@ interface WebNotificationInstance {
 
 export const WEB_NOTIFICATION_CLICK_EVENT = "paseo:web-notification-click";
 
+const ATTENTION_REASONS = new Set(["finished", "error", "permission"]);
+
+/**
+ * Whether a remote push should present a banner while the app is foregrounded.
+ * Server-routed attention pushes (agent + terminal) are already suppressed
+ * server-side when the user is actively viewing the target, so any that
+ * arrive deserve foreground presentation.
+ */
+export function shouldPresentForegroundNotification(
+  data: Record<string, unknown> | undefined,
+): boolean {
+  if (!data) return false;
+  if (typeof data.reason === "string" && ATTENTION_REASONS.has(data.reason)) {
+    return true;
+  }
+  // Terminal attention pushes carry terminalId + serverId, no reason.
+  return typeof data.terminalId === "string" && typeof data.serverId === "string";
+}
+
 let permissionRequest: Promise<boolean> | null = null;
 let notificationIconUrl: string | null | undefined;
 

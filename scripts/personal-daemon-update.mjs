@@ -371,7 +371,9 @@ export function emitCommitStatus({
   }
 }
 
-function newestSuccessfulRequest(runs, installedAt) {
+export const ACCEPTED_EVENTS = new Set(["push", "workflow_dispatch"]);
+
+export function newestSuccessfulRequest(runs, installedAt) {
   if (!Array.isArray(runs)) throw new Error("Expected GitHub workflow run array");
   const installedTime = Date.parse(installedAt);
   return runs
@@ -379,7 +381,7 @@ function newestSuccessfulRequest(runs, installedAt) {
       (run) =>
         run.status === "completed" &&
         run.conclusion === "success" &&
-        run.event === "workflow_dispatch" &&
+        ACCEPTED_EVENTS.has(run.event) &&
         Number.isSafeInteger(run.databaseId) &&
         Date.parse(run.createdAt) > installedTime,
     )
@@ -388,20 +390,31 @@ function newestSuccessfulRequest(runs, installedAt) {
     )[0];
 }
 
-function trustedRunDetails(details, newest, config) {
-  if (!details || typeof details !== "object") return false;
+function hasTrustedRepositoryAndActor(details, config) {
   const expectedRepo = config.repository.toLowerCase();
   if (details.repository?.full_name?.toLowerCase() !== expectedRepo) return false;
   if (details.head_repository && details.head_repository.full_name?.toLowerCase() !== expectedRepo)
     return false;
-  if (details.actor?.login?.toLowerCase() !== config.owner.toLowerCase()) return false;
+  if (details.event === "workflow_dispatch") {
+    if (details.actor?.login?.toLowerCase() !== config.owner.toLowerCase()) return false;
+  }
+  return true;
+}
+
+export function trustedRunDetails(details, newest, config) {
+  if (!details || typeof details !== "object") return false;
+  if (!newest || typeof newest !== "object") return false;
+  if (!ACCEPTED_EVENTS.has(details.event)) return false;
+  if (details.event !== newest.event) return false;
+  if (!hasTrustedRepositoryAndActor(details, config)) return false;
+  if (details.id != null && Number.isSafeInteger(details.id) && details.id !== newest.databaseId)
+    return false;
   if (details.head_sha !== newest.headSha || !/^[0-9a-f]{40}$/i.test(details.head_sha))
     return false;
   if (Date.parse(details.created_at) !== Date.parse(newest.createdAt)) return false;
   return (
     details.status === "completed" &&
     details.conclusion === "success" &&
-    details.event === "workflow_dispatch" &&
     details.head_branch === "main" &&
     details.path === `.github/workflows/${config.workflow}`
   );
@@ -436,8 +449,6 @@ export function fetchEligibleWorkflowRun({
     workflow,
     "--branch",
     "main",
-    "--event",
-    "workflow_dispatch",
     "--status",
     "success",
     "--json",
@@ -449,7 +460,8 @@ export function fetchEligibleWorkflowRun({
     throw new Error(`Failed to list workflow runs: ${listRes.stderr || listRes.stdout}`);
   const newest = newestSuccessfulRequest(JSON.parse(listRes.stdout), installedAt);
   // Never fall back to an older request after the newest request has been handled.
-  if (!newest || alreadyHandledRequest(root, newest)) return null;
+  if (!newest || !ACCEPTED_EVENTS.has(newest.event) || alreadyHandledRequest(root, newest))
+    return null;
   const apiRes = runCommand(ghPath, [
     "api",
     `repos/${repository}/actions/runs/${newest.databaseId}`,

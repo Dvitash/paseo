@@ -167,6 +167,7 @@ export function Button({
   trailing,
   style,
   textStyle,
+  numberOfLines,
   disabled,
   loading = false,
   accessibilityRole,
@@ -180,6 +181,7 @@ export function Button({
     trailing?: ReactNode;
     style?: StyleProp<ViewStyle>;
     textStyle?: StyleProp<TextStyle>;
+    numberOfLines?: number;
     loading?: boolean;
   }
 >) {
@@ -273,7 +275,11 @@ export function Button({
         iconSize={buttonIconSize[size]}
         uniProps={resolveIconMapping()}
       />
-      {children != null ? <Text style={resolvedTextStyle}>{children}</Text> : null}
+      {children != null ? (
+        <Text style={resolvedTextStyle} numberOfLines={numberOfLines}>
+          {children}
+        </Text>
+      ) : null}
       {trailing}
     </Pressable>
   );

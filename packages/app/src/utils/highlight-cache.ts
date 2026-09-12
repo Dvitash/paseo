@@ -117,20 +117,27 @@ export function clearHighlightCache(): void {
 // Tokenize `code` to per-line tokens, cached. Returns null when the language is
 // unsupported, the input is over the size cap, or parsing throws — callers then
 // render plain text.
-export function tokenizeToLines(code: string, ext: string | null): HighlightToken[][] | null {
-  if (!ext) return null;
+export function tokenizeFileToLines(
+  code: string,
+  filename: string | null,
+): HighlightToken[][] | null {
+  if (!filename) return null;
   if (code.length > MAX_HIGHLIGHT_CHARS) return null;
-  const cacheKey = `${ext}:${code}`;
+  const cacheKey = `${filename}:${code}`;
   const cached = tokenizationCache.get(cacheKey);
   if (cached) return cached;
   let lines: HighlightToken[][];
   try {
-    lines = highlightCode(code, `x.${ext}`);
+    lines = highlightCode(code, filename);
   } catch {
     return null;
   }
   tokenizationCache.set(cacheKey, lines);
   return lines;
+}
+
+export function tokenizeToLines(code: string, ext: string | null): HighlightToken[][] | null {
+  return tokenizeFileToLines(code, ext ? `x.${ext}` : null);
 }
 
 function toKeyedLine(tokens: HighlightToken[], lineIndex: number): KeyedLine {
@@ -141,6 +148,14 @@ function toKeyedLine(tokens: HighlightToken[], lineIndex: number): KeyedLine {
       token,
     })),
   };
+}
+
+export function highlightFileToKeyedLines(
+  code: string,
+  filename: string | null,
+): KeyedLine[] | null {
+  const lines = tokenizeFileToLines(code, filename);
+  return lines ? lines.map(toKeyedLine) : null;
 }
 
 export function highlightToKeyedLines(code: string, ext: string | null): KeyedLine[] | null {

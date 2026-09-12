@@ -19,6 +19,7 @@ import {
 import type { CreatePaseoWorktreeWorkflowResult } from "../../worktree-session.js";
 import {
   createWorkspaceProvisioningService,
+  resolvePaseoWorktreeAllocationRoot,
   WorkspaceProvisioningError,
   type WorkspaceProvisioningService,
 } from "./workspace-provisioning-service.js";
@@ -79,6 +80,36 @@ function gitService() {
         currentBranch: worktreeRoot ? (gitBranches.get(worktreeRoot) ?? "main") : null,
         remoteUrl: null,
         worktreeRoot,
+        isPaseoOwnedWorktree: false,
+        mainRepoRoot: null,
+      };
+    },
+  });
+}
+
+// Presents `worktreeRoot` (and anything under it) as a Paseo-owned worktree of
+// `mainRepoRoot`, the shape the real git service reports for ~/.paseo/worktrees.
+function paseoWorktreeGitService(mainRepoRoot: string, worktreeRoot: string) {
+  return createNoopWorkspaceGitService({
+    peekSnapshot: () => null,
+    getCheckout: async (cwd: string) => {
+      if (cwd === worktreeRoot || cwd.startsWith(`${worktreeRoot}${path.sep}`)) {
+        return {
+          cwd,
+          isGit: true,
+          currentBranch: "feature/worktree",
+          remoteUrl: null,
+          worktreeRoot,
+          isPaseoOwnedWorktree: true,
+          mainRepoRoot,
+        };
+      }
+      return {
+        cwd,
+        isGit: true,
+        currentBranch: "main",
+        remoteUrl: null,
+        worktreeRoot: cwd,
         isPaseoOwnedWorktree: false,
         mainRepoRoot: null,
       };
@@ -155,7 +186,10 @@ test("re-opening Windows-equivalent workspace cwd spellings reuses the active an
 
   await workspaceRegistry.archive(created.workspaceId, ARCHIVED_AT);
   const reopened = await provisioning.findOrCreateWorkspaceForDirectory(cwd);
-  expect(reopened).toMatchObject({ workspaceId: created.workspaceId, archivedAt: null });
+  expect(reopened).toMatchObject({
+    workspaceId: created.workspaceId,
+    archivedAt: null,
+  });
   expect(await workspaceRegistry.list()).toHaveLength(1);
 });
 
@@ -304,7 +338,10 @@ test("uses one workspace snapshot when reopening an archived workspace", async (
 
   const reopened = await snapshotProvisioning.findOrCreateWorkspaceForDirectory(repo);
 
-  expect(reopened).toMatchObject({ workspaceId: created.workspaceId, archivedAt: null });
+  expect(reopened).toMatchObject({
+    workspaceId: created.workspaceId,
+    archivedAt: null,
+  });
   expect(await workspaceRegistry.list()).toHaveLength(1);
 });
 
@@ -530,7 +567,10 @@ test("createWorkspaceForDirectory refreshes an explicit project's stale Git kind
     displayName: "Saved project name",
     timestamp: ARCHIVED_AT,
   });
-  await projectRegistry.upsert({ ...project, customName: "Pinned project name" });
+  await projectRegistry.upsert({
+    ...project,
+    customName: "Pinned project name",
+  });
 
   const workspace = await provisioning.createWorkspaceForDirectory(
     rootPath,
@@ -585,6 +625,147 @@ test("findOrCreateProjectForDirectory keeps nested selected roots independent", 
   expect(await projectRegistry.list()).toHaveLength(2);
 });
 
+test("resolvePaseoWorktreeAllocationRoot maps a Paseo-owned worktree root to its main repo", () => {
+  const worktreeRoot = path.join(tmpDir, "worktrees", "hash", "slug");
+  const mainRepoRoot = path.join(tmpDir, "main-repo");
+  mkdirSync(worktreeRoot, { recursive: true });
+
+  expect(
+    resolvePaseoWorktreeAllocationRoot(worktreeRoot, {
+      isPaseoOwnedWorktree: true,
+      worktreeRoot,
+      mainRepoRoot,
+    }),
+  ).toBe(mainRepoRoot);
+});
+
+test("resolvePaseoWorktreeAllocationRoot maps a Paseo-owned worktree subdirectory to its main repo", () => {
+  const worktreeRoot = path.join(tmpDir, "worktrees", "hash", "slug");
+  const mainRepoRoot = path.join(tmpDir, "main-repo");
+  const subdirectory = path.join(worktreeRoot, "packages", "server");
+  mkdirSync(subdirectory, { recursive: true });
+
+  expect(
+    resolvePaseoWorktreeAllocationRoot(subdirectory, {
+      isPaseoOwnedWorktree: true,
+      worktreeRoot,
+      mainRepoRoot,
+    }),
+  ).toBe(path.join(mainRepoRoot, "packages", "server"));
+});
+
+test("resolvePaseoWorktreeAllocationRoot keeps a plain git worktree at its own root", () => {
+  const worktreeRoot = path.join(tmpDir, "plain-worktree");
+  mkdirSync(worktreeRoot);
+
+  expect(
+    resolvePaseoWorktreeAllocationRoot(worktreeRoot, {
+      isPaseoOwnedWorktree: false,
+      worktreeRoot,
+      mainRepoRoot: path.join(tmpDir, "main-repo"),
+    }),
+  ).toBe(worktreeRoot);
+});
+
+test("resolvePaseoWorktreeAllocationRoot keeps the selection without both worktree roots", () => {
+  const worktreeRoot = path.join(tmpDir, "worktrees", "hash", "slug");
+  mkdirSync(worktreeRoot, { recursive: true });
+
+  expect(
+    resolvePaseoWorktreeAllocationRoot(worktreeRoot, {
+      isPaseoOwnedWorktree: true,
+      worktreeRoot,
+      mainRepoRoot: null,
+    }),
+  ).toBe(worktreeRoot);
+  expect(
+    resolvePaseoWorktreeAllocationRoot(worktreeRoot, {
+      isPaseoOwnedWorktree: true,
+      worktreeRoot: null,
+      mainRepoRoot: path.join(tmpDir, "main-repo"),
+    }),
+  ).toBe(worktreeRoot);
+});
+
+test("resolvePaseoWorktreeAllocationRoot keeps a selection outside the worktree root", () => {
+  const worktreeRoot = path.join(tmpDir, "worktrees", "hash", "slug");
+  const outside = path.join(tmpDir, "elsewhere");
+  mkdirSync(worktreeRoot, { recursive: true });
+
+  expect(
+    resolvePaseoWorktreeAllocationRoot(outside, {
+      isPaseoOwnedWorktree: true,
+      worktreeRoot,
+      mainRepoRoot: path.join(tmpDir, "main-repo"),
+    }),
+  ).toBe(outside);
+});
+
+test("opening a Paseo-owned worktree directory allocates the main repository project", async () => {
+  const mainRepoRoot = path.join(tmpDir, "main-repo");
+  const worktreeRoot = path.join(tmpDir, "worktrees", "hash", "slug");
+  mkdirSync(worktreeRoot, { recursive: true });
+  const worktreeProvisioning = createWorkspaceProvisioningService({
+    workspaceRegistry,
+    projectRegistry,
+    workspaceGitService: paseoWorktreeGitService(mainRepoRoot, worktreeRoot),
+  });
+  const mainProject = await worktreeProvisioning.findOrCreateProjectForDirectory(mainRepoRoot);
+
+  const workspace = await worktreeProvisioning.findOrCreateWorkspaceForDirectory(worktreeRoot);
+
+  expect(workspace).toMatchObject({
+    projectId: mainProject.projectId,
+    cwd: worktreeRoot,
+    kind: "worktree",
+    mainRepoRoot,
+  });
+  const projects = await projectRegistry.list();
+  expect(projects).toHaveLength(1);
+  expect(projects.some((project) => project.rootPath === worktreeRoot)).toBe(false);
+});
+
+test("createWorkspaceForWorktree adopts a racing directory workspace for the same cwd", async () => {
+  const mainRepoRoot = path.join(tmpDir, "main-repo");
+  const worktreeRoot = path.join(tmpDir, "worktrees", "hash", "slug");
+  mkdirSync(worktreeRoot, { recursive: true });
+  const worktreeProvisioning = createWorkspaceProvisioningService({
+    workspaceRegistry,
+    projectRegistry,
+    workspaceGitService: paseoWorktreeGitService(mainRepoRoot, worktreeRoot),
+  });
+  const mainWorkspace = await worktreeProvisioning.findOrCreateWorkspaceForDirectory(mainRepoRoot);
+  const openedByDirectory =
+    await worktreeProvisioning.findOrCreateWorkspaceForDirectory(worktreeRoot);
+
+  const created = await worktreeProvisioning.createWorkspaceForWorktree({
+    sourceCwd: mainRepoRoot,
+    repoRoot: mainRepoRoot,
+    cwd: worktreeRoot,
+    worktreeRoot,
+    branch: "feature/worktree",
+    baseBranch: "main",
+    title: "Worktree title",
+  });
+
+  expect(created).toMatchObject({
+    workspaceId: openedByDirectory.workspaceId,
+    createdAt: openedByDirectory.createdAt,
+    projectId: mainWorkspace.projectId,
+    cwd: worktreeRoot,
+    kind: "worktree",
+    branch: "feature/worktree",
+    baseBranch: "main",
+    worktreeRoot,
+    isPaseoOwnedWorktree: true,
+    mainRepoRoot,
+    title: "Worktree title",
+  });
+  const workspaces = await workspaceRegistry.list();
+  expect(workspaces).toHaveLength(2);
+  expect(workspaces.filter((workspace) => workspace.cwd === worktreeRoot)).toHaveLength(1);
+});
+
 test("runInImportWorkspace uses an active requested workspace without creating another", async () => {
   const cwd = path.join(tmpDir, "requested");
   mkdirSync(cwd);
@@ -595,7 +776,10 @@ test("runInImportWorkspace uses an active requested workspace without creating a
     async (target) => target.workspaceId,
   );
 
-  expect(result).toEqual({ value: workspace.workspaceId, createdWorkspace: null });
+  expect(result).toEqual({
+    value: workspace.workspaceId,
+    createdWorkspace: null,
+  });
   expect(await workspaceRegistry.list()).toEqual([workspace]);
 });
 
@@ -609,7 +793,10 @@ test("runInImportWorkspace reuses an active workspace for an untargeted import",
     async (target) => target.workspaceId,
   );
 
-  expect(result).toEqual({ value: workspace.workspaceId, createdWorkspace: null });
+  expect(result).toEqual({
+    value: workspace.workspaceId,
+    createdWorkspace: null,
+  });
   expect(await workspaceRegistry.list()).toEqual([workspace]);
 });
 
@@ -624,7 +811,10 @@ test("runInImportWorkspace unarchives a workspace for an untargeted import", asy
     async (target) => target.workspaceId,
   );
 
-  expect(result).toEqual({ value: workspace.workspaceId, createdWorkspace: null });
+  expect(result).toEqual({
+    value: workspace.workspaceId,
+    createdWorkspace: null,
+  });
   expect(await workspaceRegistry.get(workspace.workspaceId)).toMatchObject({
     workspaceId: workspace.workspaceId,
     archivedAt: null,

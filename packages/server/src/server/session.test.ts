@@ -20,6 +20,7 @@ import {
   type FileTransferFrame,
 } from "@getpaseo/protocol/binary-frames/index";
 import { Session } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { OWNER_PERMISSIONS, type DaemonPermission } from "./authorization/index.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
 import { StructuredAgentFallbackError } from "./agent/agent-response-loop.js";
@@ -323,12 +324,14 @@ interface SessionForTestOptions {
   daemonRuntimeConfig?: SessionOptions["daemonRuntimeConfig"];
   downloadTokenStore?: SessionOptions["downloadTokenStore"];
   pushNotifications?: SessionOptions["pushNotifications"];
+  webPush?: SessionOptions["webPush"];
   messages?: unknown[];
   targetedMessages?: Array<{ source: object; message: SessionOutboundMessage }>;
   binaryMessages?: Uint8Array[];
   pluginRuntime?: SessionOptions["pluginRuntime"];
   orchestrationSkills?: SessionOptions["orchestrationSkills"];
   workspaceLabelService?: WorkspaceLabelService;
+  hostPerformanceSampler?: HostPerformanceSampler;
 }
 
 function createSessionForTest(options: SessionForTestOptions = {}): Session {
@@ -433,6 +436,8 @@ function createSessionForTest(options: SessionForTestOptions = {}): Session {
     daemonVersion: options.daemonVersion,
     daemonRuntimeConfig: options.daemonRuntimeConfig,
     permissions: options.permissions ?? OWNER_PERMISSIONS,
+    webPush: options.webPush,
+    hostPerformanceSampler: options.hostPerformanceSampler ?? new HostPerformanceSampler(),
   };
   return new Session(sessionOptions);
 }
@@ -1907,6 +1912,179 @@ test("push token revocation only acknowledges durable removal", async () => {
       requestId: "revoke-failed",
       requestType: "push.unregister.request",
       error: "Request failed: disk full",
+      code: "handler_error",
+    },
+  });
+});
+
+test("push.web.* RPCs succeed with configured Web Push registration and renew on activity", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const subscribed: unknown[] = [];
+  const unsubscribed: string[] = [];
+  const tested: string[] = [];
+  let activityCount = 0;
+
+  const mockWebPush: SessionOptions["webPush"] = {
+    getPublicKey: () => "BMc3Jld-mock-public-key",
+    subscribe: (sub) => {
+      subscribed.push(sub);
+    },
+    unsubscribe: (endpoint) => {
+      unsubscribed.push(endpoint);
+      return true;
+    },
+    test: async (endpoint) => {
+      tested.push(endpoint);
+    },
+    onClientActivity: () => {
+      activityCount++;
+    },
+  };
+
+  const session = createSessionForTest({
+    messages,
+    webPush: mockWebPush,
+  });
+
+  // 1. get_config
+  await session.handleMessage({
+    type: "push.web.get_config.request",
+    requestId: "cfg-1",
+  });
+  expect(messages).toContainEqual({
+    type: "push.web.get_config.response",
+    payload: {
+      requestId: "cfg-1",
+      publicKey: "BMc3Jld-mock-public-key",
+    },
+  });
+
+  // 2. subscribe
+  const subPayload = {
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+    keys: { auth: "auth-123", p256dh: "p256dh-123" },
+  };
+  await session.handleMessage({
+    type: "push.web.subscribe.request",
+    requestId: "sub-1",
+    subscription: subPayload,
+  });
+  expect(subscribed).toEqual([subPayload]);
+  expect(messages).toContainEqual({
+    type: "push.web.subscribe.response",
+    payload: { requestId: "sub-1" },
+  });
+
+  // 3. test
+  await session.handleMessage({
+    type: "push.web.test.request",
+    requestId: "test-1",
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+  });
+  expect(tested).toEqual(["https://updates.push.services.mozilla.com/wpush/v2/test-token"]);
+  expect(messages).toContainEqual({
+    type: "push.web.test.response",
+    payload: { requestId: "test-1" },
+  });
+
+  // 4. unsubscribe
+  await session.handleMessage({
+    type: "push.web.unsubscribe.request",
+    requestId: "unsub-1",
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+  });
+  expect(unsubscribed).toEqual(["https://updates.push.services.mozilla.com/wpush/v2/test-token"]);
+  expect(messages).toContainEqual({
+    type: "push.web.unsubscribe.response",
+    payload: { requestId: "unsub-1" },
+  });
+
+  // 5. client activity triggers onClientActivity
+  await session.handleMessage({
+    type: "client_heartbeat",
+    deviceType: "desktop",
+    focusedAgentId: null,
+    lastActivityAt: "2026-09-09T00:00:00.000Z",
+    appVisible: true,
+  });
+  expect(activityCount).toBe(1);
+});
+
+test("push.web.* RPCs reject with access_denied when lacking workspace.read permission", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    permissions: ["daemon.read"], // no workspace.read
+  });
+
+  await session.handleMessage({
+    type: "push.web.get_config.request",
+    requestId: "unauthorized-cfg",
+  });
+
+  expect(messages).toContainEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "unauthorized-cfg",
+      requestType: "push.web.get_config.request",
+      error: "Session is not authorized for push.web.get_config.request",
+      code: "access_denied",
+    },
+  });
+});
+
+test("push.web.* RPCs reject with handler_error when Web Push is unconfigured", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const session = createSessionForTest({
+    messages,
+    webPush: undefined, // not configured
+  });
+
+  await session.handleMessage({
+    type: "push.web.get_config.request",
+    requestId: "no-config-req",
+  });
+
+  expect(messages).toContainEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "no-config-req",
+      requestType: "push.web.get_config.request",
+      error: "Request failed: Web push is not supported or not configured",
+      code: "handler_error",
+    },
+  });
+});
+
+test("push.web.test.request surfaces push service delivery failure as handler_error", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const mockWebPush: SessionOptions["webPush"] = {
+    getPublicKey: () => "key",
+    subscribe: () => {},
+    unsubscribe: () => true,
+    test: async () => {
+      throw new Error("Push service returned status 400: Invalid payload");
+    },
+    onClientActivity: () => {},
+  };
+
+  const session = createSessionForTest({
+    messages,
+    webPush: mockWebPush,
+  });
+
+  await session.handleMessage({
+    type: "push.web.test.request",
+    requestId: "test-err-req",
+    endpoint: "https://updates.push.services.mozilla.com/wpush/v2/test-token",
+  });
+
+  expect(messages).toContainEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "test-err-req",
+      requestType: "push.web.test.request",
+      error: "Request failed: Push service returned status 400: Invalid payload",
       code: "handler_error",
     },
   });
@@ -5760,4 +5938,74 @@ test("provider snapshots preserve versionless visibility while capabilities upda
     "plugin-provider",
   ]);
   expect(references.compactSnapshot!.entries[0]!.modes![0]!.icon).toBe("ShieldCheck");
+});
+
+test("host.performance.get_snapshot.request returns snapshot response when sampler succeeds", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const snapshot = {
+    sample: {
+      sampledAt: 1773160000000,
+      cpu: { utilizationPercent: null, logicalCores: 8 },
+      memory: { usedBytes: 1000, totalBytes: 2000 },
+      gpus: { status: "none" as const },
+    },
+    history: [{ sampledAt: 1773160000000, cpuPercent: null, memoryPercent: 50, gpuPercent: null }],
+  };
+  const sampler = new HostPerformanceSampler({
+    now: () => 1773160000000,
+    read: async () => ({
+      cpu: { idle: 100, total: 400, logicalCores: 8 },
+      memory: { usedBytes: 1000, totalBytes: 2000 },
+      gpus: { status: "none" },
+    }),
+  });
+
+  const session = createSessionForTest({
+    messages,
+    hostPerformanceSampler: sampler,
+  });
+
+  await session.handleMessage({
+    type: "host.performance.get_snapshot.request",
+    requestId: "req-perf-ok",
+  });
+
+  const response = messages.find((m) => m.type === "host.performance.get_snapshot.response");
+  expect(response).toEqual({
+    type: "host.performance.get_snapshot.response",
+    payload: {
+      requestId: "req-perf-ok",
+      snapshot,
+    },
+  });
+});
+
+test("host.performance.get_snapshot.request emits correlated rpc_error on sampler failure", async () => {
+  const messages: SessionOutboundMessage[] = [];
+  const failingSampler = new HostPerformanceSampler({
+    read: async () => {
+      throw new Error("Sampler hardware failure");
+    },
+  });
+
+  const session = createSessionForTest({
+    messages,
+    hostPerformanceSampler: failingSampler,
+  });
+
+  await session.handleMessage({
+    type: "host.performance.get_snapshot.request",
+    requestId: "req-perf-err",
+  });
+
+  const errorMsg = messages.find((m) => m.type === "rpc_error");
+  expect(errorMsg).toEqual({
+    type: "rpc_error",
+    payload: {
+      requestId: "req-perf-err",
+      requestType: "host.performance.get_snapshot.request",
+      error: "Request failed: Sampler hardware failure",
+      code: "handler_error",
+    },
+  });
 });

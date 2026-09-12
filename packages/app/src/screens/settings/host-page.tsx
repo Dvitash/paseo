@@ -59,6 +59,7 @@ import { ProvidersSection } from "@/screens/settings/providers-section";
 import { ProviderUsageSettingsSection } from "@/provider-usage/settings-section";
 import { useProviderUsage } from "@/provider-usage/use-provider-usage";
 import { HostAppearanceSection } from "@/screens/settings/host-appearance-section";
+import { HostWebPushSection } from "@/screens/settings/host-web-push-section";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { useSessionStore } from "@/stores/session-store";
 import { settingsStyles } from "@/styles/settings";
@@ -341,7 +342,11 @@ export function HostUsagePage({ serverId }: { serverId: string }) {
 
   return (
     <View>
-      <ProviderUsageSettingsSection view={providerUsageView} onRefresh={handleRefresh} />
+      <ProviderUsageSettingsSection
+        view={providerUsageView}
+        onRefresh={handleRefresh}
+        serverId={serverId}
+      />
     </View>
   );
 }
@@ -371,6 +376,8 @@ export function HostSettingsPage({
       <HostStatusBadges serverId={serverId} />
 
       <HostAppearanceSection host={host} />
+
+      <HostWebPushSection serverId={serverId} />
 
       {isLocalDaemon ? <LocalDaemonSection /> : null}
 

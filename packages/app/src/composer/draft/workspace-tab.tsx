@@ -708,6 +708,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   scrollView: {
     flex: 1,
+    ...(isWeb ? { touchAction: "pan-y" as const } : {}),
   },
   configScrollContent: {
     paddingHorizontal: theme.spacing[4],

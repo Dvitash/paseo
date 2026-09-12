@@ -362,6 +362,11 @@ export class HubRelationshipController implements HubRelationshipManagement {
     this.cancelLifecycle();
     this.socket?.close();
     this.socket = null;
+    const attachedPrincipalId =
+      this.record && "credential" in this.record ? hubPrincipalId(this.record) : null;
+    if (attachedPrincipalId) {
+      this.options.updateAttachedPermissions(attachedPrincipalId, []);
+    }
     if (!this.record || this.record.state === "revoked") {
       this.remove();
       await pendingCreateCleanup;
@@ -563,6 +568,9 @@ export class HubRelationshipController implements HubRelationshipManagement {
     void this.retireExecutionAgents();
     this.cancelLifecycle();
     if (!this.record) return;
+    if ("credential" in this.record) {
+      this.options.updateAttachedPermissions(hubPrincipalId(this.record), []);
+    }
     const revoked: RevokedRecord = {
       version: 2,
       state: "revoked",
@@ -634,7 +642,10 @@ export class HubRelationshipController implements HubRelationshipManagement {
   }
 }
 
-function hubPrincipalId(record: ActiveRecord): string {
+function hubPrincipalId(record: {
+  relationship: { daemonId: string };
+  credential: { secret: string };
+}): string {
   const credentialFingerprint = createHash("sha256")
     .update(record.credential.secret)
     .digest("base64url");

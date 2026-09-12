@@ -1,18 +1,6 @@
 import { PARENT_AGENT_ID_LABEL } from "@getpaseo/protocol/agent-labels";
 import { expect, type Page } from "@playwright/test";
-import { daemonWsRoutePattern } from "./daemon-port";
 import type { SeededWorkspace } from "./seed-client";
-
-type WebSocketMessage = string | Buffer;
-
-export interface ManagedSubagentArchiveGate {
-  release(): void;
-  waitForRequest(): Promise<void>;
-}
-
-export interface ManagedSubagentArchiveRejection {
-  waitForRejection(): Promise<void>;
-}
 
 export interface SeededSubagentPair {
   parent: {
@@ -39,7 +27,7 @@ export interface SeededCrossWorkspaceSubagentPair {
 
 export async function seedParentWithSubagent(
   workspace: Pick<SeededWorkspace, "client" | "repoPath" | "workspaceId">,
-  input: { parentTitle: string; childTitle: string },
+  input: { parentTitle: string; childTitle: string; keepRunning?: boolean },
 ): Promise<SeededSubagentPair> {
   const parent = await workspace.client.createAgent({
     provider: "mock",
@@ -56,10 +44,18 @@ export async function seedParentWithSubagent(
     title: input.childTitle,
     modeId: "load-test",
     model: "ten-second-stream",
+    ...(input.keepRunning ? { initialPrompt: "stay running" } : {}),
     labels: {
       [PARENT_AGENT_ID_LABEL]: parent.id,
     },
   });
+  if (input.keepRunning) {
+    await workspace.client.waitForAgentUpsert(
+      child.id,
+      (snapshot) => snapshot.status === "running",
+      15_000,
+    );
+  }
 
   return {
     parent: {
@@ -129,19 +125,27 @@ export async function seedParentWithCrossWorkspaceSubagent(
 }
 
 /**
- * Opens the subagents panel, and leaves it open if it already is — the pill is a toggle, and a
- * second click would close the thing the caller is about to assert on. The panel also closes on
- * its own whenever a row navigates away, so a flow that comes back to the parent reopens it.
+ * Opens the subagents track, and leaves it open if it already is. The track has two shapes: a
+ * card that is open by default (wide) and a pull tab that starts collapsed (compact). The pull
+ * tab's header reports `aria-expanded="false"` while hidden, and both header shapes are toggles,
+ * so an unconditional click can close the thing the caller is about to assert on.
  */
 export async function openSubagentsTrack(page: Page): Promise<void> {
-  const panel = page.getByTestId("subagents-track-header-panel");
-  if ((await panel.count()) === 0) {
-    await page.getByTestId("subagents-track-header").click();
+  const header = page.getByTestId("subagents-track-header");
+  if ((await header.count()) > 0 && (await header.getAttribute("aria-expanded")) === "false") {
+    await header.click();
   }
-  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("subagents-track-header-panel")).toBeVisible({ timeout: 30_000 });
 }
 
 export async function expectSubagentRowVisible(page: Page, childId: string): Promise<void> {
+  const row = page.getByTestId(`subagents-track-row-${childId}`);
+  if ((await row.count()) === 0) {
+    const overflow = page.getByTestId("subagents-track-overflow-toggle");
+    if ((await overflow.count()) > 0 && (await overflow.isVisible())) {
+      await overflow.click();
+    }
+  }
   await expect(page.getByTestId(`subagents-track-row-${childId}`)).toBeVisible({
     timeout: 30_000,
   });
@@ -151,147 +155,6 @@ export async function expectSubagentRowGone(page: Page, childId: string): Promis
   await expect(page.getByTestId(`subagents-track-row-${childId}`)).toHaveCount(0, {
     timeout: 30_000,
   });
-}
-
-export async function expectManagedSubagentUnarchived(
-  workspace: Pick<SeededWorkspace, "client">,
-  childId: string,
-): Promise<void> {
-  await expect(workspace.client.fetchAgent({ agentId: childId })).resolves.toMatchObject({
-    agent: { id: childId, archivedAt: null },
-  });
-}
-
-export async function expectManagedSubagentArchived(
-  workspace: Pick<SeededWorkspace, "client">,
-  childId: string,
-): Promise<void> {
-  await expect
-    .poll(() => workspace.client.fetchAgent({ agentId: childId }), { timeout: 30_000 })
-    .toMatchObject({ agent: { id: childId, archivedAt: expect.any(String) } });
-}
-
-export async function archiveFinishedSubagents(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Archive finished subagents" }).click();
-}
-
-export async function expectArchiveFinishedInProgress(
-  page: Page,
-  completed: number,
-  total: number,
-): Promise<void> {
-  await expect(page.getByRole("button", { name: "Archive finished subagents" })).toBeDisabled();
-  await expect(page.getByText(`${completed}/${total}`, { exact: true })).toBeVisible();
-}
-
-export async function expectArchiveFinishedRetry(
-  page: Page,
-  failed: number,
-  total: number,
-): Promise<void> {
-  await expect(page.getByText(`Retry (${failed}/${total})`, { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Archive finished subagents" })).toBeEnabled();
-}
-
-export async function holdManagedSubagentArchiveRequest(
-  page: Page,
-  subagentId: string,
-): Promise<ManagedSubagentArchiveGate> {
-  let released = false;
-  let resolveRequest: (() => void) | undefined;
-  const delayedForwards: Array<() => void> = [];
-  const request = new Promise<void>((resolve) => {
-    resolveRequest = resolve;
-  });
-
-  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
-    const server = ws.connectToServer();
-    ws.onMessage((message) => {
-      if (isArchiveRequestForSubagent(message, subagentId) && !released) {
-        delayedForwards.push(() => server.send(message));
-        resolveRequest?.();
-        return;
-      }
-      server.send(message);
-    });
-    server.onMessage((message) => ws.send(message));
-  });
-
-  return {
-    release() {
-      released = true;
-      for (const forward of delayedForwards.splice(0)) forward();
-    },
-    waitForRequest: () => request,
-  };
-}
-
-export async function rejectNextManagedSubagentArchiveRequest(
-  page: Page,
-  subagentId: string,
-): Promise<ManagedSubagentArchiveRejection> {
-  let resolveRejection: (() => void) | undefined;
-  const rejection = new Promise<void>((resolve) => {
-    resolveRejection = resolve;
-  });
-  let rejected = false;
-
-  await page.routeWebSocket(daemonWsRoutePattern(), (ws) => {
-    const server = ws.connectToServer();
-    ws.onMessage((message) => {
-      const requestId = archiveRequestId(message, subagentId);
-      if (requestId && !rejected) {
-        rejected = true;
-        // A daemon-rejected archive RPC: the request never reaches the daemon, and its normal
-        // correlated error travels back through the real browser client and mutation rollback.
-        ws.send(
-          JSON.stringify({
-            type: "session",
-            message: {
-              type: "rpc_error",
-              payload: {
-                requestId,
-                requestType: "archive_agent_request",
-                error: "Archive rejected for test",
-                code: "archive_rejected",
-              },
-            },
-          }),
-        );
-        resolveRejection?.();
-        return;
-      }
-      server.send(message);
-    });
-    server.onMessage((message) => ws.send(message));
-  });
-
-  return { waitForRejection: () => rejection };
-}
-
-function isArchiveRequestForSubagent(message: WebSocketMessage, subagentId: string): boolean {
-  return archiveRequestId(message, subagentId) !== null;
-}
-
-function archiveRequestId(message: WebSocketMessage, subagentId: string): string | null {
-  const rawMessage = typeof message === "string" ? message : message.toString("utf8");
-  try {
-    const envelope = JSON.parse(rawMessage) as {
-      type?: unknown;
-      message?: { type?: unknown; agentId?: unknown; requestId?: unknown };
-    };
-    if (
-      envelope.type === "session" &&
-      envelope.message?.type === "archive_agent_request" &&
-      envelope.message.agentId === subagentId &&
-      typeof envelope.message.requestId === "string"
-    ) {
-      return envelope.message.requestId;
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 export async function detachSubagentFromTrack(page: Page, childId: string): Promise<void> {

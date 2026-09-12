@@ -51,6 +51,8 @@ import { buildSettingsAddHostRoute, buildSettingsRoute } from "@/utils/host-rout
 import { openHostOverview } from "@/navigation/settings-navigation";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
+import { SidebarProviderUsageBar } from "@/provider-usage/sidebar-bar";
+import { SidebarHostPerformanceBar } from "@/host-performance/sidebar-bar";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
 
 type SidebarTheme = ReturnType<typeof useUnistyles>["theme"];
@@ -468,7 +470,7 @@ function SidebarFooter({
   const settingsKeys = useShortcutKeys("toggle-settings");
 
   return (
-    <View style={styles.sidebarFooter}>
+    <View style={styles.sidebarFooter} testID="sidebar-footer" nativeID="sidebar-footer">
       <FooterAddProjectButton
         onPress={handleOpenProject}
         label={labels.addProject}
@@ -602,6 +604,8 @@ function MobileSidebar({
           />
         )}
 
+        <SidebarHostPerformanceBar visible={active} />
+        <SidebarProviderUsageBar />
         <SidebarFooter
           theme={theme}
           handleOpenProject={handleOpenProject}
@@ -779,6 +783,8 @@ function DesktopSidebar({
 
         <SidebarCalloutSlot />
 
+        <SidebarHostPerformanceBar visible={active} />
+        <SidebarProviderUsageBar />
         <SidebarFooter
           theme={theme}
           handleOpenProject={handleOpenProject}
@@ -930,6 +936,7 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.medium,
   },
   sidebarFooter: {
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],

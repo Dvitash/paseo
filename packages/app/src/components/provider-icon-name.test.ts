@@ -21,6 +21,15 @@ describe("resolveProviderIconName", () => {
     expect(resolveProviderIconName("gjc")).toEqual({ kind: "catalog", id: "gjc" });
     expect(resolveProviderIconName("traecli")).toEqual({ kind: "catalog", id: "traecli" });
   });
+  it("resolves OMP provider aliases to matching built-in or catalog icons", () => {
+    expect(resolveProviderIconName("openai-codex")).toEqual({ kind: "builtin", id: "codex" });
+    expect(resolveProviderIconName("anthropic")).toEqual({ kind: "builtin", id: "claude" });
+    expect(resolveProviderIconName("github-copilot")).toEqual({ kind: "builtin", id: "copilot" });
+    expect(resolveProviderIconName("google-antigravity")).toEqual({ kind: "catalog", id: "agy" });
+    expect(resolveProviderIconName("kimi-code")).toEqual({ kind: "catalog", id: "kimi" });
+    expect(resolveProviderIconName("opencode-go")).toEqual({ kind: "builtin", id: "opencode" });
+    expect(resolveProviderIconName("minimax-code")).toEqual({ kind: "builtin", id: "minimax" });
+  });
 
   it("falls back to the bot icon for unknown custom providers", () => {
     expect(resolveProviderIconName("custom-claude-profile")).toEqual({ kind: "bot" });

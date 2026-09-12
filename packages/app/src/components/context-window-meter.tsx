@@ -233,7 +233,11 @@ export function ContextWindowMeter({
               {t("contextWindow.sessionCost", { cost: formattedSessionCost })}
             </Text>
           ) : null}
-          <ProviderUsageTooltipSection view={providerUsageView} activeProviderId={provider} />
+          <ProviderUsageTooltipSection
+            view={providerUsageView}
+            activeProviderId={provider}
+            serverId={serverId}
+          />
         </View>
       </TooltipContent>
     </Tooltip>

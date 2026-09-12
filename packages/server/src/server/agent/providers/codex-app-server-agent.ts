@@ -40,6 +40,7 @@ import {
 } from "../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../provider-session-import.js";
 import { runProviderRefreshActivity } from "../provider-refresh-deadline.js";
+import { keepOnlyInternalPaseoMcpServer } from "../runtime-mcp-config.js";
 import type { Logger } from "pino";
 
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
@@ -220,6 +221,7 @@ const CODEX_APP_SERVER_CAPABILITIES: AgentCapabilityFlags = {
   supportsRewindConversation: true,
   supportsRewindFiles: false,
   supportsRewindBoth: false,
+  supportsSessionFork: true,
 };
 
 const CODEX_MODES: AgentMode[] = [
@@ -4762,6 +4764,35 @@ export class CodexAppServerAgentSession implements AgentSession {
     });
   }
 
+  /**
+   * Fork this session's thread from an existing Codex thread, inheriting its
+   * full history. Read-only sessions carry their sandbox/approval policy into
+   * the fork so confinement survives the copy.
+   */
+  async forkThreadFrom(sourceThreadId: string): Promise<void> {
+    await this.connect();
+    if (!this.client) {
+      throw new Error("Codex client is not initialized");
+    }
+    const developerInstructions = composeSystemPromptParts(
+      this.config.systemPrompt,
+      this.config.daemonAppendSystemPrompt,
+    );
+    const forked = await forkCodexThread(this.client, {
+      threadId: sourceThreadId,
+      cwd: this.config.cwd ?? null,
+      model: this.config.model ?? null,
+      serviceTier: this.serviceTier,
+      ...(developerInstructions ? { developerInstructions } : {}),
+      ...(this.config.readOnly ? { approvalPolicy: "never", sandbox: "read-only" } : {}),
+    });
+    this.currentThreadId = forked.thread.id;
+    this.cachedRuntimeInfo = null;
+    this.persistedHistory = [];
+    this.historyPending = false;
+    await this.loadPersistedHistory();
+  }
+
   async interrupt(): Promise<void> {
     const pendingStart = this.pendingForegroundStart;
     if (pendingStart) {
@@ -5129,14 +5160,21 @@ export class CodexAppServerAgentSession implements AgentSession {
 
   private buildCodexInnerConfig(): Record<string, unknown> | null {
     if (this.config.readOnly) {
-      const disabledMcpServers: Record<string, unknown> = {};
+      const mcpServers: Record<string, unknown> = {};
       for (const serverName of this.resolvedNativeMcpServers) {
-        disabledMcpServers[serverName] = { enabled: false, enabled_tools: [] };
+        mcpServers[serverName] = { enabled: false, enabled_tools: [] };
+      }
+      // Confined agents keep only the daemon's own MCP server so policy-
+      // filtered read-only daemon tools (e.g. Side) remain reachable.
+      for (const [name, serverConfig] of Object.entries(
+        keepOnlyInternalPaseoMcpServer(this.config.mcpServers),
+      )) {
+        mcpServers[name] = toCodexMcpConfig(serverConfig);
       }
       return {
         sandbox_mode: "read-only",
         approval_policy: "never",
-        mcp_servers: disabledMcpServers,
+        mcp_servers: mcpServers,
         web_search: "disabled",
         features: {
           apps: false,
@@ -7046,10 +7084,20 @@ export class CodexAppServerAgentClient implements AgentClient {
       autoReviewEnabled,
       launchContext?.agentId,
     );
-    await session.connect();
+    // The session owns its spawned app-server until AgentManager registers it;
+    // a failed fork must dispose it before rethrowing.
+    try {
+      await session.connect();
+      const forkSource = options?.forkFrom?.nativeHandle ?? options?.forkFrom?.sessionId;
+      if (forkSource) {
+        await session.forkThreadFrom(forkSource);
+      }
+    } catch (error) {
+      await session.close().catch(() => undefined);
+      throw error;
+    }
     return session;
   }
-
   async resumeSession(
     handle: { sessionId: string; metadata?: Record<string, unknown> },
     overrides?: Partial<AgentSessionConfig>,
@@ -7061,7 +7109,15 @@ export class CodexAppServerAgentClient implements AgentClient {
     const merged: AgentSessionConfig = {
       ...storedConfig,
       ...overrides,
-      ...(isReadOnly ? { readOnly: true, mcpServers: {} } : {}),
+      ...(isReadOnly
+        ? {
+            readOnly: true,
+            // Confined agents keep only the daemon's own MCP server so
+            // policy-filtered read-only daemon tools (e.g. Side) remain
+            // reachable.
+            mcpServers: keepOnlyInternalPaseoMcpServer(overrides?.mcpServers),
+          }
+        : {}),
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
     };

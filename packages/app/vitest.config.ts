@@ -60,6 +60,7 @@ export default defineConfig({
       },
     },
   },
+  esbuild: { jsx: "automatic" },
   // Reanimated ships one file per platform and picks between them by extension
   // (`findHostInstance.web.js`). Vite's dependency optimizer does not apply `resolve.extensions`,
   // so it scans the native files and dies on imports react-native-web has no answer for.
@@ -67,6 +68,19 @@ export default defineConfig({
   optimizeDeps: {
     include: ["react/jsx-runtime"],
     exclude: ["react-native-reanimated"],
+    esbuildOptions: {
+      resolveExtensions: [
+        ".web.tsx",
+        ".web.ts",
+        ".web.jsx",
+        ".web.js",
+        ".tsx",
+        ".ts",
+        ".jsx",
+        ".js",
+        ".json",
+      ],
+    },
   },
   // The globals a React Native bundler defines, which esbuild is no longer there to supply for
   // the package excluded above.

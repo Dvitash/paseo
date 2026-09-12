@@ -641,6 +641,7 @@ export function resolveConfigFromPersisted(
     metadataGeneration: persisted.agents?.metadataGeneration,
     providerOverrides,
     log: resolveLogConfigFromEnv(env, persisted),
+    features: persisted.features,
     configReload: {
       env: { ...env },
       cli: cli ? { ...cli } : undefined,

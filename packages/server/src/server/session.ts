@@ -1,4 +1,4 @@
-import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
+import type { SessionEventSubscription, WebPushSubscription } from "@getpaseo/protocol/messages";
 import type { AgentRequests } from "./agent/requests/index.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
@@ -66,7 +66,7 @@ import { loadPersistedConfig } from "./persisted-config.js";
 import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-registry.js";
 import { getErrorMessage, getErrorMessageOr } from "@getpaseo/protocol/error-utils";
 import { getAgentStatusPriority } from "@getpaseo/protocol/agent-state-bucket";
-import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
+import { getParentAgentIdFromLabels, ORIGIN_DEVICE_LABEL } from "@getpaseo/protocol/agent-labels";
 import type { WorkspaceGitRuntimeSnapshot, WorkspaceGitService } from "./workspace-git-service.js";
 import type { ProjectUpdate } from "./workspace-reconciliation-service.js";
 import {
@@ -135,6 +135,7 @@ import {
 import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { getSideChatService, type SideChatService } from "./side/side-chat-service.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import {
   ImportSessionsRequestError,
   importProviderSession,
@@ -443,6 +444,14 @@ const nodeSessionFileSystem: SessionFileSystem = {
 };
 
 // Stub types for features under development (modules not yet available)
+export interface SessionWebPushRegistration {
+  getPublicKey(): string;
+  subscribe(subscription: WebPushSubscription): Promise<void> | void;
+  unsubscribe(endpoint: string): Promise<boolean> | boolean;
+  test(endpoint: string): Promise<void>;
+  onClientActivity(): void;
+}
+
 type AgentMcpTransportFactory = () => Promise<unknown>;
 
 export interface SessionOptions {
@@ -460,6 +469,7 @@ export interface SessionOptions {
   logger: pino.Logger;
   downloadTokenStore: DownloadTokenStore;
   pushNotifications: PushNotifications;
+  webPush?: SessionWebPushRegistration;
   paseoHome: string;
   worktreesRoot?: string;
   agentManager: AgentManager;
@@ -518,6 +528,7 @@ export interface SessionOptions {
   terminalManager: TerminalManager | null;
   providerSnapshotManager: ProviderSnapshotManager;
   providerUsageService: ProviderUsageService;
+  hostPerformanceSampler: HostPerformanceSampler;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
   serviceProxy?: ServiceProxySubsystem;
@@ -722,15 +733,19 @@ export class Session {
   private readonly workspaceUpdateTails = new Map<string, Promise<void>>();
   private clientActivity: {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId: string | null;
     lastActivityAt: Date;
+    lastAppActivityAt: Date;
     appVisible: boolean;
     appVisibilityChangedAt: Date;
   } | null = null;
   private registeredPushToken: string | null = null;
+  private webPush: SessionWebPushRegistration | null = null;
   private readonly terminalManager: TerminalManager | null;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
+  private readonly hostPerformanceSampler: HostPerformanceSampler;
   private readonly serviceProxy: ServiceProxySubsystem | null;
   private readonly scriptRuntimeStore: WorkspaceScriptRuntimeStore | null;
   private readonly getDaemonTcpPort: (() => number | null) | null;
@@ -798,6 +813,7 @@ export class Session {
       terminalManager,
       providerSnapshotManager,
       providerUsageService,
+      hostPerformanceSampler,
       serviceProxy,
       scriptRuntimeStore,
       workspaceSetupSnapshots,
@@ -828,10 +844,12 @@ export class Session {
     this.onLifecycleIntent = onLifecycleIntent ?? null;
     this.onWorkspaceRecovered = onWorkspaceRecovered ?? null;
     this.pushNotifications = pushNotifications;
+    this.initializeWebPush(options.webPush);
     this.paseoHome = paseoHome;
     this.agentRequests = options.agentRequests;
     this.projectIcons = new ProjectIconReader(paseoHome);
     this.worktreesRoot = worktreesRoot;
+    this.hostPerformanceSampler = hostPerformanceSampler;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
     this.unsubscribePluginChanges = this.subscribeToPluginChanges(pluginRuntime);
@@ -1131,6 +1149,15 @@ export class Session {
       this.agentStorage,
       paseoHome,
       this.sessionLogger,
+      (input) =>
+        this.providerSnapshotManager.resolveCreateConfig({
+          cwd: input.cwd,
+          provider: input.provider,
+          requestedMode: undefined,
+          featureValues: undefined,
+          parent: null,
+          unattended: true,
+        }),
     );
     this.subscribeToAgentEvents();
     this.subscribeToRegistryMutations();
@@ -1382,9 +1409,11 @@ export class Session {
    */
   public getClientActivity(): {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId: string | null;
     lastActivityAt: Date;
+    lastAppActivityAt: Date;
     appVisible: boolean;
     appVisibilityChangedAt: Date;
   } | null {
@@ -2535,16 +2564,12 @@ export class Session {
         return this.daemonSession.handleHubRelationshipRequest(msg);
       case "diagnostics.request":
         return this.daemonSession.handleDiagnosticsRequest(msg);
+      case "host.performance.get_snapshot.request":
+        return this.handleHostPerformanceGetSnapshotRequest(msg);
       case "daemon.update.request":
         return this.daemonSession.handleUpdateRequest(msg);
       case "set_daemon_config_request":
-        this.emit({
-          type: "set_daemon_config_response",
-          payload: {
-            requestId: msg.requestId,
-            config: this.daemonConfigStore.patch(msg.config),
-          },
-        });
+        this.handleSetDaemonConfigRequest(msg);
         return undefined;
       case "read_project_config_request":
         return this.projectConfigSession.handleReadProjectConfigRequest(msg);
@@ -2553,6 +2578,34 @@ export class Session {
       default:
         return undefined;
     }
+  }
+  private handleSetDaemonConfigRequest(
+    msg: Extract<SessionInboundMessage, { type: "set_daemon_config_request" }>,
+  ): void {
+    const patchResult = this.daemonConfigStore.patch(msg.config);
+    this.emit({
+      type: "set_daemon_config_response",
+      payload: {
+        requestId: msg.requestId,
+        config: patchResult.config,
+        ...(patchResult.restartRequiredPaths.length > 0
+          ? { restartRequiredPaths: patchResult.restartRequiredPaths }
+          : {}),
+      },
+    });
+  }
+
+  private async handleHostPerformanceGetSnapshotRequest(
+    msg: Extract<SessionInboundMessage, { type: "host.performance.get_snapshot.request" }>,
+  ): Promise<void> {
+    const snapshot = await this.hostPerformanceSampler.getSnapshot();
+    this.emit({
+      type: "host.performance.get_snapshot.response",
+      payload: {
+        requestId: msg.requestId,
+        snapshot,
+      },
+    });
   }
 
   // eslint-disable-next-line complexity
@@ -2821,6 +2874,18 @@ export class Session {
           type: "push.unregister.response",
           payload: { requestId: msg.requestId },
         });
+        return;
+      case "push.web.get_config.request":
+        await this.handlePushWebGetConfigRequest(msg);
+        return;
+      case "push.web.subscribe.request":
+        await this.handlePushWebSubscribeRequest(msg);
+        return;
+      case "push.web.unsubscribe.request":
+        await this.handlePushWebUnsubscribeRequest(msg);
+        return;
+      case "push.web.test.request":
+        await this.handlePushWebTestRequest(msg);
         return;
     }
   }
@@ -3775,10 +3840,19 @@ export class Session {
           initialPrompt,
           clientMessageId,
           outputSchema,
+          labels: {
+            ...resolvedIntent.intent.labels,
+            // Stamp the creating client's device class so attention routing can
+            // push mobile-origin agents to mobile even while desktop is active.
+            [ORIGIN_DEVICE_LABEL]:
+              this.clientActivity?.deviceType === "mobile" ||
+              this.clientActivity?.deviceClass === "mobile"
+                ? "mobile"
+                : "desktop",
+          },
           images,
           attachments,
           git,
-          labels: resolvedIntent.intent.labels,
           env,
           provisionalTitle,
           firstAgentContext,
@@ -4350,9 +4424,11 @@ export class Session {
    */
   private handleClientHeartbeat(msg: {
     deviceType: "web" | "mobile";
+    deviceClass?: "mobile" | "desktop";
     focusedAgentId: string | null;
     focusedTerminalId?: string | null;
     lastActivityAt: string;
+    lastAppActivityAt?: string;
     appVisible: boolean;
     appVisibilityChangedAt?: string;
   }): void {
@@ -4360,11 +4436,18 @@ export class Session {
     const appVisibilityChangedAt = msg.appVisibilityChangedAt
       ? new Date(msg.appVisibilityChangedAt)
       : new Date(msg.lastActivityAt);
+    const lastActivityAt = new Date(msg.lastActivityAt);
+    // Old clients don't send an app-interaction clock; fall back to presence.
+    const lastAppActivityAt = msg.lastAppActivityAt
+      ? new Date(msg.lastAppActivityAt)
+      : lastActivityAt;
     this.clientActivity = {
       deviceType: msg.deviceType,
+      deviceClass: msg.deviceClass,
       focusedAgentId: msg.focusedAgentId,
       focusedTerminalId,
-      lastActivityAt: new Date(msg.lastActivityAt),
+      lastActivityAt,
+      lastAppActivityAt,
       appVisible: msg.appVisible,
       appVisibilityChangedAt,
     };
@@ -4374,6 +4457,7 @@ export class Session {
     if (this.registeredPushToken) {
       this.pushNotifications.renew(this.registeredPushToken);
     }
+    this.webPush?.onClientActivity();
   }
 
   private async clearFocusedTerminalAttention(terminalId: string): Promise<void> {
@@ -4395,6 +4479,79 @@ export class Session {
     this.registeredPushToken = token;
     this.pushNotifications.renew(token);
     this.sessionLogger.info("Registered push token");
+  }
+
+  private initializeWebPush(webPush?: SessionWebPushRegistration): void {
+    if (webPush) {
+      this.webPush = webPush;
+    } else {
+      this.webPush = null;
+    }
+  }
+
+  public bindWebPush(webPush: SessionWebPushRegistration): void {
+    this.webPush = webPush;
+  }
+
+  private async handlePushWebGetConfigRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.get_config.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    const publicKey = this.webPush.getPublicKey();
+    this.emit({
+      type: "push.web.get_config.response",
+      payload: {
+        requestId: msg.requestId,
+        publicKey,
+      },
+    });
+  }
+
+  private async handlePushWebSubscribeRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.subscribe.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    await this.webPush.subscribe(msg.subscription);
+    this.emit({
+      type: "push.web.subscribe.response",
+      payload: {
+        requestId: msg.requestId,
+      },
+    });
+  }
+
+  private async handlePushWebUnsubscribeRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.unsubscribe.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    await this.webPush.unsubscribe(msg.endpoint);
+    this.emit({
+      type: "push.web.unsubscribe.response",
+      payload: {
+        requestId: msg.requestId,
+      },
+    });
+  }
+
+  private async handlePushWebTestRequest(
+    msg: Extract<SessionInboundMessage, { type: "push.web.test.request" }>,
+  ): Promise<void> {
+    if (!this.webPush) {
+      throw new Error("Web push is not supported or not configured");
+    }
+    await this.webPush.test(msg.endpoint);
+    this.emit({
+      type: "push.web.test.response",
+      payload: {
+        requestId: msg.requestId,
+      },
+    });
   }
 
   /**

@@ -20,6 +20,8 @@ async function fetchProviderUsage(client: ProviderUsageClient): Promise<Provider
 
 interface UseProviderUsageOptions {
   enabled?: boolean;
+  refetchInterval?: number | false;
+  staleTime?: number;
 }
 
 export function useProviderUsage(
@@ -51,7 +53,11 @@ export function useProviderUsage(
     queryKey,
     queryFn,
     enabled,
-    staleTime: PROVIDER_USAGE_STALE_TIME_MS,
+    // Browser internet status can be offline while a local/Tailnet daemon is reachable.
+    // canFetch already gates on the actual daemon WebSocket.
+    networkMode: "always",
+    staleTime: options.staleTime ?? PROVIDER_USAGE_STALE_TIME_MS,
+    refetchInterval: options.refetchInterval,
     refetchOnMount: true,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
@@ -63,6 +69,7 @@ export function useProviderUsage(
     await queryClient.fetchQuery({
       queryKey,
       queryFn,
+      networkMode: "always",
       staleTime: PROVIDER_USAGE_STALE_TIME_MS,
     });
   }, [canFetch, queryClient, queryFn, queryKey]);
@@ -74,17 +81,17 @@ export function useProviderUsage(
     if (!supportsProviderUsage) {
       return { kind: "error", message: providerUsageCopy.hostUpgradeRequired };
     }
+    if (query.isError) {
+      return {
+        kind: "error",
+        message: query.error instanceof Error ? query.error.message : String(query.error),
+      };
+    }
     if (query.data) {
       return {
         kind: "ready",
         payload: query.data,
         isRefreshing: query.isFetching,
-      };
-    }
-    if (query.isError) {
-      return {
-        kind: "error",
-        message: query.error instanceof Error ? query.error.message : String(query.error),
       };
     }
     return { kind: "loading" };

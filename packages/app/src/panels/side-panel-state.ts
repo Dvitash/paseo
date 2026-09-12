@@ -15,6 +15,7 @@ export const SIDE_CHAT_TEST_IDS = {
   errorBanner: "side-error-banner",
   input: "side-input",
   sendButton: "side-send-button",
+  statusButton: "side-status-button",
   runningIndicator: "side-running-indicator",
   stopButton: "side-stop-button",
   providerTrigger: "side-provider-trigger",
@@ -24,6 +25,9 @@ export const SIDE_CHAT_TEST_IDS = {
   steeringInput: "side-steering-input",
   steeringSendButton: "side-steering-send-button",
 } as const;
+
+export const SIDE_STATUS_UPDATE_PROMPT =
+  "Give me a status update on the main agent: what it is doing right now, what it just did, and what is next.";
 
 export interface SelectedMainAgent {
   mainAgentId: string | null;

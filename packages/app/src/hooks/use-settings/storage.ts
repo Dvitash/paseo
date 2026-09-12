@@ -92,6 +92,14 @@ export interface AppSettings {
   /** Desktop-only preferences for implicit opens into the ordinary side pane. */
   openInSidePane: OpenInSidePanePreferences;
   pullRequestOpenLocation: PullRequestOpenLocation;
+  showHostPerformance: boolean;
+  /** Preferred microphone for dictation (web/Electron `MediaDeviceInfo.deviceId`).
+   * Null = system default. Ignored on native, where the OS routes input. */
+  dictationInputDeviceId: string | null;
+  /** In-app chime when an agent finishes or needs input (web; Electron uses the OS sound). */
+  notificationSounds: boolean;
+  /** Flash the title/taskbar icon while an agent needs input and the window is unfocused. */
+  notificationFlash: boolean;
 }
 
 export type AppSettingsUpdate =
@@ -144,6 +152,10 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   vimKeybindings: false,
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
   pullRequestOpenLocation: "explorer",
+  showHostPerformance: true,
+  notificationSounds: true,
+  notificationFlash: true,
+  dictationInputDeviceId: null,
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -235,8 +247,12 @@ const StoredAppSettingsSchema = z
       .catch("detailed"),
     // COMPAT(compactToolCalls): migrated in v0.1.105, remove after 2027-01-12.
     compactToolCalls: z.boolean().optional().catch(undefined),
+    notificationSounds: z.boolean().catch(true),
+    notificationFlash: z.boolean().catch(true),
     chatOutlineEnabled: z.boolean().catch(true),
     vimKeybindings: z.boolean().catch(false),
+    showHostPerformance: z.boolean().catch(true),
+    dictationInputDeviceId: z.string().nullable().catch(null),
     openInSidePane: z
       .object({
         explorerFiles: z.boolean().catch(false),

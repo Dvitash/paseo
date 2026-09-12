@@ -101,6 +101,68 @@ describe("OMP launch policy", () => {
     );
   });
 
+  test("launches a forked session via --fork instead of --session/--no-session", () => {
+    const launch = buildOmpLaunch({
+      command: ["omp"],
+      session: {
+        cwd: "/workspace/project",
+        fork: "/home/user/.omp/sessions/abc123.jsonl",
+      },
+    });
+
+    expect(launch.fork).toBe("/home/user/.omp/sessions/abc123.jsonl");
+    expect(launch.argv).toContain("--fork");
+    expect(launch.argv).toContain("/home/user/.omp/sessions/abc123.jsonl");
+    expect(launch.argv).not.toContain("--session");
+    expect(launch.argv).not.toContain("--no-session");
+  });
+
+  test("fork carries the parent prompt-cache key explicitly", () => {
+    const launch = buildOmpLaunch({
+      command: ["omp"],
+      session: {
+        cwd: "/workspace/project",
+        fork: "/home/user/.omp/sessions/abc123.jsonl",
+        promptCacheKey: "parent-cache-key",
+      },
+    });
+
+    expect(launch.argv).toEqual(
+      expect.arrayContaining([
+        "--fork",
+        "/home/user/.omp/sessions/abc123.jsonl",
+        "--prompt-cache-key",
+        "parent-cache-key",
+      ]),
+    );
+  });
+
+  test("readOnly fork keeps confinement flags alongside --fork", () => {
+    const launch = buildOmpLaunch({
+      command: ["omp"],
+      session: {
+        cwd: "/workspace/project",
+        readOnly: true,
+        fork: "/home/user/.omp/sessions/abc123.jsonl",
+        configFilePath: "/tmp/readonly-config.yaml",
+        extensionPaths: ["/tmp/readonly-guard.mjs"],
+      },
+    });
+
+    expect(launch.argv).toEqual(
+      expect.arrayContaining([
+        "--fork",
+        "/home/user/.omp/sessions/abc123.jsonl",
+        "--tools",
+        "read,grep,glob",
+        "--no-extensions",
+        "--extension",
+        "/tmp/readonly-guard.mjs",
+      ]),
+    );
+    expect(launch.argv).not.toContain("--session");
+  });
+
   test("preserves default non-readOnly behavior and passes extraArgs unchanged", () => {
     const launch = buildOmpLaunch({
       command: ["omp"],

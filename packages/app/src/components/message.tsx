@@ -61,6 +61,8 @@ import type { TaskActivity, TodoEntry, UserMessageImageAttachment } from "@/type
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { buildToolCallPresentation } from "@/tool-calls/presentation";
+import { ToolCallPreview } from "@/tool-calls/activity-content";
+import { formatHubTitle } from "@/tool-calls/hub";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { getMarkdownListMarker, getMarkdownListSpacing } from "@/utils/markdown-list";
 import { markdownNodeContainsType } from "@/utils/markdown-ast";
@@ -79,6 +81,8 @@ import { setAssistantMarkdownBlockHeight } from "@/utils/assistant-message-heigh
 import { isRenderProfileEnabled } from "@/utils/render-profiler";
 import { getAgentAttachmentPillContent } from "@/attachments/attachment-pill-content";
 import { PlanCard } from "./plan-card";
+import { AdvisorComments } from "./advisor-comments";
+import { isAdvisorToolCall } from "@/tool-calls/advisor";
 import { useToolCallSheet } from "./tool-call-sheet";
 import { ToolCallDetailsContent } from "./tool-call-details";
 import {
@@ -2306,6 +2310,7 @@ interface ExpandableBadgeProps {
   onOpenFile?: () => void;
   onDetailHoverChange?: (hovered: boolean) => void;
   renderDetails?: () => ReactNode;
+  renderPreview?: () => ReactNode;
   isLoading?: boolean;
   isError?: boolean;
   isLastInSequence?: boolean;
@@ -2669,6 +2674,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   onOpenFile,
   onDetailHoverChange,
   renderDetails,
+  renderPreview,
   isLoading = false,
   isError = false,
   isLastInSequence = false,
@@ -2682,7 +2688,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   const [isPressed, setIsPressed] = useState(false);
   const isInteractive = Boolean(onToggle);
   const hasDetailContent = Boolean(renderDetails);
-  const detailContent = hasDetailContent && isExpanded ? renderDetails?.() : null;
+  const hasVisibleContent = isExpanded ? hasDetailContent : Boolean(renderPreview);
+  const detailContent = isExpanded ? renderDetails?.() : renderPreview?.();
   const detailWrapperRef = useRef<View | null>(null);
 
   const handleHoverIn = useCallback(() => setIsHovered(true), []);
@@ -2784,7 +2791,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
 
   useDetailWheelPropagationBlocker({
     detailWrapperRef,
-    enabled: !isNative && isExpanded && hasDetailContent,
+    enabled: isWeb && hasVisibleContent,
   });
 
   const shimmerLabelStyle = useMemo<StyleProp<TextStyle>>(
@@ -2843,10 +2850,12 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     () => [
       expandableBadgeStylesheet.pressable,
       isPressed && isInteractive ? expandableBadgeStylesheet.pressablePressed : null,
-      isExpanded && expandableBadgeStylesheet.pressableExpanded,
-      isExpanded && !borderlessWhenExpanded && expandableBadgeStylesheet.pressableExpandedAttached,
+      hasVisibleContent && expandableBadgeStylesheet.pressableExpanded,
+      hasVisibleContent &&
+        !borderlessWhenExpanded &&
+        expandableBadgeStylesheet.pressableExpandedAttached,
     ],
-    [borderlessWhenExpanded, isExpanded, isInteractive, isPressed],
+    [borderlessWhenExpanded, hasVisibleContent, isInteractive, isPressed],
   );
 
   const detailWrapperStyle = useMemo(
@@ -2858,8 +2867,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   );
 
   const accessibilityState = useMemo(
-    () => (isInteractive ? { expanded: isExpanded } : undefined),
-    [isExpanded, isInteractive],
+    () => ({ expanded: isInteractive ? isExpanded : undefined, busy: isLoading }),
+    [isExpanded, isInteractive, isLoading],
   );
 
   const isActive = isHovered || isExpanded;
@@ -2939,6 +2948,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
         {...pressHandlers}
         disabled={!isInteractive}
         accessibilityState={accessibilityState}
+        aria-expanded={accessibilityState.expanded}
+        aria-busy={accessibilityState.busy}
         style={pressableStyle}
       >
         <View style={expandableBadgeStylesheet.headerRow}>
@@ -3000,6 +3011,7 @@ function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: Expa
   if (previous.onOpenFile !== next.onOpenFile) return false;
   if (previous.onDetailHoverChange !== next.onDetailHoverChange) return false;
   if (previous.renderDetails !== next.renderDetails) return false;
+  if (previous.renderPreview !== next.renderPreview) return false;
   return true;
 }
 
@@ -3012,6 +3024,8 @@ interface ToolCallProps {
   detail?: ToolCallDetail;
   cwd?: string;
   metadata?: Record<string, unknown>;
+  startedAt?: Date;
+  endedAt?: Date;
   isLastInSequence?: boolean;
   disableOuterSpacing?: boolean;
   onInlineDetailsHoverChange?: (hovered: boolean) => void;
@@ -3031,6 +3045,8 @@ export const ToolCall = memo(function ToolCall({
   detail,
   cwd,
   metadata,
+  startedAt,
+  endedAt,
   isLastInSequence = false,
   disableOuterSpacing,
   onInlineDetailsHoverChange,
@@ -3040,6 +3056,7 @@ export const ToolCall = memo(function ToolCall({
   forceInline = false,
   maxDetailHeight = 400,
 }: ToolCallProps) {
+  const { t } = useTranslation();
   const { openToolCall } = useToolCallSheet();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded ?? false);
 
@@ -3073,6 +3090,12 @@ export const ToolCall = memo(function ToolCall({
       }),
     [toolName, status, error, effectiveDetail, metadata, cwd],
   );
+  const { displayName, summary } = useMemo(() => {
+    if (presentation.hub) {
+      return { displayName: formatHubTitle(presentation.hub, t), summary: undefined };
+    }
+    return { displayName: presentation.displayName, summary: presentation.summary };
+  }, [presentation.hub, presentation.displayName, presentation.summary, t]);
   const handleOpenFile = useMemo(() => {
     const openFilePath = presentation.openFilePath;
     if (!openFilePath || !onOpenFilePath) {
@@ -3085,12 +3108,15 @@ export const ToolCall = memo(function ToolCall({
     if (!shouldRenderInline) {
       openToolCall({
         toolName,
-        displayName: presentation.displayName,
-        summary: presentation.summary,
+        displayName,
+        summary,
         detail: effectiveDetail,
         errorText: presentation.errorText,
         icon: presentation.icon,
         showLoadingSkeleton: presentation.isLoadingDetails,
+        status,
+        startedAt,
+        endedAt,
       });
     } else {
       setIsExpanded((prev) => !prev);
@@ -3099,12 +3125,15 @@ export const ToolCall = memo(function ToolCall({
     shouldRenderInline,
     openToolCall,
     toolName,
-    presentation.displayName,
-    presentation.summary,
+    displayName,
+    summary,
     presentation.errorText,
     presentation.icon,
     presentation.isLoadingDetails,
     effectiveDetail,
+    status,
+    startedAt,
+    endedAt,
   ]);
 
   useEffect(() => {
@@ -3144,6 +3173,9 @@ export const ToolCall = memo(function ToolCall({
         errorText={presentation.errorText}
         maxHeight={maxDetailHeight}
         showLoadingSkeleton={presentation.isLoadingDetails}
+        status={status}
+        startedAt={startedAt}
+        endedAt={endedAt}
       />
     );
   }, [
@@ -3153,7 +3185,29 @@ export const ToolCall = memo(function ToolCall({
     presentation.errorText,
     presentation.isLoadingDetails,
     maxDetailHeight,
+    status,
+    startedAt,
+    endedAt,
   ]);
+
+  const renderPreview = useCallback(
+    () => (
+      <ToolCallPreview
+        detail={effectiveDetail}
+        evaluation={presentation.evaluation}
+        hub={presentation.hub}
+        errorText={presentation.errorText}
+        onShowMore={handleToggle}
+      />
+    ),
+    [
+      effectiveDetail,
+      presentation.evaluation,
+      presentation.hub,
+      presentation.errorText,
+      handleToggle,
+    ],
+  );
 
   if (presentation.isPlan && effectiveDetail?.type === "plan") {
     return (
@@ -3165,16 +3219,28 @@ export const ToolCall = memo(function ToolCall({
     );
   }
 
+  if (isAdvisorToolCall({ detail: effectiveDetail, metadata })) {
+    return (
+      <AdvisorComments
+        text={effectiveDetail?.type === "plain_text" ? effectiveDetail.text : undefined}
+        label={effectiveDetail?.type === "plain_text" ? effectiveDetail.label : undefined}
+        testID="timeline-advisor-comments"
+        disableOuterSpacing={disableOuterSpacing}
+      />
+    );
+  }
+
   return (
     <ExpandableBadge
       testID="tool-call-badge"
-      label={presentation.displayName}
-      secondaryLabel={presentation.summary}
+      label={displayName}
+      secondaryLabel={summary}
       icon={presentation.icon}
       isExpanded={shouldRenderInline && isExpanded}
       onToggle={presentation.canOpenDetails ? handleToggle : undefined}
       onOpenFile={handleOpenFile}
       renderDetails={presentation.canOpenDetails && shouldRenderInline ? renderDetails : undefined}
+      renderPreview={presentation.hasPreview ? renderPreview : undefined}
       isLoading={status === "running" || status === "executing"}
       isError={status === "failed"}
       isLastInSequence={isLastInSequence}
@@ -3193,6 +3259,8 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.detail !== next.detail) return false;
   if (previous.cwd !== next.cwd) return false;
   if (previous.metadata !== next.metadata) return false;
+  if (previous.startedAt !== next.startedAt) return false;
+  if (previous.endedAt !== next.endedAt) return false;
   if (previous.isLastInSequence !== next.isLastInSequence) return false;
   if (previous.disableOuterSpacing !== next.disableOuterSpacing) return false;
   if (previous.onOpenFilePath !== next.onOpenFilePath) return false;

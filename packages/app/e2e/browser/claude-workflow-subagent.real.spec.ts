@@ -7,6 +7,7 @@ import {
   expectSingleWorkflowParentCard,
   expectWorkflowCompleted,
   expectWorkflowRunning,
+  expectWorkflowTimelineMarker,
   openWorkflowTimeline,
   releaseWorkflow,
 } from "../support/helpers/claude-workflow";
@@ -30,23 +31,25 @@ test.describe("real Claude workflow subagent row", () => {
 
     try {
       handle = await launchAgent({ page, provider: "claude", cwd, mode: "full-access" });
-
       await test.step("ask Claude to run the workflow", async () => {
         await askClaudeToRunWorkflow(handle!, WORKFLOW_SCRIPT, gatePath);
         await expectWorkflowRunning(page);
         await page.screenshot({ path: testInfo.outputPath("workflow-running.png") });
-        releaseWorkflow(gatePath);
+      });
+
+      await test.step("open the workflow through the provider-subagent pane while running", async () => {
+        await openWorkflowTimeline(page);
+        await page.screenshot({ path: testInfo.outputPath("workflow-timeline.png") });
       });
 
       await test.step("see the workflow finish without leaving a running row", async () => {
+        releaseWorkflow(gatePath);
+        await expectWorkflowTimelineMarker(page);
+        // The provider child opened in the main pane; return to the parent before asserting on it.
+        await page.getByTestId(`workspace-tab-agent_${handle!.agentId}`).first().click();
         await expectWorkflowCompleted(page);
         await expectSingleWorkflowParentCard(page);
         await page.screenshot({ path: testInfo.outputPath("workflow-completed.png") });
-      });
-
-      await test.step("open the workflow through the existing provider-subagent pane", async () => {
-        await openWorkflowTimeline(page);
-        await page.screenshot({ path: testInfo.outputPath("workflow-timeline.png") });
       });
     } finally {
       await cleanupRewindFlow({ handle, cwd });

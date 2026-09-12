@@ -1,5 +1,5 @@
 import { isLanguageSupported, type HighlightToken } from "@getpaseo/highlight";
-import { extensionFromPath, tokenizeToLines } from "@/utils/highlight-cache";
+import { tokenizeFileToLines } from "@/utils/highlight-cache";
 import type { DiffLine } from "@/utils/tool-call-parsers";
 
 // The leading diff marker glyph for a line. The code on the line is the content
@@ -41,11 +41,10 @@ export function highlightDiffLines(
   diffLines: DiffLine[],
   filePath: string | null | undefined,
 ): DiffLine[] {
-  const ext = extensionFromPath(filePath);
   // Gate on real grammar support: an unsupported language would tokenize to a
   // single style-less token per line, which would shadow the word-level change
   // segments the diff already computes. Better to keep those.
-  if (!ext || diffLines.length === 0 || !isLanguageSupported(`x.${ext}`)) {
+  if (!filePath || diffLines.length === 0 || !isLanguageSupported(filePath)) {
     return diffLines;
   }
 
@@ -72,8 +71,8 @@ export function highlightDiffLines(
     return { oldIndex: -1, newIndex: -1 };
   });
 
-  const oldTokens = oldCode.length > 0 ? tokenizeToLines(oldCode.join("\n"), ext) : null;
-  const newTokens = newCode.length > 0 ? tokenizeToLines(newCode.join("\n"), ext) : null;
+  const oldTokens = oldCode.length > 0 ? tokenizeFileToLines(oldCode.join("\n"), filePath) : null;
+  const newTokens = newCode.length > 0 ? tokenizeFileToLines(newCode.join("\n"), filePath) : null;
   if (!oldTokens && !newTokens) {
     return diffLines;
   }

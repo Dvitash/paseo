@@ -32,4 +32,19 @@ describe("Paseo tool policy", () => {
       isPaseoToolEnabled({ enabled: true, disabledTools: ["list_agents"] }, "create_agent"),
     ).toBe(true);
   });
+
+  test("enabledTools allowlist wins over disabledTools and still keeps speak", () => {
+    const policy: ProviderPaseoToolsPolicy = {
+      enabled: true,
+      enabledTools: ["list_agents", "get_agent_status"],
+      disabledTools: ["list_agents"],
+    };
+    expect(isPaseoToolEnabled(policy, "list_agents")).toBe(true);
+    expect(isPaseoToolEnabled(policy, "get_agent_status")).toBe(true);
+    expect(isPaseoToolEnabled(policy, "send_agent_prompt")).toBe(false);
+    expect(isPaseoToolEnabled(policy, "speak")).toBe(true);
+    expect(
+      isPaseoToolEnabled({ enabled: false, enabledTools: ["list_agents"] }, "list_agents"),
+    ).toBe(false);
+  });
 });

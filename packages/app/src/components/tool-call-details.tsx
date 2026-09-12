@@ -20,11 +20,20 @@ import { highlightDiffLines } from "@/utils/diff-highlight";
 import { hasMeaningfulToolCallDetail } from "@/utils/tool-call-detail-state";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
-import { extensionFromPath, highlightToKeyedLines } from "@/utils/highlight-cache";
+import { highlightFileToKeyedLines } from "@/utils/highlight-cache";
 import { HighlightedLines } from "./highlighted-content";
 import { DiffViewer } from "./diff-viewer";
 import { getCodeInsets } from "./code-insets";
 import { isWeb } from "@/constants/platform";
+import { getEvalPresentation } from "@/tool-calls/eval";
+import { EvalContent } from "@/tool-calls/activity-content";
+import { getHubPresentation, hasHubContent } from "@/tool-calls/hub";
+import { HubContent } from "@/tool-calls/hub-content";
+import {
+  ShellDetailSection,
+  type DetailStyles,
+  type ShellDetailProps,
+} from "./tool-call-shell-detail";
 
 const ScrollView = isWeb ? RNScrollView : GHScrollView;
 
@@ -37,21 +46,9 @@ interface ToolCallDetailsContentProps {
   maxHeight?: number;
   fillAvailableHeight?: boolean;
   showLoadingSkeleton?: boolean;
-}
-
-interface DetailStyles {
-  sectionFillStyle: StyleProp<ViewStyle>;
-  codeBlockFillStyle: StyleProp<ViewStyle>;
-  codeVerticalScrollStyle: StyleProp<ViewStyle>;
-  scrollAreaFillStyle: StyleProp<ViewStyle>;
-  scrollAreaStyle: StyleProp<ViewStyle>;
-  jsonScrollCombined: StyleProp<ViewStyle>;
-  jsonScrollErrorCombined: StyleProp<ViewStyle>;
-  fullBleedContainerStyle: StyleProp<ViewStyle>;
-  loadingContainerStyle: StyleProp<ViewStyle>;
-  resolvedMaxHeight: number | undefined;
-  shouldFill: boolean;
-  isFullBleed: boolean;
+  status?: "executing" | "running" | "completed" | "failed" | "canceled";
+  startedAt?: Date;
+  endedAt?: Date;
 }
 
 function resolveIsFullBleed(detail: ToolCallDetail | undefined): boolean {
@@ -145,45 +142,6 @@ function useDiffLines(detail: ToolCallDetail | undefined): DiffLine[] | undefine
       : buildLineDiff(detail.oldString ?? "", detail.newString ?? "");
     return highlightDiffLines(diffLines, detail.filePath);
   }, [detail]);
-}
-
-interface ShellDetailProps {
-  command: string;
-  output: string | null | undefined;
-  ds: DetailStyles;
-}
-
-function ShellDetailSection({ command, output, ds }: ShellDetailProps) {
-  const normalizedCommand = command.replace(/\n+$/, "");
-  const commandOutput = (output ?? "").replace(/^\n+/, "");
-  const hasOutput = commandOutput.length > 0;
-  return (
-    <View style={ds.sectionFillStyle}>
-      <View style={ds.codeBlockFillStyle}>
-        <ScrollView
-          style={ds.codeVerticalScrollStyle}
-          contentContainerStyle={styles.codeVerticalContent}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-        >
-          <ScrollView
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator
-            contentContainerStyle={styles.codeHorizontalContent}
-          >
-            <View style={styles.codeLine} dataSet={CODE_SURFACE_DATASET}>
-              <Text selectable style={styles.scrollText}>
-                <Text style={styles.shellPrompt}>$ </Text>
-                {normalizedCommand}
-                {hasOutput ? `\n\n${commandOutput}` : ""}
-              </Text>
-            </View>
-          </ScrollView>
-        </ScrollView>
-      </View>
-    </View>
-  );
 }
 
 interface WorktreeSetupDetailProps {
@@ -444,7 +402,7 @@ function ScrollableTextSection({
   startLine,
 }: ScrollableContentProps) {
   const keyedLines = useMemo(
-    () => (filePath ? highlightToKeyedLines(content, extensionFromPath(filePath)) : null),
+    () => (filePath ? highlightFileToKeyedLines(content, filePath) : null),
     [content, filePath],
   );
   const body = (
@@ -671,11 +629,21 @@ function buildDetailSections(
   diffLines: DiffLine[] | undefined,
   ds: DetailStyles,
   t: TFunction,
+  timing?: Pick<ShellDetailProps, "status" | "startedAt" | "endedAt">,
 ): ReactNode[] {
   if (!detail) return [];
   if (detail.type === "shell") {
     return [
-      <ShellDetailSection key="shell" command={detail.command} output={detail.output} ds={ds} />,
+      <ShellDetailSection
+        key="shell"
+        command={detail.command}
+        output={detail.output}
+        timeoutMs={detail.timeoutMs}
+        status={timing?.status}
+        startedAt={timing?.startedAt}
+        endedAt={timing?.endedAt}
+        ds={ds}
+      />,
     ];
   }
   if (detail.type === "worktree_setup") {
@@ -713,6 +681,7 @@ function buildDetailSections(
             ds={ds}
             wrapInSectionFill={false}
             filePath={detail.filePath}
+            startLine={1}
           />
         ) : null}
       </View>,
@@ -787,15 +756,34 @@ export function ToolCallDetailsContent({
   maxHeight,
   fillAvailableHeight = false,
   showLoadingSkeleton = false,
+  status,
+  startedAt,
+  endedAt,
 }: ToolCallDetailsContentProps) {
   const { t } = useTranslation();
   const resolvedMaxHeight = fillAvailableHeight ? undefined : (maxHeight ?? 300);
   const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight);
   const diffLines = useDiffLines(detail);
+  const evaluation = useMemo(
+    () => getEvalPresentation(toolName, detail, errorText),
+    [toolName, detail, errorText],
+  );
+  const hub = useMemo(() => getHubPresentation(toolName, detail), [toolName, detail]);
 
-  const sections: ReactNode[] = buildDetailSections(toolName, detail, diffLines, ds, t);
+  let sections: ReactNode[];
+  if (evaluation) {
+    sections = [<EvalContent key="eval" evaluation={evaluation} maxHeight={resolvedMaxHeight} />];
+  } else if (hub && hasHubContent(hub)) {
+    sections = [<HubContent key="hub" hub={hub} maxHeight={resolvedMaxHeight} />];
+  } else {
+    sections = buildDetailSections(toolName, detail, diffLines, ds, t, {
+      status,
+      startedAt,
+      endedAt,
+    });
+  }
 
-  if (errorText) {
+  if (errorText && !evaluation) {
     sections.push(<ErrorSection key="error" errorText={errorText} ds={ds} />);
   }
 
@@ -948,9 +936,6 @@ const styles = StyleSheet.create((theme) => {
             overflowWrap: "normal",
           }
         : null),
-    },
-    shellPrompt: {
-      color: theme.colors.foregroundMuted,
     },
     subAgentSessionText: {
       fontFamily: theme.fontFamily.mono,

@@ -13,6 +13,7 @@ import type {
   PiSessionState,
   PiSessionStats,
 } from "../rpc-types.js";
+import { readFileSync } from "node:fs";
 import { buildPiLaunch } from "../runtime.js";
 
 type FakePiSubagentSubscriptionLevel = "off" | "progress" | "events";
@@ -70,7 +71,19 @@ export class FakePi implements PiRuntime {
     this.recordedLaunches.push(launch);
     const session = new FakePiSession(launch);
     session.commands =
-      this.queuedCommands.shift() ?? (input.readOnly ? [{ name: "__paseo_readonly_guard__" }] : []);
+      this.queuedCommands.shift() ??
+      (input.readOnly
+        ? [
+            { name: "__paseo_readonly_guard__" },
+            // The real extension registers the ready sentinel only when the
+            // generated file embeds the daemon MCP bridge.
+            ...(input.extensionPaths?.some((extensionPath) =>
+              readFileSync(extensionPath, "utf8").includes("PASEO_MCP_URL"),
+            )
+              ? [{ name: "__paseo_tools_ready__" }]
+              : []),
+          ]
+        : []);
     this.queuedSessionSetups.shift()?.(session);
     this.sessions.push(session);
     return session;

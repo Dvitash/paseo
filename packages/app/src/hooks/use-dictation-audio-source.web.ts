@@ -166,6 +166,29 @@ async function finalizeRecorderStoppedPromise(input: {
     onError?.(err instanceof Error ? err : new Error(String(err)));
   }
 }
+const DICTATION_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  channelCount: 1,
+  noiseSuppression: true,
+  echoCancellation: true,
+  autoGainControl: true,
+};
+
+async function getDictationMediaStream(
+  preferredDeviceId: string | undefined,
+): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: preferredDeviceId
+        ? { ...DICTATION_AUDIO_CONSTRAINTS, deviceId: { exact: preferredDeviceId } }
+        : DICTATION_AUDIO_CONSTRAINTS,
+    });
+  } catch (err) {
+    // A stale saved device id (unplugged mic) shouldn't kill dictation —
+    // fall back to the system default input.
+    if (!preferredDeviceId) throw err;
+    return navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
+  }
+}
 
 export function useDictationAudioSource(config: DictationAudioSourceConfig): DictationAudioSource {
   const [volume, setVolume] = useState(0);
@@ -177,6 +200,10 @@ export function useDictationAudioSource(config: DictationAudioSourceConfig): Dic
     onPcmSegmentRef.current = config.onPcmSegment;
     onErrorRef.current = config.onError;
   }, [config.onPcmSegment, config.onError]);
+  const inputDeviceIdRef = useRef(config.inputDeviceId);
+  useEffect(() => {
+    inputDeviceIdRef.current = config.inputDeviceId;
+  }, [config.inputDeviceId]);
 
   const refs = useRef<{
     stream: MediaStream | null;
@@ -267,16 +294,7 @@ export function useDictationAudioSource(config: DictationAudioSourceConfig): Dic
       throw new Error("AudioContext unavailable");
     }
 
-    const rawStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        noiseSuppression: true,
-        echoCancellation: true,
-        autoGainControl: true,
-      },
-    });
-
-    const stream = rawStream;
+    const stream = await getDictationMediaStream(inputDeviceIdRef.current?.trim());
 
     const context = new AudioContextCtor();
 

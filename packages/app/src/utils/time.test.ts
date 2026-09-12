@@ -5,6 +5,8 @@ import {
   formatDuration,
   formatMessageTimestamp,
   formatTimeAgo,
+  formatTimeoutSeconds,
+  formatWallClockSeconds,
 } from "./time";
 
 describe("formatTimeAgo", () => {
@@ -87,6 +89,41 @@ describe("formatDuration", () => {
   it("guards against negative and NaN", () => {
     expect(formatDuration(-1)).toBe("0s");
     expect(formatDuration(Number.NaN)).toBe("0s");
+  });
+});
+
+describe("formatWallClockSeconds", () => {
+  it("renders durations as seconds with two decimals", () => {
+    expect(formatWallClockSeconds(0)).toBe("0.00s");
+    expect(formatWallClockSeconds(21_740)).toBe("21.74s");
+    expect(formatWallClockSeconds(30)).toBe("0.03s");
+    expect(formatWallClockSeconds(192_400)).toBe("192.40s");
+  });
+
+  it("guards against negative and NaN", () => {
+    expect(formatWallClockSeconds(-5)).toBe("0.00s");
+    expect(formatWallClockSeconds(Number.NaN)).toBe("0.00s");
+  });
+});
+
+describe("formatTimeoutSeconds", () => {
+  it("renders whole-second timeouts without decimals", () => {
+    expect(formatTimeoutSeconds(300_000)).toBe("300s");
+    expect(formatTimeoutSeconds(120_000)).toBe("120s");
+  });
+
+  it("renders fractional seconds with one decimal", () => {
+    expect(formatTimeoutSeconds(1_500)).toBe("1.5s");
+  });
+
+  it("renders sub-second timeouts as milliseconds", () => {
+    expect(formatTimeoutSeconds(500)).toBe("500ms");
+  });
+
+  it("renders zero and invalid timeouts as none", () => {
+    expect(formatTimeoutSeconds(0)).toBe("none");
+    expect(formatTimeoutSeconds(-1)).toBe("none");
+    expect(formatTimeoutSeconds(Number.NaN)).toBe("none");
   });
 });
 

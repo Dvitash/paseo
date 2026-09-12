@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { ArrowUp, Mic, MicOff, CornerDownLeft, Plus, Square } from "lucide-react-native";
 import { useDictation } from "@/hooks/use-dictation";
+import { useSettings } from "@/hooks/use-settings";
 import { DictationOverlay } from "@/components/dictation-controls";
 import { RealtimeVoiceOverlay } from "@/components/realtime-voice-overlay";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -872,6 +873,7 @@ interface StartDictationContext {
   canStartDictation: () => boolean;
   toast: { error: (msg: string) => void };
   startDictation: () => Promise<void>;
+  unavailableFallback: string;
 }
 
 async function startDictationIfAvailableImpl(ctx: StartDictationContext): Promise<void> {
@@ -880,6 +882,7 @@ async function startDictationIfAvailableImpl(ctx: StartDictationContext): Promis
     return;
   }
   if (!ctx.canStartDictation()) {
+    ctx.toast.error(ctx.unavailableFallback);
     return;
   }
   await ctx.startDictation();
@@ -975,12 +978,11 @@ function computeShouldShowDictationOverlay(
   return isDictating || isDictationProcessing || dictationStatus === "failed";
 }
 
-function computeIsDictationStartEnabled(
-  isReadyForDictation: boolean | undefined,
-  isConnected: boolean,
-  disabled: boolean,
-): boolean {
-  return (isReadyForDictation ?? isConnected) && !disabled;
+/** The mic button stays enabled while merely "not ready" (dictation disabled in
+ * daemon config, models downloading, …) so the press can surface the reason via
+ * toast instead of looking dead. */
+function computeIsDictationStartEnabled(isConnected: boolean, disabled: boolean): boolean {
+  return isConnected && !disabled;
 }
 
 function resolveMaxInputHeight(windowHeight: number): number {
@@ -1354,11 +1356,8 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
 
     const canConfirmDictation = useCallback(() => client?.isConnected ?? false, [client]);
     const isConnected = client?.isConnected ?? false;
-    const isDictationStartEnabled = computeIsDictationStartEnabled(
-      isReadyForDictation,
-      isConnected,
-      disabled,
-    );
+    const dictationInputDeviceId = useSettings((settings) => settings.dictationInputDeviceId);
+    const isDictationStartEnabled = computeIsDictationStartEnabled(isConnected, disabled);
 
     const {
       isRecording: isDictating,
@@ -1381,6 +1380,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       canStart: canStartDictation,
       canConfirm: canConfirmDictation,
       enableDuration: true,
+      inputDeviceId: dictationInputDeviceId,
     });
 
     const isRealtimeVoiceForCurrentAgent = computeIsRealtimeVoiceForAgent(
@@ -1409,10 +1409,11 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         startDictationIfAvailableImpl({
           dictationUnavailableMessage,
           canStartDictation,
+          unavailableFallback: t("message.dictation.unavailable"),
           toast,
           startDictation,
         }),
-      [canStartDictation, dictationUnavailableMessage, startDictation, toast],
+      [canStartDictation, dictationUnavailableMessage, startDictation, t, toast],
     );
 
     const handleVoicePress = useCallback(

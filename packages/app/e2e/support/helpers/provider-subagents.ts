@@ -49,10 +49,20 @@ async function selectOnlyRootSubagent(page: Page, label: RegExp): Promise<void> 
   await openSubagentsTrack(page);
   const row = await expectOnlySubagent(page, label);
   await row.click();
+  const openButton = page
+    .getByRole("button", { name: /open conversation/i })
+    .or(page.locator('[data-testid^="subagents-track-open-"]'))
+    .first();
+  if ((await openButton.count()) > 0 && (await openButton.isVisible())) {
+    await openButton.click();
+  }
 }
 
 async function openOwnedSubagents(page: Page, ownerPanel: Locator): Promise<void> {
-  await ownerPanel.getByTestId("subagents-track-header").click();
+  const header = ownerPanel.getByTestId("subagents-track-header");
+  if ((await header.count()) > 0 && (await header.isVisible())) {
+    await header.click();
+  }
   await expect(page.getByTestId("subagents-track-header-panel")).toBeVisible();
 }
 
@@ -72,7 +82,13 @@ export async function expectNestedProviderSubagentOwnership(
   const nestedRow = await expectOnlySubagent(page, /^nested_owner\b/);
   await attachScreenshot(page, testInfo, `nested-ownership-${phase}-tree`);
   await nestedRow.click();
-
+  const openNested = page
+    .getByRole("button", { name: /open conversation/i })
+    .or(page.locator('[data-testid^="subagents-track-open-"]'))
+    .first();
+  if ((await openNested.count()) > 0 && (await openNested.isVisible())) {
+    await openNested.click();
+  }
   const nestedPanel = page.locator('[data-testid="provider-subagent-panel"]:visible');
   await expect(
     nestedPanel

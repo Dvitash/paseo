@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
+import { SPACING } from "@/styles/theme";
 import {
   orderHeadForStreamRenderStrategy,
   orderTailForStreamRenderStrategy,
@@ -392,6 +393,19 @@ describe("layoutStream", () => {
 
     expect(findLayoutItem(layout, shell.id).toolSequence).toBe("first");
     expect(findLayoutItem(layout, thinking.id).toolSequence).toBe("last");
+  });
+
+  it("separates consecutive tool-sequence items with a small gap", () => {
+    const first = toolCall("tool-1", 2);
+    const second = toolCall("tool-2", 3);
+    const thinking = thought("thought-1", 4);
+    const layout = layoutFor({
+      platform: "web",
+      tail: [userMessage("u1", 1), first, second, thinking],
+    });
+
+    expect(findLayoutItem(layout, first.id).gapBelow).toBe(SPACING[1]);
+    expect(findLayoutItem(layout, second.id).gapBelow).toBe(SPACING[1]);
   });
 
   it("keeps bottom and inline footer ownership mutually exclusive", () => {

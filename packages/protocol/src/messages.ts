@@ -8,6 +8,64 @@ import { ProviderPaseoToolsPolicySchema } from "./provider-config.js";
 import { TOOL_CALL_ICON_NAMES } from "./agent-types.js";
 import { WORKSPACE_LABEL_COLORS } from "./workspace-labels.js";
 import {
+  WebPushSubscriptionKeysSchema,
+  WebPushSubscriptionSchema,
+  type WebPushSubscriptionKeys,
+  type WebPushSubscription,
+} from "./web-push.js";
+export {
+  WebPushSubscriptionKeysSchema,
+  WebPushSubscriptionSchema,
+  type WebPushSubscriptionKeys,
+  type WebPushSubscription,
+};
+import {
+  HostPerformanceCpuSampleSchema,
+  HostPerformanceGetSnapshotRequestSchema,
+  HostPerformanceGetSnapshotResponseSchema,
+  HostPerformanceGpuSchema,
+  HostPerformanceGpusAvailableSchema,
+  HostPerformanceGpusNoneSchema,
+  HostPerformanceGpusSchema,
+  HostPerformanceGpusUnavailableSchema,
+  HostPerformanceHistoryPointSchema,
+  HostPerformanceMemorySchema,
+  HostPerformanceSampleSchema,
+  HostPerformanceSnapshotSchema,
+  type HostPerformanceCpuSample,
+  type HostPerformanceGetSnapshotRequest,
+  type HostPerformanceGetSnapshotResponse,
+  type HostPerformanceGpu,
+  type HostPerformanceGpus,
+  type HostPerformanceHistoryPoint,
+  type HostPerformanceMemory,
+  type HostPerformanceSample,
+  type HostPerformanceSnapshot,
+} from "./host-performance.js";
+export {
+  HostPerformanceCpuSampleSchema,
+  HostPerformanceGetSnapshotRequestSchema,
+  HostPerformanceGetSnapshotResponseSchema,
+  HostPerformanceGpuSchema,
+  HostPerformanceGpusAvailableSchema,
+  HostPerformanceGpusNoneSchema,
+  HostPerformanceGpusSchema,
+  HostPerformanceGpusUnavailableSchema,
+  HostPerformanceHistoryPointSchema,
+  HostPerformanceMemorySchema,
+  HostPerformanceSampleSchema,
+  HostPerformanceSnapshotSchema,
+  type HostPerformanceCpuSample,
+  type HostPerformanceGetSnapshotRequest,
+  type HostPerformanceGetSnapshotResponse,
+  type HostPerformanceGpu,
+  type HostPerformanceGpus,
+  type HostPerformanceHistoryPoint,
+  type HostPerformanceMemory,
+  type HostPerformanceSample,
+  type HostPerformanceSnapshot,
+};
+import {
   SideChatGetRequestSchema,
   SideChatSendRequestSchema,
   SideChatStopRequestSchema,
@@ -221,6 +279,48 @@ export const AgentSkillSelectionSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("custom"), skills: z.array(z.string()) }).strict(),
 ]);
 export type AgentSkillSelection = z.infer<typeof AgentSkillSelectionSchema>;
+/** Speech feature config mirrored from persisted `features.*`. Changes apply on
+ * daemon restart — the speech runtime is built at bootstrap. `dictation` is
+ * typed; other feature blocks (voiceMode, webUi) pass through untouched. */
+const MutableDaemonFeaturesSchema = z
+  .object({
+    dictation: z
+      .object({
+        enabled: z.boolean().optional(),
+        stt: z
+          .object({
+            // Response shape: tolerate providers added by newer daemons.
+            provider: z.string().min(1).optional(),
+            model: z.string().min(1).optional(),
+            language: z.string().min(1).optional(),
+            confidenceThreshold: z.number().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+const MutableDaemonFeaturesPatchSchema = z
+  .object({
+    dictation: z
+      .object({
+        enabled: z.boolean().optional(),
+        stt: z
+          .object({
+            provider: z.enum(["openai", "local"]).optional(),
+            model: z.string().min(1).optional(),
+            language: z.string().min(1).optional(),
+            confidenceThreshold: z.number().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
 
 export const MutableDaemonConfigSchema = z
   .object({
@@ -259,6 +359,7 @@ export const MutableDaemonConfigSchema = z
     skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
+    features: MutableDaemonFeaturesSchema.optional(),
   })
   .passthrough();
 
@@ -279,6 +380,7 @@ export const MutableDaemonConfigPatchSchema = z
     agentProfiles: z.array(AgentProfileSchema).optional(),
     pluginsEnabled: z.boolean().optional(),
     plugins: z.record(PluginIdSchema, PluginSourceSchema).optional(),
+    features: MutableDaemonFeaturesPatchSchema.optional(),
   })
   .partial()
   .passthrough();
@@ -298,6 +400,7 @@ import type {
   AgentProviderNotice,
   ToolCallDetail,
   ToolCallTimelineItem,
+  AgentModelTurnUsage,
   AgentUsage,
   JsonValue,
 } from "./agent-types.js";
@@ -433,6 +536,12 @@ const AgentCapabilityFlagsSchema: z.ZodType<AgentCapabilityFlags> = z
   })
   .catchall(z.boolean());
 
+const AgentModelTurnUsageSchema: z.ZodType<AgentModelTurnUsage> = z.object({
+  status: z.enum(["running", "completed"]),
+  ttftMs: z.number().nullable(),
+  tokensPerSecond: z.number().nullable(),
+});
+
 const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
   inputTokens: z.number().optional(),
   cachedInputTokens: z.number().optional(),
@@ -440,6 +549,7 @@ const AgentUsageSchema: z.ZodType<AgentUsage> = z.object({
   totalCostUsd: z.number().optional(),
   contextWindowMaxTokens: z.number().optional(),
   contextWindowUsedTokens: z.number().optional(),
+  modelTurn: AgentModelTurnUsageSchema.optional(),
 });
 
 const McpStdioServerConfigSchema = z.object({
@@ -586,6 +696,7 @@ const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discri
       cwd: z.string().optional(),
       output: z.string().optional(),
       exitCode: z.number().nullable().optional(),
+      timeoutMs: z.number().optional(),
     }),
     z.object({
       type: z.literal("read"),
@@ -681,6 +792,11 @@ const ToolCallBasePayloadSchema = z.object({
   name: z.string(),
   detail: ToolCallDetailPayloadSchema,
   metadata: z.record(z.string(), z.unknown()).optional(),
+  // ISO timestamps for the call's first observation and terminal transition.
+  // Projected rows collapse lifecycle updates into one item, so these carry
+  // the timing the merged row's own timestamp can't.
+  startedAt: z.string().optional(),
+  endedAt: z.string().optional(),
 });
 
 const ToolCallRunningPayloadSchema = ToolCallBasePayloadSchema.extend({
@@ -829,6 +945,7 @@ export const AgentStreamEventPayloadSchema = z.discriminatedUnion("type", [
           serverId: z.string(),
           workspaceId: z.string().optional(),
           agentId: z.string(),
+          agentTitle: z.string().optional(),
           reason: z.enum(["finished", "error", "permission"]),
         }),
       })
@@ -2786,6 +2903,10 @@ export const ClientHeartbeatMessageSchema = z.object({
   // COMPAT(terminalFocusHeartbeat): added in v0.1.97, remove optional default after 2026-12-13 once old clients no longer send heartbeats without terminal focus.
   focusedTerminalId: z.string().nullable().optional().default(null),
   lastActivityAt: z.string(),
+  // COMPAT(appActivityHeartbeat): added in v0.8.0, remove optional after 2027-03-10 once old clients no longer send heartbeats without app-interaction time.
+  lastAppActivityAt: z.string().optional(),
+  // COMPAT(deviceClassHeartbeat): added in v0.8.0, remove optional after 2027-03-10 once old clients no longer send heartbeats without a device class.
+  deviceClass: z.enum(["mobile", "desktop"]).optional(),
   appVisible: z.boolean(),
   appVisibilityChangedAt: z.string().optional(),
 });
@@ -2831,6 +2952,58 @@ export const PushUnregisterRequestSchema = z.object({
 
 export const PushUnregisterResponseSchema = z.object({
   type: z.literal("push.unregister.response"),
+  payload: z.object({
+    requestId: z.string(),
+  }),
+});
+
+export const PushWebGetConfigRequestSchema = z.object({
+  type: z.literal("push.web.get_config.request"),
+  requestId: z.string(),
+});
+
+export const PushWebGetConfigResponseSchema = z.object({
+  type: z.literal("push.web.get_config.response"),
+  payload: z.object({
+    requestId: z.string(),
+    publicKey: z.string(),
+  }),
+});
+
+export const PushWebSubscribeRequestSchema = z.object({
+  type: z.literal("push.web.subscribe.request"),
+  requestId: z.string(),
+  subscription: WebPushSubscriptionSchema,
+});
+
+export const PushWebSubscribeResponseSchema = z.object({
+  type: z.literal("push.web.subscribe.response"),
+  payload: z.object({
+    requestId: z.string(),
+  }),
+});
+
+export const PushWebUnsubscribeRequestSchema = z.object({
+  type: z.literal("push.web.unsubscribe.request"),
+  requestId: z.string(),
+  endpoint: z.string(),
+});
+
+export const PushWebUnsubscribeResponseSchema = z.object({
+  type: z.literal("push.web.unsubscribe.response"),
+  payload: z.object({
+    requestId: z.string(),
+  }),
+});
+
+export const PushWebTestRequestSchema = z.object({
+  type: z.literal("push.web.test.request"),
+  requestId: z.string(),
+  endpoint: z.string(),
+});
+
+export const PushWebTestResponseSchema = z.object({
+  type: z.literal("push.web.test.response"),
   payload: z.object({
     requestId: z.string(),
   }),
@@ -3109,6 +3282,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   HubManagementDaemonDisconnectRequestSchema,
   HubManagementDaemonPermissionsUpdateRequestSchema,
   DiagnosticsRequestSchema,
+  HostPerformanceGetSnapshotRequestSchema,
   PluginCatalogGetRequestSchema,
   PluginListRequestSchema,
   PluginLogsGetRequestSchema,
@@ -3232,6 +3406,10 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ListCommandsRequestSchema,
   RegisterPushTokenMessageSchema,
   PushUnregisterRequestSchema,
+  PushWebGetConfigRequestSchema,
+  PushWebSubscribeRequestSchema,
+  PushWebUnsubscribeRequestSchema,
+  PushWebTestRequestSchema,
   ListTerminalsRequestSchema,
   SubscribeTerminalsRequestSchema,
   UnsubscribeTerminalsRequestSchema,
@@ -3437,6 +3615,8 @@ export const ServerInfoStatusPayloadSchema = z
       .object({
         // COMPAT(sideChat): added in v0.8.0; remove gate after 2027-03-08.
         sideChat: z.boolean().optional(),
+        // COMPAT(modelTurnMetrics): added in v0.8.0; remove gate after 2027-03-09.
+        modelTurnMetrics: z.boolean().optional(),
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
         agentRequestReceipts: z.boolean().optional(),
         // COMPAT(hubAgentRpc): added in v0.8.0; remove gate after 2027-03-05.
@@ -3593,6 +3773,12 @@ export const ServerInfoStatusPayloadSchema = z
         agentProfiles: z.boolean().optional(),
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: z.boolean().optional(),
+        // COMPAT(dictationConfig): added in v0.8.0-beta.2, remove gate after
+        // 2027-03-10. Older daemons silently drop `features` patches, so the
+        // client must not show dictation config controls without this flag.
+        dictationConfig: z.boolean().optional(),
+        webPush: z.boolean().optional(),
+        hostPerformance: z.boolean().optional(),
       })
       .optional(),
   })
@@ -4620,6 +4806,7 @@ export const AgentAttentionRequiredMessageSchema = z.object({
           serverId: z.string(),
           workspaceId: z.string().optional(),
           agentId: z.string(),
+          agentTitle: z.string().optional(),
           reason: z.enum(["finished", "error", "permission"]),
         }),
       })
@@ -4829,6 +5016,8 @@ export const SetDaemonConfigResponseMessageSchema = z.object({
     .object({
       requestId: z.string(),
       config: MutableDaemonConfigSchema,
+      /** Persisted paths that only take effect after a daemon restart. */
+      restartRequiredPaths: z.array(z.string()).optional(),
     })
     .passthrough(),
 });
@@ -6491,6 +6680,11 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   StatusMessageSchema,
   PongMessageSchema,
   PushUnregisterResponseSchema,
+  PushWebGetConfigResponseSchema,
+  PushWebSubscribeResponseSchema,
+  PushWebUnsubscribeResponseSchema,
+  PushWebTestResponseSchema,
+  HostPerformanceGetSnapshotResponseSchema,
   RpcErrorMessageSchema,
   ArtifactMessageSchema,
   AgentUpdateMessageSchema,
@@ -7082,6 +7276,14 @@ export type ListCommandsResponse = z.infer<typeof ListCommandsResponseSchema>;
 export type RegisterPushTokenMessage = z.infer<typeof RegisterPushTokenMessageSchema>;
 export type PushUnregisterRequest = z.infer<typeof PushUnregisterRequestSchema>;
 export type PushUnregisterResponse = z.infer<typeof PushUnregisterResponseSchema>;
+export type PushWebGetConfigRequest = z.infer<typeof PushWebGetConfigRequestSchema>;
+export type PushWebGetConfigResponse = z.infer<typeof PushWebGetConfigResponseSchema>;
+export type PushWebSubscribeRequest = z.infer<typeof PushWebSubscribeRequestSchema>;
+export type PushWebSubscribeResponse = z.infer<typeof PushWebSubscribeResponseSchema>;
+export type PushWebUnsubscribeRequest = z.infer<typeof PushWebUnsubscribeRequestSchema>;
+export type PushWebUnsubscribeResponse = z.infer<typeof PushWebUnsubscribeResponseSchema>;
+export type PushWebTestRequest = z.infer<typeof PushWebTestRequestSchema>;
+export type PushWebTestResponse = z.infer<typeof PushWebTestResponseSchema>;
 
 // Terminal message types
 export type ListTerminalsRequest = z.infer<typeof ListTerminalsRequestSchema>;

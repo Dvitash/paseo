@@ -6,6 +6,7 @@ import type {
   ToolPolicy,
 } from "@getpaseo/protocol/agent-types";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
+import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import type { PaseoToolCatalog } from "./tools/types.js";
 
 export type { AgentProviderNotice, AgentTaskItem };
@@ -192,6 +193,12 @@ export interface AgentCapabilityFlags {
   supportsRewindConversation?: boolean;
   supportsRewindFiles?: boolean;
   supportsRewindBoth?: boolean;
+  /**
+   * Provider can create a new session forked from an existing native session,
+   * inheriting its full transcript (Claude forkSession, Codex thread/fork,
+   * OMP --fork). Used by fork-based Side sessions.
+   */
+  supportsSessionFork?: boolean;
 }
 
 export interface AgentPersistenceHandle {
@@ -227,6 +234,12 @@ export interface SteerActiveTurnOptions extends AgentSteerOptions {
   expectedTurnId: string;
 }
 
+export interface AgentModelTurnUsage {
+  status: "running" | "completed";
+  ttftMs: number | null;
+  tokensPerSecond: number | null;
+}
+
 export interface AgentUsage {
   inputTokens?: number;
   cachedInputTokens?: number;
@@ -234,6 +247,7 @@ export interface AgentUsage {
   totalCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;
+  modelTurn?: AgentModelTurnUsage;
 }
 
 export const TOOL_CALL_ICON_NAMES = [
@@ -257,6 +271,8 @@ export type ToolCallDetail =
       cwd?: string;
       output?: string;
       exitCode?: number | null;
+      /** Wall-clock timeout the tool reported for the command, in milliseconds. */
+      timeoutMs?: number;
     }
   | {
       type: "read";
@@ -356,6 +372,10 @@ interface ToolCallBase {
   name: string;
   detail: ToolCallDetail;
   metadata?: Record<string, unknown>;
+  /** ISO timestamp of the first observed update for this call. */
+  startedAt?: string;
+  /** ISO timestamp of the first terminal-status update. */
+  endedAt?: string;
 }
 
 type ToolCallRunningTimelineItem = ToolCallBase & {
@@ -624,6 +644,17 @@ export interface AgentSessionConfig {
    */
   internal?: boolean;
   /**
+   * Internal agents are normally ephemeral and never persisted. Durable internal
+   * agents (e.g. Side chat) persist so they can be resumed after a restart.
+   */
+  durableInternal?: boolean;
+  /**
+   * Per-agent override for the daemon tool policy. When set, it replaces the
+   * provider-level policy resolved from daemon config. Persisted so the same
+   * restriction applies on resume.
+   */
+  paseoToolPolicy?: ProviderPaseoToolsPolicy;
+  /**
    * When true, the agent is strictly read-only and immutable.
    * Central create/resume, modes, and tool configurations cannot widen this permission.
    */
@@ -646,6 +677,13 @@ export interface AgentCreateSessionOptions {
    * Defaults to true. Providers that cannot honor false should no-op.
    */
   persistSession?: boolean;
+  /**
+   * Fork the new session from this existing native session, inheriting its
+   * transcript. Only honored when the client advertises supportsSessionFork.
+   * `nativeHandle` carries the provider-specific source (OMP session file,
+   * Claude session id, Codex thread id).
+   */
+  forkFrom?: AgentPersistenceHandle;
 }
 
 /** Runtime-only intent for a persisted-session resume. Never persist this option. */

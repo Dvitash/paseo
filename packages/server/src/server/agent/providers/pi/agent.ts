@@ -29,6 +29,7 @@ import {
   type AgentSlashCommand,
   type AgentSlashCommandKind,
   type AgentStreamEvent,
+  type AgentUsage,
   type FetchCatalogOptions,
   type SteerActiveTurnOptions,
   type SteerResult,
@@ -40,7 +41,9 @@ import {
   type ProviderRefreshContext,
   type ToolCallDetail,
 } from "../../agent-sdk-types.js";
+import { ModelTurnTracker } from "../model-turn-tracker.js";
 import { importSessionFromPersistence } from "../../provider-session-import.js";
+import { isInternalPaseoMcpServer } from "../../runtime-mcp-config.js";
 import { runProviderRefreshActivity } from "../../provider-refresh-deadline.js";
 import { runProviderTurn } from "../provider-runner.js";
 import {
@@ -191,6 +194,9 @@ export interface PiRpcAgentClientOptions {
   providerParams?: unknown;
   runtime?: PiRuntime;
   usagePollScheduler?: PiUsagePollScheduler;
+  now?: () => number;
+  /** Deadline for the read-only tool bridge to report ready. Test-only knob. */
+  readOnlyToolsReadyTimeoutMs?: number;
 }
 
 interface PiPromptPayload {
@@ -211,8 +217,8 @@ interface PiPersistenceMetadata {
   systemPrompt?: string;
   readOnly?: boolean;
 }
-
 export const PASEO_PI_READONLY_GUARD_COMMAND = "__paseo_readonly_guard__";
+export const PASEO_PI_TOOLS_READY_COMMAND = "__paseo_tools_ready__";
 export const PASEO_SIDE_READ_ONLY_LABEL = "paseo.side.read_only";
 
 function capabilitiesForClient(): AgentCapabilityFlags {
@@ -252,6 +258,7 @@ interface PiRpcAgentSessionOptions {
   extensionTimeoutMs?: number;
   logger: Logger;
   usagePollScheduler?: PiUsagePollScheduler;
+  now?: () => number;
 }
 
 interface PiResumeConfig {
@@ -615,9 +622,12 @@ function createPiMcpConfigFile(
   }
   const mcpServers: Record<string, unknown> = { ...configuredServers };
   for (const [name, serverConfig] of Object.entries(servers)) {
-    mcpServers[name] = toPiMcpConfig(serverConfig);
+    mcpServers[name] = isInternalPaseoMcpServer(serverConfig)
+      ? // The daemon's own server registers tools directly under a fixed
+        // `paseo_<tool>` prefix so read-only guards can allow-list them.
+        { ...toPiMcpConfig(serverConfig), directTools: true, toolPrefix: "server" }
+      : toPiMcpConfig(serverConfig);
   }
-
   const dir = mkdtempSync(join(tmpdir(), "paseo-pi-mcp-"));
   const filePath = join(dir, "mcp.json");
   const mergedConfig: Record<string, unknown> = { ...globalConfig, mcpServers };
@@ -635,6 +645,33 @@ interface PiPaseoExtensionOptions {
   systemPrompt?: string;
   readOnly?: boolean;
   hostToolNames?: string[];
+  /**
+   * Daemon Agent-MCP endpoint the extension bridges into native Pi tools for
+   * read-only sessions. Read-only launches run with --no-extensions, so the
+   * pi-mcp-adapter cannot load; the trusted Paseo extension registers each
+   * allow-listed daemon tool itself and forwards calls over JSON-RPC.
+   */
+  paseoMcp?: { url: string; headers?: Record<string, string> };
+}
+
+/**
+ * Pulls the daemon's injected paseo MCP server out of a session config so its
+ * URL and auth headers can be embedded in the trusted extension. Returns
+ * undefined when the daemon did not inject its server (tools disabled).
+ */
+function extractPaseoMcpBridge(
+  mcpServers: Record<string, McpServerConfig> | undefined,
+): { url: string; headers?: Record<string, string> } | undefined {
+  const server = mcpServers?.paseo;
+  if (!server || !isInternalPaseoMcpServer(server)) {
+    return undefined;
+  }
+  const url = "url" in server ? server.url : undefined;
+  if (!url) {
+    return undefined;
+  }
+  const headers = "headers" in server ? server.headers : undefined;
+  return { url, ...(headers ? { headers } : {}) };
 }
 
 function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions): PiTempFile {
@@ -809,7 +846,135 @@ function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions):
 	    }
 	    return false;
 	  }
+	  ${
+      opts.paseoMcp
+        ? `
+	  const PASEO_MCP_URL = ${JSON.stringify(opts.paseoMcp.url)};
+	  const PASEO_MCP_HEADERS = ${JSON.stringify(opts.paseoMcp.headers ?? {})};
+	  let paseoRegisterPromise = null;
+
+	  // Stateless JSON-RPC over the daemon's Agent MCP endpoint. The transport
+	  // answers POSTs with SSE, so read the matching "data:" frame.
+	  async function paseoRpc(method, params, signal) {
+	    const response = await fetch(PASEO_MCP_URL, {
+	      method: "POST",
+	      headers: {
+	        "Content-Type": "application/json",
+	        Accept: "application/json, text/event-stream",
+	        ...PASEO_MCP_HEADERS,
+	      },
+	      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+	      signal: signal ?? null,
+	    });
+	    if (!response.ok) {
+	      throw new Error("Paseo MCP request failed: HTTP " + response.status);
+	    }
+    const contentType = response.headers.get("content-type") ?? "";
+    let message = null;
+    if (contentType.includes("text/event-stream")) {
+      const text = await response.text();
+      for (const line of text.split("\\n")) {
+        if (!line.startsWith("data:")) continue;
+        const parsed = JSON.parse(line.slice(5).trim());
+        if (parsed && parsed.id === 1) {
+          message = parsed;
+          break;
+        }
+      }
+      if (!message) {
+        throw new Error("Paseo MCP response missing result frame");
+      }
+    } else {
+      message = await response.json();
+    }
+    if (message && message.error) {
+      throw new Error(
+        "Paseo MCP error: " + (message.error.message || JSON.stringify(message.error)),
+      );
+    }
+    return message;
+  }
+
+	  function normalizePaseoToolSchema(schema) {
+	    const inputSchema =
+	      schema && typeof schema === "object" && !Array.isArray(schema)
+	        ? schema
+	        : { type: "object", properties: {} };
+	    const { $schema, additionalProperties, ...normalized } = inputSchema;
+	    return normalized;
+	  }
+
+	  async function registerPaseoTools() {
+	    if (typeof pi.registerTool !== "function") {
+	      throw new Error("pi.registerTool is unavailable");
+	    }
+	    const listSignal =
+	      typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+	        ? AbortSignal.timeout(30000)
+	        : undefined;
+    const listResponse = await paseoRpc("tools/list", {}, listSignal);
+    const tools = listResponse?.result?.tools;
+    if (!Array.isArray(tools)) {
+      throw new Error("Paseo MCP tools/list returned no tool array");
+    }
+	    for (const tool of tools) {
+	      const toolName = "paseo_" + tool.name;
+	      pi.registerTool({
+	        name: toolName,
+	        label: "Paseo: " + tool.name,
+	        description: tool.description || "Paseo daemon tool",
+	        parameters: normalizePaseoToolSchema(tool.inputSchema),
+        execute: async (_toolCallId, params, signal) => {
+          const callResponse = await paseoRpc(
+            "tools/call",
+            { name: tool.name, arguments: params ?? {} },
+            signal,
+          );
+          const result = callResponse?.result ?? {};
+          const content = Array.isArray(result.content) ? result.content : [];
+          if (result.isError === true) {
+            // Pi marks tool failure from the thrown error, not details.isError;
+            // surface the daemon's error text so the failure is not silent.
+            throw new Error(readTextContent(content) || "Paseo tool call failed");
+          }
+          return {
+            content,
+            details: {
+              isError: false,
+              ...(result.structuredContent !== undefined
+                ? { structuredContent: result.structuredContent }
+                : {}),
+            },
+          };
+	        },
+	      });
+	    }
+	    // Registered last so the daemon can verify the bridge is live; its
+	    // absence fails the session instead of silently running without tools.
+	    pi.registerCommand("${PASEO_PI_TOOLS_READY_COMMAND}", {
+	      description: "Paseo read-only tool bridge ready sentinel",
+	      handler: async () => {},
+	    });
+	  }
+
+	  function ensurePaseoTools() {
+	    if (!paseoRegisterPromise) {
+      paseoRegisterPromise = registerPaseoTools().catch((error) => {
+        paseoRegisterPromise = null;
+        throw error;
+      });
+	    }
+	    return paseoRegisterPromise;
+	  }
+
+	  // Kick registration at load time so the daemon's readiness check sees the
+	  // sentinel without waiting for session_start.
+	  void ensurePaseoTools().catch(() => undefined);
+	  `
+        : ""
+    }
 	  const enforceTools = async () => {
+	    ${opts.paseoMcp ? `await ensurePaseoTools().catch(() => undefined);` : ""}
 	    if (typeof pi.setActiveTools === "function") {
 	      await pi.setActiveTools([...ALLOWED_TOOLS]);
 	    }
@@ -861,7 +1026,8 @@ function createPiPaseoExtensionFile(options?: string | PiPaseoExtensionOptions):
     }
 	}
 `.trimStart(),
-    "utf8",
+    // The file can embed the daemon's MCP bearer token; keep it owner-only.
+    { encoding: "utf8", mode: 0o600 },
   );
 
   return {
@@ -1401,6 +1567,8 @@ export class PiRpcAgentSession implements AgentSession {
   private readonly currentModeId: string | null;
   private readonly logger: Logger;
   private readonly usagePoller: PiUsagePoller;
+  private latestUsageTotals: AgentUsage = {};
+  private readonly modelTurnTracker: ModelTurnTracker;
   private closed = false;
   // Pi publishes the terminal before acknowledging abort. Autonomous runs have no
   // turn ID; retain their errors too until the cancellation request settles.
@@ -1420,16 +1588,13 @@ export class PiRpcAgentSession implements AgentSession {
       null;
     this.extensionTimeoutMs = options.extensionTimeoutMs ?? DEFAULT_PI_EXTENSION_RESULT_TIMEOUT_MS;
     this.logger = options.logger;
+    this.modelTurnTracker = new ModelTurnTracker({ now: options.now });
     this.usagePoller = new PiUsagePoller({
       scheduler: options.usagePollScheduler,
       readStats: () => this.runtimeSession.getSessionStats(),
       onUsage: (usage, turnId) => {
-        this.emit({
-          type: "usage_updated",
-          provider: this.provider,
-          usage,
-          ...(turnId === undefined ? {} : { turnId }),
-        });
+        this.latestUsageTotals = { ...this.latestUsageTotals, ...usage };
+        this.emitUsageUpdate(turnId);
       },
       onPollError: (error) => {
         this.logger.debug({ err: error }, "Pi context usage poll failed");
@@ -1603,14 +1768,31 @@ export class PiRpcAgentSession implements AgentSession {
       this.subscribers.delete(callback);
     };
   }
+  private emitUsageUpdate(turnId?: string): void {
+    const modelTurn = this.modelTurnTracker.currentModelTurn();
+    const usage: AgentUsage = {
+      ...this.latestUsageTotals,
+      ...(modelTurn ? { modelTurn } : {}),
+    };
+    if (Object.keys(usage).length === 0) {
+      return;
+    }
+    this.emit({
+      type: "usage_updated",
+      provider: this.provider,
+      usage,
+      ...(turnId === undefined ? {} : { turnId }),
+    });
+  }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {
     await this.requestEntryCapture("history");
-    yield* streamPiHistory(
-      this.provider,
-      await this.runtimeSession.getMessages(),
-      this.capturedUserEntries,
-    );
+    const messages = await this.runtimeSession.getMessages();
+    const restored = this.modelTurnTracker.hydrateFromMessages(messages);
+    if (restored) {
+      this.emitUsageUpdate();
+    }
+    yield* streamPiHistory(this.provider, messages, this.capturedUserEntries);
   }
 
   async getRuntimeInfo(): Promise<AgentRuntimeInfo> {
@@ -1713,6 +1895,9 @@ export class PiRpcAgentSession implements AgentSession {
         this.activeTurnId = null;
         this.activeClientMessageId = null;
         this.activeTurnStarted = false;
+        if (this.modelTurnTracker.finalizeRunning()) {
+          this.emitUsageUpdate(turnId);
+        }
         this.activeTurnStartedEmitted = false;
         this.pendingSettledMessages = null;
         this.activeAssistantMessageId = null;
@@ -1733,6 +1918,9 @@ export class PiRpcAgentSession implements AgentSession {
       (this.activeTurnId || this.activeTurnStarted) &&
       (this.activeTurnId ?? undefined) === turnId
     ) {
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.usagePoller.stopTurn();
       this.activeTurnId = null;
       this.activeClientMessageId = null;
@@ -2331,6 +2519,9 @@ export class PiRpcAgentSession implements AgentSession {
     this.pendingSettledMessages = null;
     this.pendingSteerSubmissions.length = 0;
     this.clearNoTurnBuffers();
+    if (this.modelTurnTracker.finalizeRunning()) {
+      this.emitUsageUpdate(turnId);
+    }
     this.emit({
       type: "turn_failed",
       provider: this.provider,
@@ -2359,15 +2550,16 @@ export class PiRpcAgentSession implements AgentSession {
       case "turn_start":
         this.activeTurnStarted = true;
         this.clearNoTurnBuffers();
-        if (this.activeTurnStartedEmitted) {
-          return;
+        this.modelTurnTracker.onTurnStart();
+        if (!this.activeTurnStartedEmitted) {
+          this.activeTurnStartedEmitted = true;
+          this.emit({
+            type: "turn_started",
+            provider: this.provider,
+            turnId,
+          });
         }
-        this.activeTurnStartedEmitted = true;
-        this.emit({
-          type: "turn_started",
-          provider: this.provider,
-          turnId,
-        });
+        this.emitUsageUpdate(turnId);
         return;
       case "message_start":
         this.handleMessageStart(event);
@@ -2514,6 +2706,17 @@ export class PiRpcAgentSession implements AgentSession {
     if (event.message && event.message.role !== "assistant") {
       return;
     }
+    const eventType = event.assistantMessageEvent.type;
+    if (
+      eventType === "text_delta" ||
+      eventType === "thinking_delta" ||
+      eventType === "toolcall_delta"
+    ) {
+      const updated = this.modelTurnTracker.onContentDelta();
+      if (updated) {
+        this.emitUsageUpdate(turnId);
+      }
+    }
     if (event.assistantMessageEvent.type === "text_delta") {
       // Pi-compatible runtimes may emit updates without a preceding message_start.
       this.activeAssistantMessageId ??= event.message?.responseId || randomUUID();
@@ -2554,6 +2757,8 @@ export class PiRpcAgentSession implements AgentSession {
   ): void {
     if (event.message.role === "assistant") {
       this.activeAssistantMessageId = null;
+      this.modelTurnTracker.onAssistantMessageEnd(event.message);
+      this.emitUsageUpdate(turnId);
       return;
     }
     if (event.message.role === "custom") {
@@ -2631,6 +2836,9 @@ export class PiRpcAgentSession implements AgentSession {
     this.clearNoTurnBuffers();
     if (typeof errorMessage === "string" && errorMessage.length > 0) {
       this.usagePoller.stopTurn();
+      if (this.modelTurnTracker.finalizeRunning()) {
+        this.emitUsageUpdate(turnId);
+      }
       this.emit({
         type: "turn_failed",
         provider: this.provider,
@@ -2666,7 +2874,9 @@ export class PiRpcAgentClient implements AgentClient {
   private readonly providerParams: PiProviderParams;
   private readonly runtime: PiRuntime;
   private readonly usagePollScheduler?: PiUsagePollScheduler;
+  private readonly readOnlyToolsReadyTimeoutMs?: number;
 
+  private readonly now?: () => number;
   constructor(options: PiRpcAgentClientOptions) {
     this.provider = PI_PROVIDER;
     this.capabilities = capabilitiesForClient();
@@ -2677,11 +2887,21 @@ export class PiRpcAgentClient implements AgentClient {
       options.runtime ??
       createRuntime(options.logger, options.runtimeSettings, this.providerParams.rpcTimeoutMs);
     this.usagePollScheduler = options.usagePollScheduler;
+    this.readOnlyToolsReadyTimeoutMs = options.readOnlyToolsReadyTimeoutMs;
+    this.now = options.now;
   }
 
   private resolveHostToolNames(launchContext?: AgentLaunchContext): string[] {
     const tools = launchContext?.paseoTools?.tools;
     return tools ? [...tools.keys()] : [];
+  }
+
+  /**
+   * Read-only sessions expose the daemon's MCP tools as `paseo_<tool>` direct
+   * tools. Only an explicit enabledTools allowlist can be enumerated safely.
+   */
+  private resolveReadOnlyPaseoToolNames(config: AgentSessionConfig): string[] {
+    return (config.paseoToolPolicy?.enabledTools ?? []).map((name) => `paseo_${name}`);
   }
 
   private async prepareSessionMcpConfig(
@@ -2690,14 +2910,23 @@ export class PiRpcAgentClient implements AgentClient {
     isReadOnly: boolean,
     env?: Record<string, string>,
   ): Promise<PiMcpConfigFile | null> {
+    // Read-only sessions never get an MCP config: --no-extensions keeps the
+    // pi-mcp-adapter from loading, so the daemon's tools are bridged through
+    // the trusted Paseo extension instead.
     if (isReadOnly) {
+      return null;
+    }
+    if (!mcpServers || Object.keys(mcpServers).length === 0) {
       return null;
     }
     const combinedEnv = { ...this.runtimeSettings?.env, ...env };
     return await this.prepareMcpConfig(cwd, mcpServers, combinedEnv);
   }
 
-  private async verifyReadOnlySentinel(runtimeSession: PiRuntimeSession): Promise<void> {
+  private async verifyReadOnlySentinel(
+    runtimeSession: PiRuntimeSession,
+    expectPaseoTools: boolean,
+  ): Promise<void> {
     const commands = await runtimeSession.getCommands();
     const guardLoaded = commands.some((cmd) => cmd.name === PASEO_PI_READONLY_GUARD_COMMAND);
     if (!guardLoaded) {
@@ -2705,6 +2934,23 @@ export class PiRpcAgentClient implements AgentClient {
         "Pi read-only guard extension failed to load: sentinel command not registered",
       );
     }
+    if (!expectPaseoTools) {
+      return;
+    }
+    // The tool bridge registers its ready sentinel only after tools/list
+    // succeeds. Poll briefly: registration is kicked at extension load, so it
+    // is normally already done, but a slow daemon endpoint needs a window.
+    const deadline = Date.now() + (this.readOnlyToolsReadyTimeoutMs ?? 10_000);
+    while (Date.now() < deadline) {
+      const latest = await runtimeSession.getCommands();
+      if (latest.some((cmd) => cmd.name === PASEO_PI_TOOLS_READY_COMMAND)) {
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(
+      "Pi read-only tool bridge failed to register daemon tools: ready sentinel missing",
+    );
   }
 
   async createSession(
@@ -2712,17 +2958,22 @@ export class PiRpcAgentClient implements AgentClient {
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     const isReadOnly = config.readOnly === true;
-    const hostToolNames = this.resolveHostToolNames(launchContext);
+    const hostToolNames = [
+      ...this.resolveHostToolNames(launchContext),
+      ...this.resolveReadOnlyPaseoToolNames(config),
+    ];
     const mcpConfig = await this.prepareSessionMcpConfig(
       config.cwd,
       config.mcpServers,
       isReadOnly,
       launchContext?.env,
     );
+    const paseoMcp = isReadOnly ? extractPaseoMcpBridge(config.mcpServers) : undefined;
     const paseoExtension = createPiPaseoExtensionFile({
       systemPrompt: composeSystemPromptParts(config.systemPrompt, config.daemonAppendSystemPrompt),
       readOnly: isReadOnly,
       hostToolNames,
+      paseoMcp,
     });
     let runtimeSession: PiRuntimeSession;
     try {
@@ -2731,7 +2982,7 @@ export class PiRpcAgentClient implements AgentClient {
         model: config.model,
         thinkingOptionId:
           normalizePiThinkingOption(config.thinkingOptionId) ?? DEFAULT_PI_THINKING_LEVEL,
-        noSession: config.internal === true && !isReadOnly,
+        noSession: config.internal === true && !isReadOnly && config.durableInternal !== true,
         env: launchContext?.env,
         mcpConfigPath: mcpConfig?.path,
         extensionPaths: paseoExtension ? [paseoExtension.path] : undefined,
@@ -2745,7 +2996,7 @@ export class PiRpcAgentClient implements AgentClient {
     }
     try {
       if (isReadOnly) {
-        await this.verifyReadOnlySentinel(runtimeSession);
+        await this.verifyReadOnlySentinel(runtimeSession, paseoMcp !== undefined);
       }
       return new PiRpcAgentSession({
         runtimeSession,
@@ -2756,6 +3007,7 @@ export class PiRpcAgentClient implements AgentClient {
         extensionTimeoutMs: this.providerParams.extensionTimeoutMs,
         logger: this.logger,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);
@@ -2778,13 +3030,17 @@ export class PiRpcAgentClient implements AgentClient {
     const persistenceMetadata = parsePersistenceMetadata(handle.metadata);
     const resumeConfig = buildResumeConfig(persistenceMetadata, overrides, this.provider);
     const isReadOnly = resumeConfig.config.readOnly === true;
-    const hostToolNames = this.resolveHostToolNames(launchContext);
+    const hostToolNames = [
+      ...this.resolveHostToolNames(launchContext),
+      ...this.resolveReadOnlyPaseoToolNames(resumeConfig.config),
+    ];
     const mcpConfig = await this.prepareSessionMcpConfig(
       resumeConfig.cwd,
       resumeConfig.config.mcpServers,
       isReadOnly,
       launchContext?.env,
     );
+    const paseoMcp = isReadOnly ? extractPaseoMcpBridge(resumeConfig.config.mcpServers) : undefined;
     const paseoExtension = createPiPaseoExtensionFile({
       systemPrompt: composeSystemPromptParts(
         resumeConfig.config.systemPrompt,
@@ -2792,6 +3048,7 @@ export class PiRpcAgentClient implements AgentClient {
       ),
       readOnly: isReadOnly,
       hostToolNames,
+      paseoMcp,
     });
     let runtimeSession: PiRuntimeSession;
     try {
@@ -2812,7 +3069,7 @@ export class PiRpcAgentClient implements AgentClient {
     }
     try {
       if (isReadOnly) {
-        await this.verifyReadOnlySentinel(runtimeSession);
+        await this.verifyReadOnlySentinel(runtimeSession, paseoMcp !== undefined);
       }
       return new PiRpcAgentSession({
         runtimeSession,
@@ -2823,6 +3080,7 @@ export class PiRpcAgentClient implements AgentClient {
         extensionTimeoutMs: this.providerParams.extensionTimeoutMs,
         logger: this.logger,
         usagePollScheduler: this.usagePollScheduler,
+        now: this.now,
       });
     } catch (error) {
       await runtimeSession.close().catch(() => undefined);

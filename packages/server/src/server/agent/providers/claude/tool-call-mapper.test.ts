@@ -36,6 +36,23 @@ describe("claude tool-call mapper", () => {
     }
   });
 
+  it("carries the bash timeout through to the shell detail", () => {
+    const item = expectMapped(
+      mapClaudeRunningToolCall({
+        callId: "claude-call-timeout",
+        name: "Bash",
+        input: { command: "npm test", timeout: 600_000 },
+        output: null,
+      }),
+    );
+
+    expect(item.detail).toEqual({
+      type: "shell",
+      command: "npm test",
+      timeoutMs: 600_000,
+    });
+  });
+
   it("maps partial running input through the same canonical detail path", () => {
     const item = expectMapped(
       mapClaudeRunningToolCall({

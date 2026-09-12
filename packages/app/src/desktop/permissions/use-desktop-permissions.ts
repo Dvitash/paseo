@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { isWeb } from "@/constants/platform";
 import {
   getDesktopPermissionSnapshot,
   requestDesktopPermission,
@@ -8,6 +9,7 @@ import {
   type DesktopPermissionSnapshot,
 } from "@/desktop/permissions/desktop-permissions";
 import { sendOsNotification } from "@/utils/os-notifications";
+import { signalAgentAttentionAlert } from "@/utils/attention-alerts";
 
 export interface UseDesktopPermissionsReturn {
   isDesktopApp: boolean;
@@ -46,7 +48,7 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
   }, []);
 
   const refreshPermissions = useCallback(async () => {
-    if (!isDesktopApp) {
+    if (!isWeb) {
       return;
     }
 
@@ -64,11 +66,11 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
         setIsRefreshing(false);
       }
     }
-  }, [isDesktopApp]);
+  }, []);
 
   const requestPermission = useCallback(
     async (kind: DesktopPermissionKind) => {
-      if (!isDesktopApp) {
+      if (!isWeb) {
         return;
       }
 
@@ -115,11 +117,11 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
         await refreshPermissions();
       }
     },
-    [isDesktopApp, refreshPermissions, t],
+    [refreshPermissions, t],
   );
 
   const sendTestNotification = useCallback(async () => {
-    if (!isDesktopApp) {
+    if (!isWeb) {
       return;
     }
 
@@ -129,6 +131,8 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
         title: t("desktop.permissions.testNotification.title"),
         body: t("desktop.permissions.testNotification.body"),
       });
+      // On web the OS notification is silent — exercise the in-app chime too.
+      signalAgentAttentionAlert("finished");
       if (!isMountedRef.current) {
         return;
       }
@@ -148,15 +152,15 @@ export function useDesktopPermissions(): UseDesktopPermissionsReturn {
         });
       }
     }
-  }, [isDesktopApp, t]);
+  }, [t]);
 
   useEffect(() => {
-    if (!isDesktopApp) {
+    if (!isWeb) {
       return;
     }
 
     void refreshPermissions();
-  }, [isDesktopApp, refreshPermissions]);
+  }, [refreshPermissions]);
 
   return {
     isDesktopApp,

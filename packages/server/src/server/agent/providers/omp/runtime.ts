@@ -24,6 +24,10 @@ export interface OmpRuntimeLaunch {
   modeId?: string;
   session?: string;
   noSession?: boolean;
+  /** Session file to fork via `omp --fork` (new session id, inherited transcript). */
+  fork?: string;
+  /** Parent session's providerPromptCacheKey, forwarded as --prompt-cache-key. */
+  promptCacheKey?: string;
   systemPrompt?: string;
   extraArgs?: string[];
   readOnly?: boolean;
@@ -41,6 +45,10 @@ export interface OmpStartSessionInput {
   modeId?: string;
   session?: string;
   noSession?: boolean;
+  /** Session file to fork via `omp --fork` (new session id, inherited transcript). */
+  fork?: string;
+  /** Parent session's providerPromptCacheKey, forwarded as --prompt-cache-key. */
+  promptCacheKey?: string;
   systemPrompt?: string;
   extraArgs?: string[];
   readOnly?: boolean;
@@ -123,7 +131,8 @@ export function buildOmpLaunch(input: {
     protocolMode,
     modeId: input.session.modeId,
     session: input.session.session,
-    noSession: input.session.noSession,
+    fork: input.session.fork,
+    promptCacheKey: input.session.promptCacheKey,
     systemPrompt,
     extraArgs: input.session.extraArgs,
     readOnly: input.session.readOnly,
@@ -167,6 +176,11 @@ function appendOmpLaunchArgs(
   }
   if (session.noSession) {
     argv.push("--no-session");
+  } else if (session.fork) {
+    argv.push("--fork", session.fork);
+    if (session.promptCacheKey) {
+      argv.push("--prompt-cache-key", session.promptCacheKey);
+    }
   } else if (session.session) {
     argv.push("--session", session.session);
   }

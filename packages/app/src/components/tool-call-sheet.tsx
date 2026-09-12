@@ -24,6 +24,9 @@ export interface ToolCallSheetData {
   errorText?: string;
   icon: ToolCallIconComponent;
   showLoadingSkeleton?: boolean;
+  status?: "executing" | "running" | "completed" | "failed" | "canceled";
+  startedAt?: Date;
+  endedAt?: Date;
 }
 
 interface ToolCallSheetContextValue {
@@ -163,6 +166,9 @@ function ToolCallSheetContent({ data, onClose }: ToolCallSheetContentProps) {
     errorText,
     icon: IconComponent,
     showLoadingSkeleton,
+    status,
+    startedAt,
+    endedAt,
   } = data;
 
   return (
@@ -194,6 +200,9 @@ function ToolCallSheetContent({ data, onClose }: ToolCallSheetContentProps) {
           errorText={errorText}
           fillAvailableHeight
           showLoadingSkeleton={showLoadingSkeleton}
+          status={status}
+          startedAt={startedAt}
+          endedAt={endedAt}
         />
       </BottomSheetScrollView>
     </View>

@@ -18,6 +18,7 @@ import { z } from "zod";
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import { createTestLogger } from "../test-utils/test-logger.js";
 import { Session } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import type { SessionOptions } from "./session.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import type { AgentUpdatesService } from "./session/agent-updates/agent-updates-service.js";
@@ -737,6 +738,7 @@ function createSessionForWorkspaceTests(
       tts: null,
       providerSnapshotManager,
       terminalManager: options.terminalManager ?? null,
+      hostPerformanceSampler: new HostPerformanceSampler(),
     }),
   );
   return session;
@@ -1035,6 +1037,7 @@ test("create_agent_request keeps requested child cwd when grouped under an exist
         tts: null,
         providerSnapshotManager: createProviderSnapshotManagerStub().manager,
         terminalManager: null,
+        hostPerformanceSampler: new HostPerformanceSampler(),
       }),
     );
     await session.handleMessage({
@@ -1198,6 +1201,7 @@ test("create_agent_request launches from an exact subdirectory in a created work
       tts: null,
       providerSnapshotManager: createProviderSnapshotManagerStub().manager,
       terminalManager: null,
+      hostPerformanceSampler: new HostPerformanceSampler(),
     });
 
     await session.handleMessage({
@@ -1330,6 +1334,7 @@ test("create_agent_request does not title an existing workspace from the agent p
         },
         providerSnapshotManager: createProviderSnapshotManagerStub().manager,
         terminalManager: null,
+        hostPerformanceSampler: new HostPerformanceSampler(),
       }),
     );
 
@@ -1656,6 +1661,7 @@ test("archive emits an authoritative agent_update upsert for subscribed clients"
       tts: null,
       providerSnapshotManager: createProviderSnapshotManagerStub().manager,
       terminalManager: null,
+      hostPerformanceSampler: new HostPerformanceSampler(),
     }),
   );
 
@@ -2020,6 +2026,7 @@ test("close_items_request archives agents and kills terminals in one batch", asy
         killTerminal,
         subscribeTerminalsChanged: () => () => {},
       }),
+      hostPerformanceSampler: new HostPerformanceSampler(),
     }),
   );
 
@@ -2203,6 +2210,7 @@ test("close_items_request archives stored agents that are not currently loaded",
       tts: null,
       providerSnapshotManager: createProviderSnapshotManagerStub().manager,
       terminalManager: null,
+      hostPerformanceSampler: new HostPerformanceSampler(),
     }),
   );
 
@@ -2354,6 +2362,7 @@ test("close_items_request continues after an archive failure", async () => {
         killTerminal: killTerminalBestEffort,
         subscribeTerminalsChanged: () => () => {},
       }),
+      hostPerformanceSampler: new HostPerformanceSampler(),
     }),
   );
 
@@ -3606,6 +3615,7 @@ test("workspace update stream keeps persisted workspace visible after agents sto
       tts: null,
       providerSnapshotManager: createProviderSnapshotManagerStub().manager,
       terminalManager: null,
+      hostPerformanceSampler: new HostPerformanceSampler(),
     }),
   );
 

@@ -14,6 +14,7 @@ import type {
   AgentProvider,
   AgentSessionConfig,
   AgentRuntimeInfo,
+  AgentModelTurnUsage,
   AgentUsage,
   ImportableProviderSession,
 } from "./agent-sdk-types.js";
@@ -341,6 +342,12 @@ function buildSerializableConfig(config: AgentSessionConfig): SerializableAgentC
   if (config.readOnly !== undefined) {
     serializable.readOnly = config.readOnly;
   }
+  if (config.durableInternal !== undefined) {
+    serializable.durableInternal = config.durableInternal;
+  }
+  if (config.paseoToolPolicy !== undefined) {
+    serializable.paseoToolPolicy = config.paseoToolPolicy;
+  }
   return Object.keys(serializable).length ? serializable : null;
 }
 
@@ -457,7 +464,7 @@ function sanitizeMetadataArray(value: unknown): AgentMetadata[] | undefined {
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
-type UsageNumericField = Exclude<keyof AgentUsage, never>;
+type UsageNumericField = Exclude<keyof AgentUsage, "modelTurn">;
 
 function assignFiniteNumber(
   source: { [key: string]: JsonValue },
@@ -470,6 +477,43 @@ function assignFiniteNumber(
     return true;
   }
   return raw === undefined || raw === null;
+}
+
+function sanitizeModelTurnUsage(value: unknown): AgentModelTurnUsage | undefined {
+  const sanitized = sanitizeOptionalJson(value);
+  if (!sanitized || !isJsonObject(sanitized)) {
+    return undefined;
+  }
+  const status = sanitized.status;
+  if (status !== "running" && status !== "completed") {
+    return undefined;
+  }
+
+  const rawTtft = sanitized.ttftMs;
+  let ttftMs: number | null;
+  if (rawTtft === null || rawTtft === undefined) {
+    ttftMs = null;
+  } else if (typeof rawTtft === "number" && Number.isFinite(rawTtft)) {
+    ttftMs = rawTtft;
+  } else {
+    return undefined;
+  }
+
+  const rawTps = sanitized.tokensPerSecond;
+  let tokensPerSecond: number | null;
+  if (rawTps === null || rawTps === undefined) {
+    tokensPerSecond = null;
+  } else if (typeof rawTps === "number" && Number.isFinite(rawTps)) {
+    tokensPerSecond = rawTps;
+  } else {
+    return undefined;
+  }
+
+  return {
+    status,
+    ttftMs,
+    tokensPerSecond,
+  };
 }
 
 function sanitizeUsage(value: unknown): AgentUsage | undefined {
@@ -490,6 +534,13 @@ function sanitizeUsage(value: unknown): AgentUsage | undefined {
     if (!assignFiniteNumber(sanitized, result, field)) {
       return undefined;
     }
+  }
+  if (sanitized.modelTurn !== undefined && sanitized.modelTurn !== null) {
+    const modelTurn = sanitizeModelTurnUsage(sanitized.modelTurn);
+    if (!modelTurn) {
+      return undefined;
+    }
+    result.modelTurn = modelTurn;
   }
   return Object.keys(result).length ? result : undefined;
 }

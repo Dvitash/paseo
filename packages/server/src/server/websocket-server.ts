@@ -58,6 +58,9 @@ import {
   type PushNotifications,
   type PushNotificationSender,
 } from "./push/index.js";
+import { loadOrCreateVapidKeys } from "./push/vapid-keys.js";
+import { WebPushStore } from "./push/web-push-store.js";
+import { WebPushService } from "./push/web-push-service.js";
 import type { ScriptHealthState } from "./script-health-monitor.js";
 import type { ServiceProxySubsystem } from "./service-proxy.js";
 import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
@@ -72,6 +75,8 @@ import {
   buildAgentAttentionNotificationPayload,
   findLatestPermissionRequest,
 } from "@getpaseo/protocol/agent-attention-notification";
+import { getOriginDeviceFromLabels } from "@getpaseo/protocol/agent-labels";
+import type { WebPushSubscription } from "@getpaseo/protocol/messages";
 import { createGitHubService } from "../services/github-service.js";
 import type { ForgeService } from "../services/forge-service.js";
 import {
@@ -86,6 +91,7 @@ import {
   type WebSocketRuntimeDiagnosticSnapshot,
 } from "./websocket/runtime-metrics.js";
 import { ProviderUsageService } from "../services/quota-fetcher/service.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { getProcessMemoryDiagnostics, getProcessUptimeSeconds } from "./process-diagnostics.js";
 import {
   CLIENT_SHUTDOWN_RPC_REASON,
@@ -470,6 +476,7 @@ interface BrowserToolsRegistration {
 
 interface SocketSessionOptions {
   clientId: string;
+  principalId?: string;
   appVersion: string | null;
   clientCapabilities: Record<string, unknown> | null;
   permissions: readonly DaemonPermission[];
@@ -560,8 +567,10 @@ export class VoiceAssistantWebSocketServer {
   private readonly paseoHome: string;
   private readonly worktreesRoot: string | undefined;
   private readonly daemonConfigStore: DaemonConfigStore;
-  private readonly pushNotifications: PushNotifications;
-  private readonly pushNotificationSender: PushNotificationSender;
+  private pushNotifications!: PushNotifications;
+  private pushNotificationSender!: PushNotificationSender;
+  private webPushService!: WebPushService | null;
+  private webPushOperational!: boolean;
   private readonly mcpBaseUrl: string | null;
   private speech!: SpeechService | null;
   private terminalManager!: TerminalManager | null;
@@ -593,6 +602,7 @@ export class VoiceAssistantWebSocketServer {
   private unsubscribeSpeechReadiness: (() => void) | null = null;
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
   private readonly providerUsageService: ProviderUsageService;
+  private readonly hostPerformanceSampler: HostPerformanceSampler;
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
   private readonly hubRelationships: HubRelationshipManagement | null;
@@ -723,12 +733,7 @@ export class VoiceAssistantWebSocketServer {
       unsubscribeChange();
     };
 
-    const pushLogger = this.logger.child({ module: "push" });
-    this.pushNotifications = createPushNotifications({
-      logger: pushLogger,
-      filePath: join(paseoHome, "push-tokens.json"),
-    });
-    this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
+    this.initializePushServices(paseoHome, pushNotificationSender);
 
     this.agentManager.setAgentAttentionCallback((params) => {
       void this.broadcastAgentAttention(params).catch((err) => {
@@ -739,12 +744,42 @@ export class VoiceAssistantWebSocketServer {
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
     });
+    this.hostPerformanceSampler = new HostPerformanceSampler();
 
     this.wss = this.createWebSocketServer(server, wsConfig, auth);
     this.startRuntimeMetricsInterval();
     this.startApplicationSocketLeaseInterval();
 
     this.logger.info("WebSocket server initialized on /ws");
+  }
+  private initializePushServices(
+    paseoHome: string,
+    pushNotificationSender?: PushNotificationSender,
+  ): void {
+    const pushLogger = this.logger.child({ module: "push" });
+    const vapidKeyPath = join(paseoHome, "vapid-keys.json");
+    const webPushSubPath = join(paseoHome, "web-push-subscriptions.json");
+    let webPushService: WebPushService | null = null;
+    try {
+      const vapidKeys = loadOrCreateVapidKeys(vapidKeyPath, pushLogger);
+      const webPushStore = new WebPushStore(pushLogger, webPushSubPath);
+      webPushService = new WebPushService({
+        logger: pushLogger,
+        vapidKeys,
+        store: webPushStore,
+      });
+    } catch (error) {
+      pushLogger.warn({ err: error }, "Failed to initialize Web Push service; web push disabled");
+    }
+    this.webPushService = webPushService;
+    this.webPushOperational = webPushService !== null;
+
+    this.pushNotifications = createPushNotifications({
+      logger: pushLogger,
+      filePath: join(paseoHome, "push-tokens.json"),
+      webPush: webPushService ?? undefined,
+    });
+    this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
   }
 
   private assignOptionalServices(params: {
@@ -1012,6 +1047,9 @@ export class VoiceAssistantWebSocketServer {
         connection.session.setPermissions(permissions);
         this.syncBrowserToolsClientRegistration(connection);
       }
+    }
+    if (!permissions.includes("workspace.read")) {
+      this.webPushService?.revokePrincipal(principalId);
     }
   }
 
@@ -1317,6 +1355,7 @@ export class VoiceAssistantWebSocketServer {
 
     const session = this.createSocketSession({
       clientId,
+      principalId: admission.principalId,
       appVersion,
       clientCapabilities,
       permissions: admission.permissions,
@@ -1387,6 +1426,20 @@ export class VoiceAssistantWebSocketServer {
   }
 
   private createSocketSession(options: SocketSessionOptions): Session {
+    const webPush =
+      this.webPushService && options.principalId
+        ? {
+            getPublicKey: () => this.webPushService!.getPublicKey(),
+            subscribe: (sub: WebPushSubscription) =>
+              this.webPushService!.subscribe(sub, options.principalId!, options.clientId),
+            unsubscribe: (endpoint: string) =>
+              this.webPushService!.unsubscribe(endpoint, options.principalId!, options.clientId),
+            test: (endpoint: string) => this.webPushService!.test(endpoint, options.principalId!),
+            onClientActivity: () =>
+              this.webPushService!.renewPrincipal(options.principalId!, options.clientId),
+          }
+        : undefined;
+
     return new Session({
       clientId: options.clientId,
       appVersion: options.appVersion,
@@ -1408,6 +1461,7 @@ export class VoiceAssistantWebSocketServer {
       },
       downloadTokenStore: this.downloadTokenStore,
       pushNotifications: this.pushNotifications,
+      webPush,
       paseoHome: this.paseoHome,
       worktreesRoot: this.worktreesRoot,
       agentManager: this.agentManager,
@@ -1432,6 +1486,7 @@ export class VoiceAssistantWebSocketServer {
       terminalManager: this.terminalManager,
       providerSnapshotManager: this.providerSnapshotManager,
       providerUsageService: this.providerUsageService,
+      hostPerformanceSampler: this.hostPerformanceSampler,
       hubExecutionAgents: options.hubExecutionAgents,
       hubRelationships: options.hubRelationships,
       serviceProxy: this.serviceProxy ?? undefined,
@@ -1633,6 +1688,9 @@ export class VoiceAssistantWebSocketServer {
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         sideChat: true,
+        hostPerformance: true,
+        // COMPAT(modelTurnMetrics): added in v0.8.0; remove gate after 2027-03-09.
+        modelTurnMetrics: true,
         agentRequestReceipts: true,
         hubAgentRpc: true,
         // COMPAT(directorySync): added in v0.3.x, remove gate after 2027-02-12.
@@ -1673,6 +1731,7 @@ export class VoiceAssistantWebSocketServer {
         ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
         pushTokenRevocation: true,
+        ...(this.webPushOperational ? { webPush: true } : {}),
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: true,
         pluginManagement: true,
@@ -1775,6 +1834,8 @@ export class VoiceAssistantWebSocketServer {
         agentProfiles: true,
         // COMPAT(agentConfigApply): added in v0.3.2, remove gate after 2027-02-11.
         agentConfigApply: true,
+        // COMPAT(dictationConfig): added in v0.8.0-beta.2, remove gate after 2027-03-10.
+        dictationConfig: true,
       },
     };
   }
@@ -2505,6 +2566,8 @@ export class VoiceAssistantWebSocketServer {
         focusedAgentId: null,
         focusedTerminalId: null,
         lastActivityAtMs: null,
+        lastAppActivityAtMs: null,
+        isMobile: false,
       };
     }
 
@@ -2513,6 +2576,8 @@ export class VoiceAssistantWebSocketServer {
       focusedAgentId: activity.focusedAgentId,
       focusedTerminalId: activity.focusedTerminalId,
       lastActivityAtMs: activity.lastActivityAt.getTime(),
+      lastAppActivityAtMs: activity.lastAppActivityAt.getTime(),
+      isMobile: activity.deviceType === "mobile" || activity.deviceClass === "mobile",
     };
   }
 
@@ -2540,12 +2605,24 @@ export class VoiceAssistantWebSocketServer {
 
     const allStates = clientEntries.map((e) => e.state);
     const nowMs = Date.now();
-    const assistantMessage = await this.agentManager.getLastAssistantMessage(params.agentId);
+    // Only "finished" notifications embed the assistant preview — skip the
+    // durable-store read for permission/error so a slow lookup can't delay them.
+    const assistantMessage =
+      params.reason === "finished"
+        ? await this.agentManager.getLastAssistantMessage(params.agentId).catch((err) => {
+            this.logger.warn(
+              { err, agentId: params.agentId },
+              "Failed to read last assistant message for notification",
+            );
+            return null;
+          })
+        : null;
     const notification = buildAgentAttentionNotificationPayload({
       reason: params.reason,
       serverId: this.serverId,
       workspaceId: agent.workspaceId,
       agentId: params.agentId,
+      agentTitle: agent.config.title ?? null,
       assistantMessage,
       permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
     });
@@ -2554,19 +2631,31 @@ export class VoiceAssistantWebSocketServer {
       allStates,
       focusTarget: { kind: "agent", id: params.agentId },
       pushEligible: isPushEligibleAttentionReason(params.reason),
+      // Permission prompts and mobile-origin agents still push to mobile
+      // endpoints while a desktop client shows recent app interaction.
+      mobilePushOverride:
+        params.reason === "permission" || getOriginDeviceFromLabels(agent.labels) === "mobile",
       nowMs,
     });
 
-    if (plan.shouldPush) {
-      void this.pushNotificationSender.send(notification).catch((err) => {
-        this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
-      });
+    if (plan.pushScope) {
+      void this.pushNotificationSender
+        .send(notification, { scope: plan.pushScope })
+        .catch((err) => {
+          this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
+        });
     }
 
     for (const [clientIndex, { ws }] of clientEntries.entries()) {
-      const shouldNotify = clientIndex === plan.inAppRecipientIndex;
-      const timestamp = new Date().toISOString();
       const connection = this.sessions.get(ws);
+      // Suppress the page-local OS notification when this client's own push
+      // subscription will already surface the same event via the service worker.
+      const pushCovered =
+        plan.pushScope !== null &&
+        connection !== undefined &&
+        this.webPushService?.hasPushCoverageForClient(connection.clientId, plan.pushScope) === true;
+      const shouldNotify = clientIndex === plan.inAppRecipientIndex && !pushCovered;
+      const timestamp = new Date().toISOString();
       const attentionPayload = {
         agentId: params.agentId,
         reason: params.reason,
@@ -2636,24 +2725,28 @@ export class VoiceAssistantWebSocketServer {
       allStates,
       focusTarget: { kind: "terminal", id: params.terminalId },
       pushEligible: true,
+      mobilePushOverride: false,
       nowMs,
     });
 
     const title = terminalAttentionTitle(params.reason);
     const body = params.terminalName;
 
-    if (plan.shouldPush) {
+    if (plan.pushScope) {
       void this.pushNotificationSender
-        .send({
-          title,
-          body,
-          data: {
-            serverId: this.serverId,
-            terminalId: params.terminalId,
-            cwd: params.cwd,
-            ...(workspaceId ? { workspaceId } : {}),
+        .send(
+          {
+            title,
+            body,
+            data: {
+              serverId: this.serverId,
+              terminalId: params.terminalId,
+              cwd: params.cwd,
+              ...(workspaceId ? { workspaceId } : {}),
+            },
           },
-        })
+          { scope: plan.pushScope },
+        )
         .catch((err) => {
           this.logger.warn(
             { err, terminalId: params.terminalId },
@@ -2663,7 +2756,12 @@ export class VoiceAssistantWebSocketServer {
     }
 
     for (const [clientIndex, { ws }] of clientEntries.entries()) {
-      const shouldNotify = clientIndex === plan.inAppRecipientIndex;
+      const connection = this.sessions.get(ws);
+      const pushCovered =
+        plan.pushScope !== null &&
+        connection !== undefined &&
+        this.webPushService?.hasPushCoverageForClient(connection.clientId, plan.pushScope) === true;
+      const shouldNotify = clientIndex === plan.inAppRecipientIndex && !pushCovered;
       const message = wrapSessionMessage({
         type: "terminal_attention_required",
         payload: {

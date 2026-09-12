@@ -3,6 +3,7 @@ import {
   KNOWN_PROVIDER_ICON_NAMES,
 } from "@getpaseo/protocol/provider-icon-names";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
+import { USAGE_PROVIDER_ICON_SVGS } from "@/assets/usage-provider-icons";
 
 export type ProviderIconName =
   | { kind: "builtin"; id: string }
@@ -10,9 +11,22 @@ export type ProviderIconName =
   | { kind: "svg"; svg: string }
   | { kind: "bot" };
 
-const BUILTIN_PROVIDER_IDS = new Set(BUILTIN_PROVIDER_ICON_NAMES);
+const BUILTIN_PROVIDER_IDS = new Set([...BUILTIN_PROVIDER_ICON_NAMES, "devin"]);
 const KNOWN_PROVIDER_IDS = new Set(KNOWN_PROVIDER_ICON_NAMES);
 const providerSnapshotIconSvgsByServer = new Map<string, ReadonlyMap<string, string>>();
+export const OMP_PROVIDER_ICON_ALIASES: Record<string, string> = {
+  anthropic: "claude",
+  "anthropic-claude": "claude",
+  "openai-codex": "codex",
+  openai: "codex",
+  "github-copilot": "copilot",
+  "google-antigravity": "agy",
+  antigravity: "agy",
+  google: "gemini",
+  "kimi-code": "kimi",
+  "opencode-go": "opencode",
+  "minimax-code": "minimax",
+};
 
 export function replaceProviderSnapshotIcons(
   serverId: string,
@@ -31,16 +45,26 @@ export function resolveProviderIconName(
   provider: string,
   serverId?: string | null,
 ): ProviderIconName {
-  if (BUILTIN_PROVIDER_IDS.has(provider)) {
-    return { kind: "builtin", id: provider };
+  const canonical = OMP_PROVIDER_ICON_ALIASES[provider] ?? provider;
+  if (BUILTIN_PROVIDER_IDS.has(canonical)) {
+    return { kind: "builtin", id: canonical };
   }
   const iconSvg = serverId
-    ? providerSnapshotIconSvgsByServer.get(serverId)?.get(provider)
+    ? (providerSnapshotIconSvgsByServer.get(serverId)?.get(provider) ??
+      providerSnapshotIconSvgsByServer.get(serverId)?.get(canonical))
     : undefined;
   if (iconSvg) {
     return { kind: "svg", svg: iconSvg };
   }
-  if (KNOWN_PROVIDER_IDS.has(provider)) {
+  if (KNOWN_PROVIDER_IDS.has(canonical)) {
+    return { kind: "catalog", id: canonical };
+  }
+  // Vendored usage-provider glyphs (OMP subscription providers like commandcode)
+  // resolve through the same catalog path without living in the ACP catalog.
+  if (USAGE_PROVIDER_ICON_SVGS[canonical]) {
+    return { kind: "catalog", id: canonical };
+  }
+  if (USAGE_PROVIDER_ICON_SVGS[provider]) {
     return { kind: "catalog", id: provider };
   }
   return { kind: "bot" };

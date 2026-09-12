@@ -585,6 +585,77 @@ describe("stream reducer tool call idempotency", () => {
   });
 });
 
+describe("stream reducer tool call timing", () => {
+  it("stamps startedAt on insert and endedAt when the call reaches a terminal status", () => {
+    const callId = "timed-tool-call";
+    const started = new Date("2025-01-01T12:00:00Z");
+    const running = reduceStreamUpdate(
+      [],
+      canonicalToolTimeline({
+        provider: "codex",
+        callId,
+        name: "shell",
+        status: "running",
+        detail: { type: "shell", command: "sleep 1" },
+      }),
+      started,
+    );
+    const runningItem = findToolByCallId(running, callId);
+    assert.deepStrictEqual(runningItem?.startedAt, started);
+    assert.strictEqual(runningItem?.endedAt, undefined);
+
+    const outputTick = new Date("2025-01-01T12:00:00.500Z");
+    const streaming = reduceStreamUpdate(
+      running,
+      canonicalToolTimeline({
+        provider: "codex",
+        callId,
+        name: "shell",
+        status: "running",
+        detail: { type: "shell", command: "sleep 1", output: "tick" },
+      }),
+      outputTick,
+    );
+    const streamingItem = findToolByCallId(streaming, callId);
+    assert.deepStrictEqual(streamingItem?.startedAt, started);
+    assert.strictEqual(streamingItem?.endedAt, undefined);
+
+    const finished = new Date("2025-01-01T12:00:01Z");
+    const completed = reduceStreamUpdate(
+      streaming,
+      canonicalToolTimeline({
+        provider: "codex",
+        callId,
+        name: "shell",
+        status: "completed",
+        detail: { type: "shell", command: "sleep 1", output: "tick", exitCode: 0 },
+      }),
+      finished,
+    );
+    const completedItem = findToolByCallId(completed, callId);
+    assert.deepStrictEqual(completedItem?.startedAt, started);
+    assert.deepStrictEqual(completedItem?.endedAt, finished);
+  });
+
+  it("stamps endedAt on insert for calls first observed in a terminal status", () => {
+    const finished = new Date("2025-01-01T12:05:00Z");
+    const state = reduceStreamUpdate(
+      [],
+      canonicalToolTimeline({
+        provider: "codex",
+        callId: "already-done",
+        name: "shell",
+        status: "completed",
+        detail: { type: "shell", command: "ls", output: "ok", exitCode: 0 },
+      }),
+      finished,
+    );
+    const item = findToolByCallId(state, "already-done");
+    assert.deepStrictEqual(item?.startedAt, finished);
+    assert.deepStrictEqual(item?.endedAt, finished);
+  });
+});
+
 describe("stream reducer canonical tool calls", () => {
   it("keeps repeated call ids in different turns as distinct timeline rows", () => {
     const callId = "tool-reused-across-turns";

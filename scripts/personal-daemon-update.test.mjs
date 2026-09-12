@@ -20,6 +20,7 @@ import {
   emitCommitStatus,
   fetchEligibleWorkflowRun,
   generateDropInContent,
+  newestSuccessfulRequest,
   parseDaemonStatusOutput,
   probeDaemon,
   quoteSystemdArg,
@@ -28,6 +29,7 @@ import {
   restartService,
   runDaemonUpdate,
   stageRelease,
+  trustedRunDetails,
   validateConfig,
   verifyIdleForUpdate,
   writeLedgerFile,
@@ -361,6 +363,492 @@ test("fetchEligibleWorkflowRun: rejects runs with mismatched actor, repository, 
       return { status: 1, stdout: "", stderr: "" };
     };
     assert.equal(fetchEligibleWorkflowRun({ ...config, runCommand: mockWrongPath }), null);
+  });
+});
+
+test("fetchEligibleWorkflowRun: selects trusted push run on main with valid provenance", async () => {
+  await withTempDir("prov-push-test-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const PUSH_SHA = "1111111111111111111111111111111111111111";
+    const runsList = [
+      {
+        databaseId: 501,
+        headSha: PUSH_SHA,
+        createdAt: "2026-09-05T14:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "push",
+      },
+    ];
+
+    const runDetails = makeRealisticRunDetails({
+      id: 501,
+      headSha: PUSH_SHA,
+      createdAt: "2026-09-05T14:00:00Z",
+      owner: "collaborator-committer",
+      event: "push",
+      headBranch: "main",
+    });
+
+    const mockRunCommand = (cmd, args) => {
+      if (args[0] === "run" && args[1] === "list") {
+        assert.equal(args.includes("--event"), false);
+        return { status: 0, stdout: JSON.stringify(runsList), stderr: "" };
+      }
+      if (args[0] === "api" && args[1].includes("/actions/runs/501")) {
+        return { status: 0, stdout: JSON.stringify(runDetails), stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: "unknown command" };
+    };
+
+    const result = fetchEligibleWorkflowRun({
+      ghPath: config.ghPath,
+      repository: config.repository,
+      workflow: config.workflow,
+      owner: config.owner,
+      installedAt: config.installedAt,
+      root: config.root,
+      runCommand: mockRunCommand,
+    });
+
+    assert.ok(result);
+    assert.equal(result.runId, 501);
+    assert.equal(result.headSha, PUSH_SHA);
+    assert.equal(result.run.event, "push");
+  });
+});
+
+test("newestSuccessfulRequest & fetchEligibleWorkflowRun: orders mixed push and dispatch runs by recency and tie-breaks by databaseId", async () => {
+  await withTempDir("mixed-order-test-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const SHA_DISPATCH_OLD = "2222222222222222222222222222222222222222";
+    const SHA_PUSH_NEWER = "3333333333333333333333333333333333333333";
+    const SHA_DISPATCH_NEWEST = "4444444444444444444444444444444444444444";
+    const SHA_PR = "5555555555555555555555555555555555555555";
+
+    // 1. Mixed list where push is newer than dispatch, and untrusted PR is newest of all
+    const mixedRuns1 = [
+      {
+        databaseId: 603,
+        headSha: SHA_PR,
+        createdAt: "2026-09-08T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "pull_request",
+      },
+      {
+        databaseId: 602,
+        headSha: SHA_PUSH_NEWER,
+        createdAt: "2026-09-07T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "push",
+      },
+      {
+        databaseId: 601,
+        headSha: SHA_DISPATCH_OLD,
+        createdAt: "2026-09-06T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "workflow_dispatch",
+      },
+    ];
+
+    const selected1 = newestSuccessfulRequest(mixedRuns1, config.installedAt);
+    assert.ok(selected1);
+    assert.equal(selected1.databaseId, 602);
+    assert.equal(selected1.event, "push");
+
+    // 2. Mixed list where dispatch is newer than push
+    const mixedRuns2 = [
+      {
+        databaseId: 604,
+        headSha: SHA_DISPATCH_NEWEST,
+        createdAt: "2026-09-09T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "workflow_dispatch",
+      },
+      {
+        databaseId: 602,
+        headSha: SHA_PUSH_NEWER,
+        createdAt: "2026-09-07T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "push",
+      },
+    ];
+
+    const selected2 = newestSuccessfulRequest(mixedRuns2, config.installedAt);
+    assert.ok(selected2);
+    assert.equal(selected2.databaseId, 604);
+    assert.equal(selected2.event, "workflow_dispatch");
+
+    // 3. Same createdAt timestamp tie-break by databaseId
+    const sameTimeRuns = [
+      {
+        databaseId: 605,
+        headSha: SHA_PUSH_NEWER,
+        createdAt: "2026-09-07T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "push",
+      },
+      {
+        databaseId: 606,
+        headSha: SHA_DISPATCH_NEWEST,
+        createdAt: "2026-09-07T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "workflow_dispatch",
+      },
+    ];
+    const selected3 = newestSuccessfulRequest(sameTimeRuns, config.installedAt);
+    assert.equal(selected3.databaseId, 606);
+
+    // 4. End-to-end selection in fetchEligibleWorkflowRun
+    const mockRunCommand = (cmd, args) => {
+      if (args[0] === "run" && args[1] === "list") {
+        return { status: 0, stdout: JSON.stringify(mixedRuns1), stderr: "" };
+      }
+      if (args[0] === "api" && args[1].includes("/actions/runs/602")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify(
+            makeRealisticRunDetails({
+              id: 602,
+              headSha: SHA_PUSH_NEWER,
+              createdAt: "2026-09-07T12:00:00Z",
+              event: "push",
+            }),
+          ),
+          stderr: "",
+        };
+      }
+      return { status: 1, stdout: "", stderr: "unknown" };
+    };
+
+    const eligible = fetchEligibleWorkflowRun({
+      ghPath: config.ghPath,
+      repository: config.repository,
+      workflow: config.workflow,
+      owner: config.owner,
+      installedAt: config.installedAt,
+      root: config.root,
+      runCommand: mockRunCommand,
+    });
+    assert.ok(eligible);
+    assert.equal(eligible.runId, 602);
+    assert.equal(eligible.run.event, "push");
+  });
+});
+
+test("trustedRunDetails & fetchEligibleWorkflowRun: denies untrusted events, repos, branches, and metadata", async () => {
+  await withTempDir("prov-denials-", async (dir) => {
+    const config = makeMockConfig(dir);
+    const newest = {
+      databaseId: 701,
+      headSha: TEST_COMMIT,
+      createdAt: "2026-09-05T12:00:00Z",
+      event: "push",
+    };
+
+    const baseDetails = makeRealisticRunDetails({
+      id: 701,
+      headSha: TEST_COMMIT,
+      createdAt: "2026-09-05T12:00:00Z",
+      event: "push",
+      headBranch: "main",
+    });
+    assert.equal(trustedRunDetails(baseDetails, newest, config), true);
+
+    // 1. Untrusted events in details
+    for (const badEvent of ["pull_request", "schedule", "workflow_call", "release", ""]) {
+      const details = { ...baseDetails, event: badEvent };
+      assert.equal(
+        trustedRunDetails(details, { ...newest, event: badEvent }, config),
+        false,
+        `Should deny event: ${badEvent}`,
+      );
+    }
+
+    // 2. Mismatch between listed event and detailed run event
+    assert.equal(
+      trustedRunDetails(
+        { ...baseDetails, event: "workflow_dispatch" },
+        { ...newest, event: "push" },
+        config,
+      ),
+      false,
+      "Should deny when detail event does not match listed event",
+    );
+    assert.equal(
+      trustedRunDetails(
+        { ...baseDetails, event: "push" },
+        { ...newest, event: "workflow_dispatch" },
+        config,
+      ),
+      false,
+      "Should deny when detail event does not match listed event",
+    );
+
+    // 3. Untrusted repository / fork
+    assert.equal(
+      trustedRunDetails(
+        { ...baseDetails, repository: { full_name: "Attacker/paseo" } },
+        newest,
+        config,
+      ),
+      false,
+      "Should deny mismatched repository",
+    );
+    assert.equal(
+      trustedRunDetails(
+        { ...baseDetails, head_repository: { full_name: "Attacker/fork-paseo" } },
+        newest,
+        config,
+      ),
+      false,
+      "Should deny head_repository from a fork",
+    );
+
+    // 4. Untrusted branch
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, head_branch: "feature/untrusted" }, newest, config),
+      false,
+      "Should deny non-main branch",
+    );
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, head_branch: "refs/heads/main" }, newest, config),
+      false,
+      "Should deny non-canonical branch name format",
+    );
+
+    // 5. Untrusted metadata: SHA, timestamps, id, path, status, conclusion
+    assert.equal(
+      trustedRunDetails(
+        { ...baseDetails, head_sha: "0000000000000000000000000000000000000000" },
+        newest,
+        config,
+      ),
+      false,
+      "Should deny mismatched head_sha",
+    );
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, head_sha: "not-a-valid-40-hex-sha" }, newest, config),
+      false,
+      "Should deny malformed head_sha",
+    );
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, created_at: "2026-09-01T00:00:00Z" }, newest, config),
+      false,
+      "Should deny mismatched created_at timestamp",
+    );
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, id: 999 }, newest, config),
+      false,
+      "Should deny mismatched run id",
+    );
+    assert.equal(
+      trustedRunDetails(
+        { ...baseDetails, path: ".github/workflows/other-workflow.yml" },
+        newest,
+        config,
+      ),
+      false,
+      "Should deny unexpected workflow path",
+    );
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, status: "in_progress" }, newest, config),
+      false,
+      "Should deny in_progress status",
+    );
+    assert.equal(
+      trustedRunDetails({ ...baseDetails, conclusion: "failure" }, newest, config),
+      false,
+      "Should deny non-success conclusion",
+    );
+
+    // 6. fetchEligibleWorkflowRun end-to-end denial for untrusted event list
+    const unacceptedList = [
+      {
+        databaseId: 702,
+        headSha: TEST_COMMIT,
+        createdAt: "2026-09-05T12:00:00Z",
+        status: "completed",
+        conclusion: "success",
+        event: "pull_request",
+      },
+    ];
+    const mockUnaccepted = (cmd, args) => {
+      if (args[0] === "run" && args[1] === "list") {
+        return { status: 0, stdout: JSON.stringify(unacceptedList), stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: "" };
+    };
+    assert.equal(fetchEligibleWorkflowRun({ ...config, runCommand: mockUnaccepted }), null);
+  });
+});
+
+test("trustedRunDetails & fetchEligibleWorkflowRun: enforces owner restriction on manual requests but permits authorized push actors", async () => {
+  await withTempDir("prov-actor-rules-", async (dir) => {
+    const config = makeMockConfig(dir);
+
+    // Manual dispatch run
+    const dispatchNewest = {
+      databaseId: 801,
+      headSha: TEST_COMMIT,
+      createdAt: "2026-09-05T12:00:00Z",
+      event: "workflow_dispatch",
+    };
+    const dispatchDetails = makeRealisticRunDetails({
+      id: 801,
+      headSha: TEST_COMMIT,
+      createdAt: "2026-09-05T12:00:00Z",
+      event: "workflow_dispatch",
+      headBranch: "main",
+      owner: "Dvitash",
+    });
+
+    // Manual dispatch from owner -> ACCEPTED
+    assert.equal(trustedRunDetails(dispatchDetails, dispatchNewest, config), true);
+
+    // Manual dispatch from owner with case insensitivity -> ACCEPTED
+    assert.equal(
+      trustedRunDetails(
+        { ...dispatchDetails, actor: { login: "dvitash" } },
+        dispatchNewest,
+        config,
+      ),
+      true,
+    );
+
+    // Manual dispatch from non-owner -> DENIED
+    assert.equal(
+      trustedRunDetails(
+        { ...dispatchDetails, actor: { login: "OtherUser" } },
+        dispatchNewest,
+        config,
+      ),
+      false,
+      "Manual dispatch from non-owner must be rejected",
+    );
+
+    // Manual dispatch with missing/empty actor -> DENIED
+    assert.equal(
+      trustedRunDetails({ ...dispatchDetails, actor: null }, dispatchNewest, config),
+      false,
+    );
+    assert.equal(
+      trustedRunDetails({ ...dispatchDetails, actor: { login: "" } }, dispatchNewest, config),
+      false,
+    );
+
+    // Push run
+    const pushNewest = {
+      databaseId: 802,
+      headSha: TEST_COMMIT,
+      createdAt: "2026-09-05T12:00:00Z",
+      event: "push",
+    };
+    const pushDetails = makeRealisticRunDetails({
+      id: 802,
+      headSha: TEST_COMMIT,
+      createdAt: "2026-09-05T12:00:00Z",
+      event: "push",
+      headBranch: "main",
+      owner: "collaborator-author",
+    });
+
+    // Push run from non-owner -> ACCEPTED
+    assert.equal(
+      trustedRunDetails(pushDetails, pushNewest, config),
+      true,
+      "Push run from collaborator on main branch must be accepted",
+    );
+
+    // Push run from owner -> ALSO ACCEPTED
+    assert.equal(
+      trustedRunDetails({ ...pushDetails, actor: { login: "Dvitash" } }, pushNewest, config),
+      true,
+    );
+
+    // End-to-end with fetchEligibleWorkflowRun: non-owner manual dispatch is denied
+    const mockNonOwnerDispatch = (cmd, args) => {
+      if (args[0] === "run" && args[1] === "list") {
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            {
+              databaseId: 803,
+              headSha: TEST_COMMIT,
+              createdAt: "2026-09-05T12:00:00Z",
+              status: "completed",
+              conclusion: "success",
+              event: "workflow_dispatch",
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1].includes("/actions/runs/803")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify(
+            makeRealisticRunDetails({
+              id: 803,
+              headSha: TEST_COMMIT,
+              createdAt: "2026-09-05T12:00:00Z",
+              event: "workflow_dispatch",
+              owner: "unauthorized-actor",
+            }),
+          ),
+          stderr: "",
+        };
+      }
+      return { status: 1, stdout: "", stderr: "" };
+    };
+    assert.equal(fetchEligibleWorkflowRun({ ...config, runCommand: mockNonOwnerDispatch }), null);
+
+    // End-to-end with fetchEligibleWorkflowRun: non-owner push is accepted
+    const mockNonOwnerPush = (cmd, args) => {
+      if (args[0] === "run" && args[1] === "list") {
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            {
+              databaseId: 804,
+              headSha: TEST_COMMIT,
+              createdAt: "2026-09-05T12:00:00Z",
+              status: "completed",
+              conclusion: "success",
+              event: "push",
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1].includes("/actions/runs/804")) {
+        return {
+          status: 0,
+          stdout: JSON.stringify(
+            makeRealisticRunDetails({
+              id: 804,
+              headSha: TEST_COMMIT,
+              createdAt: "2026-09-05T12:00:00Z",
+              event: "push",
+              owner: "authorized-team-member",
+            }),
+          ),
+          stderr: "",
+        };
+      }
+      return { status: 1, stdout: "", stderr: "" };
+    };
+    const pushResult = fetchEligibleWorkflowRun({ ...config, runCommand: mockNonOwnerPush });
+    assert.ok(pushResult);
+    assert.equal(pushResult.runId, 804);
+    assert.equal(pushResult.run.event, "push");
   });
 });
 

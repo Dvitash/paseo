@@ -25,8 +25,22 @@ import type {
   SessionOutboundMessage,
   WorkspaceDescriptorPayload,
   WorkspaceCreateRequest,
+  WebPushSubscription,
 } from "@getpaseo/protocol/messages";
 import { DaemonClient } from "./daemon-client.js";
+export { DaemonClient };
+export type { WebPushSubscription };
+export type {
+  HostPerformanceCpuSample,
+  HostPerformanceGetSnapshotRequest,
+  HostPerformanceGetSnapshotResponse,
+  HostPerformanceGpu,
+  HostPerformanceGpus,
+  HostPerformanceHistoryPoint,
+  HostPerformanceMemory,
+  HostPerformanceSample,
+  HostPerformanceSnapshot,
+} from "@getpaseo/protocol/host-performance";
 import {
   createTerminalActions,
   type PaseoTerminalActions,

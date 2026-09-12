@@ -12,6 +12,7 @@ import {
   type SessionOutboundMessage,
 } from "@getpaseo/protocol/messages";
 import { Session, type SessionOptions } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { DirectorySyncService } from "./directory-sync/index.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
@@ -275,6 +276,7 @@ function createSessionForWireCompatTest(options?: {
     tts: null,
     providerSnapshotManager: createProviderSnapshotManagerStub().manager,
     terminalManager: null,
+    hostPerformanceSampler: new HostPerformanceSampler(),
   });
 
   return session;

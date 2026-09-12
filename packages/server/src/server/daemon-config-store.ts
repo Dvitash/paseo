@@ -31,6 +31,15 @@ interface SupportedMutableConfigPatch {
   skills?: MutableDaemonConfig["skills"];
   pluginsEnabled?: boolean;
   plugins?: MutableDaemonConfig["plugins"];
+  features?: MutableDaemonConfig["features"];
+}
+
+export interface DaemonConfigPatchResult {
+  config: MutableDaemonConfig;
+  /** Persisted leaf paths written by the patch that only apply after a daemon
+   * restart (e.g. `features.dictation.*` — the speech runtime is built at
+   * bootstrap). */
+  restartRequiredPaths: string[];
 }
 
 interface LoggerLike {
@@ -249,6 +258,31 @@ function compactOwnedPaths(paths: readonly string[], owners: readonly string[]):
   return Array.from(compacted).sort();
 }
 
+function pickSupportedFeaturesPatch(
+  features: MutableDaemonConfigPatch["features"],
+): SupportedMutableConfigPatch["features"] {
+  const dictation = features?.dictation;
+  if (dictation === undefined) return undefined;
+  const stt = dictation.stt;
+  return {
+    dictation: {
+      ...(dictation.enabled !== undefined ? { enabled: dictation.enabled } : {}),
+      ...(stt !== undefined
+        ? {
+            stt: {
+              ...(stt.provider !== undefined ? { provider: stt.provider } : {}),
+              ...(stt.model !== undefined ? { model: stt.model } : {}),
+              ...(stt.language !== undefined ? { language: stt.language } : {}),
+              ...(stt.confidenceThreshold !== undefined
+                ? { confidenceThreshold: stt.confidenceThreshold }
+                : {}),
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMutableConfigPatch {
   return {
     ...(patch.relay?.enabled !== undefined ? { relay: { enabled: patch.relay.enabled } } : {}),
@@ -276,6 +310,9 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.agentProfiles !== undefined ? { agentProfiles: patch.agentProfiles } : {}),
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
+    ...(patch.features !== undefined
+      ? { features: pickSupportedFeaturesPatch(patch.features) }
+      : {}),
   };
 }
 
@@ -346,16 +383,16 @@ export class DaemonConfigStore {
     return this.current;
   }
 
-  public patch(partial: MutableDaemonConfigPatch): MutableDaemonConfig {
+  public patch(partial: MutableDaemonConfigPatch): DaemonConfigPatchResult {
     const parsedPatch = pickSupportedPatchFields(MutableDaemonConfigPatchSchema.parse(partial));
     return this.applySupportedPatch(parsedPatch);
   }
 
   public setAgentSkillSelection(selection: AgentSkillSelection): MutableDaemonConfig {
-    return this.applySupportedPatch({ skills: { selection } });
+    return this.applySupportedPatch({ skills: { selection } }).config;
   }
 
-  private applySupportedPatch(parsedPatch: SupportedMutableConfigPatch): MutableDaemonConfig {
+  private applySupportedPatch(parsedPatch: SupportedMutableConfigPatch): DaemonConfigPatchResult {
     if (parsedPatch.relay?.enabled !== undefined && !this.relayEnabledMutable) {
       throw new Error(
         "Relay is controlled by a daemon launch override. Remove PASEO_RELAY_ENABLED or the relay CLI flag before changing it here.",
@@ -376,9 +413,12 @@ export class DaemonConfigStore {
     );
 
     const configChanged = !isEqualValue(this.current, next);
+    // `features.*` is not in RELOADABLE_PATHS — the speech runtime is built at
+    // bootstrap — so any changed features leaf requires a restart.
+    const restartRequiredPaths = diffPaths(this.current.features, next.features, "features");
 
     if (!configChanged && removedProviders.length === 0) {
-      return this.current;
+      return { config: this.current, restartRequiredPaths: [] };
     }
 
     const { previous: persistedBeforePatch, knownNext } = this.persistConfig(
@@ -387,7 +427,7 @@ export class DaemonConfigStore {
     );
     if (!configChanged) {
       this.lastKnownPersisted = knownNext;
-      return this.current;
+      return { config: this.current, restartRequiredPaths: [] };
     }
 
     try {
@@ -398,7 +438,7 @@ export class DaemonConfigStore {
       throw error;
     }
 
-    return this.current;
+    return { config: this.current, restartRequiredPaths };
   }
 
   public reload(): DaemonConfigReloadResult {
@@ -584,10 +624,18 @@ function mergeMutablePatchIntoPersistedConfig(params: {
   const { persisted, patch, removeProviders, persistRelayEnabled } = params;
   const daemon = mergeMutableDaemonPatch(persisted.daemon, patch, persistRelayEnabled);
   const agents = mergeMutableAgentPatch(persisted.agents, patch, removeProviders);
+  const features =
+    patch.features !== undefined
+      ? (deepMerge(
+          (persisted.features ?? {}) as Record<string, unknown>,
+          patch.features as Record<string, unknown>,
+        ) as PersistedConfig["features"])
+      : persisted.features;
   return {
     ...persisted,
     ...(patch.pluginsEnabled !== undefined ? { pluginsEnabled: patch.pluginsEnabled } : {}),
     ...(patch.plugins !== undefined ? { plugins: patch.plugins } : {}),
+    ...(features !== undefined ? { features } : {}),
     ...(daemon ? { daemon } : { daemon: undefined }),
     ...(agents ? { agents } : { agents: undefined }),
   } as PersistedConfig;

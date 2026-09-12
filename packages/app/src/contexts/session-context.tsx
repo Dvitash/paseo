@@ -43,6 +43,7 @@ import {
 } from "@/stores/session-store";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { sendOsNotification } from "@/utils/os-notifications";
+import { signalAgentAttentionAlert } from "@/utils/attention-alerts";
 import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
 import {
   getInitKey,
@@ -58,7 +59,6 @@ import { toErrorMessage } from "@/utils/error-messages";
 import { showProviderNoticeToast } from "@/utils/provider-notice-toast";
 import { applyCheckoutStatusUpdateFromEvent } from "@/git/checkout-status-cache";
 import { useProviderSubagentStore } from "@/subagents/provider-store";
-import { revalidateSessionAfterResume } from "@/contexts/session-resume-revalidation";
 
 // Re-export types from session-store and draft-store for backward compatibility
 export type { DraftInput } from "@/stores/draft-store";
@@ -233,7 +233,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   const setAgentStreamHead = useSessionStore((state) => state.setAgentStreamHead);
   const clearAgentStreamHead = useSessionStore((state) => state.clearAgentStreamHead);
   const setInitializingAgents = useSessionStore((state) => state.setInitializingAgents);
-  const bumpHistorySyncGeneration = useSessionStore((state) => state.bumpHistorySyncGeneration);
   const setAgents = useSessionStore((state) => state.setAgents);
   const flushAgentLastActivity = useSessionStore((state) => state.flushAgentLastActivity);
   const setPendingPermissions = useSessionStore((state) => state.setPendingPermissions);
@@ -271,23 +270,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     viewedTimelineSyncRef.current?.setActive(isAppVisible);
   }, [isAppVisible]);
 
-  const handleAppResumed = useCallback(
-    (awayMs: number) => {
-      void revalidateSessionAfterResume({
-        awayMs,
-        serverId,
-        bumpHistorySyncGeneration,
-      });
-    },
-    [bumpHistorySyncGeneration, serverId],
-  );
-
   // Client activity tracking (heartbeat, push token registration)
   useClientActivity({
     client,
     focusedAgentId,
     focusedTerminalId,
-    onAppResumed: handleAppResumed,
   });
   useEffect(() => startPushNotifications({ client, serverId }), [client, serverId]);
 
@@ -304,18 +291,22 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       if (params.reason === "error") {
         return;
       }
-      const isActivelyVisible = getIsAppActivelyVisible(appState);
-      const isAwayFromAgent = !isActivelyVisible || attentionFocusedAgentId !== params.agentId;
-      if (!isAwayFromAgent) {
-        return;
-      }
-
       const timestampMs = new Date(params.timestamp).getTime();
       const lastNotified = attentionNotifiedRef.current.get(params.agentId);
       if (lastNotified && lastNotified >= timestampMs) {
         return;
       }
       attentionNotifiedRef.current.set(params.agentId, timestampMs);
+
+      // The chime/flash fire even while the user is watching the agent — the
+      // OS notification below is the part that's suppressed for active viewers.
+      signalAgentAttentionAlert(params.reason);
+
+      const isActivelyVisible = getIsAppActivelyVisible(appState);
+      const isAwayFromAgent = !isActivelyVisible || attentionFocusedAgentId !== params.agentId;
+      if (!isAwayFromAgent) {
+        return;
+      }
 
       const head = session?.agentStreamHead.get(params.agentId) ?? [];
       const tail = session?.agentStreamTail.get(params.agentId) ?? [];
@@ -528,6 +519,19 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         event.type === "turn_canceled"
       ) {
         voiceRuntime?.onTurnEvent(serverId, agentId, event.type);
+      }
+      // The attention path never reaches a client that's actively watching the
+      // agent (the server picks another in-app recipient), so the completion
+      // chime for that case fires here instead. agent_stream only reaches this
+      // client for viewed agents, and the away case is covered by
+      // notifyAgentAttention — the two conditions are mutually exclusive.
+      if (event.type === "turn_completed") {
+        const session = useSessionStore.getState().sessions[serverId];
+        const isWatchingAgent =
+          getIsAppActivelyVisible(appStateRef.current) && session?.focusedAgentId === agentId;
+        if (isWatchingAgent) {
+          signalAgentAttentionAlert("finished");
+        }
       }
       const turnLiveness = deriveAgentStreamTurnLiveness([
         { event: streamEvent, seq, epoch, timestamp: parsedTimestamp },

@@ -1,33 +1,55 @@
-import { useCallback, useMemo, type ReactElement } from "react";
-import { Pressable, Text, View } from "react-native";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { Archive, Unlink } from "lucide-react-native";
+import { Archive, ChevronDown, ChevronUp, MessageSquare, Unlink } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { getProviderIcon } from "@/components/provider-icons";
-import { ComposerTrackActions, ComposerTrackPill, ComposerTrackRow } from "@/composer/tracks";
+import { useRetainedPanelActive } from "@/components/retained-panel";
+import { StatusRing } from "@/components/status-ring";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useIsCompactFormFactor } from "@/constants/layout";
-import { isNative } from "@/constants/platform";
-import {
-  WorkspaceTabIcon,
-  type WorkspaceTabPresentation,
-} from "@/screens/workspace/workspace-tab-presentation";
+import { MAX_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { isWeb } from "@/constants/platform";
+import { useSessionStore } from "@/stores/session-store";
 import type { Theme } from "@/styles/theme";
-import type { SubagentRow } from "./select";
-import type { ArchiveFinishedStatus } from "./use-archive-finished";
+import type { StreamItem } from "@/types/stream";
+import { TIMELINE_FETCH_PAGE_SIZE } from "@/timeline/timeline-fetch-policy";
+import { formatDuration } from "@/utils/time";
+import { providerSubagentKey, useProviderSubagentStore } from "./provider-store";
+import type { PaseoSubagentRow, SubagentRow } from "./select";
 import {
   buildSubagentPillPresentation,
   buildSubagentRowPresentationData,
-  countFinishedSubagents,
+  findLatestAssistantMessageText,
+  getLatestToolCallOrThought,
+  getRecentActions,
+  isSubagentActiveOrAttention,
+  sortSubagentRows,
+  type RecentSubagentAction,
 } from "./track-presentation";
 
 const ThemedArchive = withUnistyles(Archive);
 const ThemedUnlink = withUnistyles(Unlink);
+const ThemedChevronDown = withUnistyles(ChevronDown);
+const ThemedChevronUp = withUnistyles(ChevronUp);
 
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedColorMapping = (theme: Theme) => ({
   color: theme.colors.foregroundMuted,
 });
+
+const ACCESSIBILITY_EXPANDED = { expanded: true } as const;
+const ACCESSIBILITY_COLLAPSED = { expanded: false } as const;
+const EMPTY_STREAM_ITEMS: readonly StreamItem[] = [];
 
 export interface SubagentsTrackProps {
   serverId: string;
@@ -35,24 +57,41 @@ export interface SubagentsTrackProps {
   onOpenSubagent: (id: string) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
   onArchiveSubagent: (id: string) => void;
-  onArchiveFinished?: () => void;
-  archiveFinishedStatus?: ArchiveFinishedStatus;
   onDetachSubagent?: (id: string) => void;
 }
 
-const IDLE_ARCHIVE_FINISHED_STATUS: ArchiveFinishedStatus = { kind: "idle" };
-
-/** Leading and action glyphs share one size so rows keep a single icon column. */
 const ROW_ICON_SIZE = 14;
+const DEFAULT_VISIBLE_COUNT = 5;
 
-function buildRowPresentation(row: SubagentRow, serverId: string): WorkspaceTabPresentation {
-  const data = buildSubagentRowPresentationData(row);
-  return {
-    ...data,
-    tooltip: data.label,
-    modified: false,
-    icon: getProviderIcon(row.provider, serverId),
-  };
+interface SubagentStreamSummary {
+  activity: string | null;
+  recentActions: RecentSubagentAction[];
+  latestMessage: string | null;
+}
+
+function resolveSubagentActivityText(
+  summary: SubagentStreamSummary | undefined,
+  subtitle: string | undefined,
+  isRunning: boolean,
+  t: (key: string) => string,
+): string | null {
+  if (summary?.activity) {
+    return summary.activity === "thinking" ? t("subagents.activityThinking") : summary.activity;
+  }
+  if (subtitle) {
+    return subtitle;
+  }
+  if (isRunning) {
+    return t("subagents.activityWorking");
+  }
+  return null;
+}
+
+function resolveSubagentStartedAt(row: SubagentRow): Date {
+  if (row.kind === "paseo" && row.turn.phase === "open" && row.turn.startedAt) {
+    return row.turn.startedAt;
+  }
+  return row.createdAt;
 }
 
 export function SubagentsTrack({
@@ -61,123 +100,359 @@ export function SubagentsTrack({
   onOpenSubagent,
   onOpenProviderSubagent,
   onArchiveSubagent,
-  onArchiveFinished,
-  archiveFinishedStatus = IDLE_ARCHIVE_FINISHED_STATUS,
   onDetachSubagent,
 }: SubagentsTrackProps): ReactElement | null {
   const { t } = useTranslation();
+  const isCompact = useIsCompactFormFactor();
+  const sourceId = useId();
+  const isPanelActive = useRetainedPanelActive();
+  const [isCollapsedOverride, setIsCollapsedOverride] = useState<boolean | null>(null);
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [isOverflowExpanded, setIsOverflowExpanded] = useState(false);
+  const [hydrationErrors, setHydrationErrors] = useState<Record<string, string>>({});
+  // On compact the track is a pull tab that starts collapsed: the header alone, with the rows a
+  // tap away. Wide screens keep the card open — there is room, and reaching the rows directly was
+  // never the reason the track existed. Collapsing is clamped to compact: rotate a phone to a wide
+  // layout with the pull closed and the header is no longer a toggle, so a carried-over `true`
+  // would leave the rows unreachable.
+  const isCollapsed = isCompact && (isCollapsedOverride ?? true);
+  const isBodyVisible = !isCollapsed;
 
-  const isArchivingFinished = archiveFinishedStatus.kind === "archiving";
-  const isArchiveFinishedFailed = archiveFinishedStatus.kind === "failed";
-  if (rows.length === 0 && !isArchivingFinished && !isArchiveFinishedFailed) {
+  const agentStreamTail = useSessionStore((state) => state.sessions[serverId]?.agentStreamTail);
+  const agentStreamHead = useSessionStore((state) => state.sessions[serverId]?.agentStreamHead);
+  const client = useSessionStore((state) => state.sessions[serverId]?.client);
+  const viewedTimelineSync = useSessionStore(
+    (state) => state.sessions[serverId]?.viewedTimelineSync ?? null,
+  );
+  const providerTimelines = useProviderSubagentStore((state) => state.timelines);
+
+  // Subscribe to bridge updates for aggregate timeline error detection
+  const [, setBridgeRevision] = useState(0);
+  useEffect(() => {
+    if (!viewedTimelineSync) return;
+    return viewedTimelineSync.subscribe(() => setBridgeRevision((v) => v + 1));
+  }, [viewedTimelineSync]);
+
+  const sortedRows = useMemo(() => sortSubagentRows(rows), [rows]);
+
+  const visibleRows = useMemo(() => sortedRows.filter(isSubagentActiveOrAttention), [sortedRows]);
+
+  const hasOverflow = visibleRows.length > DEFAULT_VISIBLE_COUNT;
+  const displayedRows = useMemo(() => {
+    return hasOverflow && !isOverflowExpanded
+      ? visibleRows.slice(0, DEFAULT_VISIBLE_COUNT)
+      : visibleRows;
+  }, [hasOverflow, isOverflowExpanded, visibleRows]);
+
+  const overflowCount = visibleRows.length - DEFAULT_VISIBLE_COUNT;
+
+  // Register displayed managed child IDs with viewedTimelineSync bridge
+  const displayedManagedIds = useMemo(() => {
+    return displayedRows
+      .filter((row): row is PaseoSubagentRow => row.kind === "paseo")
+      .map((row) => row.id);
+  }, [displayedRows]);
+
+  useEffect(() => {
+    if (!viewedTimelineSync) return;
+    const ids = isPanelActive && isBodyVisible ? displayedManagedIds : [];
+    viewedTimelineSync.replaceVisibleAgentIds(sourceId, ids);
+  }, [displayedManagedIds, isBodyVisible, isPanelActive, sourceId, viewedTimelineSync]);
+
+  useEffect(() => {
+    if (!viewedTimelineSync) {
+      return;
+    }
+    return () => {
+      viewedTimelineSync.replaceVisibleAgentIds(sourceId, []);
+    };
+  }, [sourceId, viewedTimelineSync]);
+
+  // Hydrate provider subagents for displayed rows (retaining key on failure to avoid auto-retry loop)
+  const fetchedProviderIdsRef = useRef<Set<string>>(new Set());
+  const hydrateProviderRow = useCallback(
+    (parentAgentId: string, subagentId: string) => {
+      if (!client) return;
+      client
+        .fetchProviderSubagentTimeline(parentAgentId, subagentId, {
+          direction: "tail",
+          limit: TIMELINE_FETCH_PAGE_SIZE,
+        })
+        .then((payload) => {
+          useProviderSubagentStore.getState().replaceTimeline(serverId, payload);
+          setHydrationErrors((prev) => {
+            if (!prev[subagentId]) return prev;
+            const next = { ...prev };
+            delete next[subagentId];
+            return next;
+          });
+          return undefined;
+        })
+        .catch((error: unknown) => {
+          setHydrationErrors((prev) => ({
+            ...prev,
+            [subagentId]: error instanceof Error ? error.message : "Failed to load details",
+          }));
+        });
+    },
+    [client, serverId],
+  );
+
+  useEffect(() => {
+    if (!client || !isPanelActive || !isBodyVisible) return;
+    for (const row of displayedRows) {
+      if (row.kind === "provider") {
+        const key = providerSubagentKey(serverId, row.parentAgentId, row.id);
+        if (!fetchedProviderIdsRef.current.has(key)) {
+          fetchedProviderIdsRef.current.add(key);
+          hydrateProviderRow(row.parentAgentId, row.id);
+        }
+      }
+    }
+  }, [client, displayedRows, hydrateProviderRow, isBodyVisible, isPanelActive, serverId]);
+
+  // Single aggregated memoized summary Map at collection owner - uses both tail and head
+  const streamSummaries = useMemo<Record<string, SubagentStreamSummary>>(() => {
+    const map: Record<string, SubagentStreamSummary> = {};
+    for (const row of rows) {
+      let tail: readonly StreamItem[] = EMPTY_STREAM_ITEMS;
+      let head: readonly StreamItem[] = EMPTY_STREAM_ITEMS;
+      if (row.kind === "paseo") {
+        tail = agentStreamTail?.get(row.id) ?? EMPTY_STREAM_ITEMS;
+        head = agentStreamHead?.get(row.id) ?? EMPTY_STREAM_ITEMS;
+      } else {
+        const key = providerSubagentKey(serverId, row.parentAgentId, row.id);
+        const timeline = providerTimelines.get(key);
+        tail = timeline?.tail ?? EMPTY_STREAM_ITEMS;
+        head = timeline?.head ?? EMPTY_STREAM_ITEMS;
+      }
+
+      const items = tail.length > 0 || head.length > 0 ? [...tail, ...head] : undefined;
+
+      map[row.id] = {
+        activity: getLatestToolCallOrThought(items),
+        recentActions: getRecentActions(items, 3),
+        latestMessage: findLatestAssistantMessageText(items),
+      };
+    }
+    return map;
+  }, [agentStreamHead, agentStreamTail, providerTimelines, rows, serverId]);
+
+  const handleToggleExpand = useCallback(
+    (id: string) => setExpandedRowId((prev) => (prev === id ? null : id)),
+    [],
+  );
+
+  const handleToggleOverflow = useCallback(() => setIsOverflowExpanded((prev) => !prev), []);
+
+  const handleToggleCollapsed = useCallback(
+    () => setIsCollapsedOverride((prev) => !(prev ?? isCompact)),
+    [isCompact],
+  );
+
+  const handleRetryHydration = useCallback(
+    (row: SubagentRow) => {
+      if (row.kind === "provider") {
+        hydrateProviderRow(row.parentAgentId, row.id);
+      } else if (viewedTimelineSync) {
+        viewedTimelineSync.retryVisibleAgentTimeline(row.id);
+      }
+    },
+    [hydrateProviderRow, viewedTimelineSync],
+  );
+
+  if (visibleRows.length === 0) {
     return null;
   }
 
-  const pill = buildSubagentPillPresentation(t, rows);
-  const finishedCount = countFinishedSubagents(rows);
-  const showArchiveFinished = finishedCount > 0 || isArchivingFinished || isArchiveFinishedFailed;
-
+  const pill = buildSubagentPillPresentation(t, visibleRows);
   return (
-    <ComposerTrackPill
-      testID="subagents-track-header"
-      segments={pill.segments}
-      accessibilityLabel={pill.accessibilityLabel}
-      panelTitle={t("subagents.title")}
-    >
-      {showArchiveFinished && onArchiveFinished ? (
-        <ComposerTrackActions divided={rows.length > 0}>
-          <ArchiveFinishedRow
-            status={archiveFinishedStatus}
-            disabled={isArchivingFinished}
-            onPress={onArchiveFinished}
-          />
-        </ComposerTrackActions>
+    <View style={styles.card} testID="subagents-track-header-panel">
+      <SubagentsTrackHeader
+        title={t("subagents.title")}
+        summary={pill.accessibilityLabel}
+        collapsible={isCompact}
+        isCollapsed={isCollapsed}
+        onPress={handleToggleCollapsed}
+      />
+
+      {isBodyVisible ? (
+        <>
+          <ScrollView
+            style={styles.rowsScroll}
+            contentContainerStyle={styles.rowsContainer}
+            showsVerticalScrollIndicator
+            nestedScrollEnabled
+          >
+            {displayedRows.map((row) => (
+              <SubagentsTrackRow
+                key={row.id}
+                row={row}
+                serverId={serverId}
+                summary={streamSummaries[row.id]}
+                hydrationError={
+                  hydrationErrors[row.id] ??
+                  (row.kind === "paseo" && viewedTimelineSync
+                    ? (viewedTimelineSync.getAgentTimelineError(row.id) ?? undefined)
+                    : undefined)
+                }
+                onRetryHydration={handleRetryHydration}
+                isExpanded={expandedRowId === row.id}
+                onToggleExpand={handleToggleExpand}
+                onOpenSubagent={onOpenSubagent}
+                onOpenProviderSubagent={onOpenProviderSubagent}
+                onArchiveSubagent={onArchiveSubagent}
+                onDetachSubagent={onDetachSubagent}
+              />
+            ))}
+          </ScrollView>
+
+          {hasOverflow ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                isOverflowExpanded
+                  ? t("subagents.showLess")
+                  : t("subagents.showMore", { count: overflowCount })
+              }
+              testID="subagents-track-overflow-toggle"
+              onPress={handleToggleOverflow}
+              style={styles.overflowToggleRow}
+            >
+              <Text style={styles.overflowToggleText}>
+                {isOverflowExpanded
+                  ? t("subagents.showLess")
+                  : t("subagents.showMore", { count: overflowCount })}
+              </Text>
+            </Pressable>
+          ) : null}
+        </>
       ) : null}
-      {rows.map((row) => (
-        <SubagentsTrackRow
-          key={row.id}
-          row={row}
-          serverId={serverId}
-          onOpenSubagent={onOpenSubagent}
-          onOpenProviderSubagent={onOpenProviderSubagent}
-          onArchiveSubagent={onArchiveSubagent}
-          onDetachSubagent={onDetachSubagent}
-        />
-      ))}
-    </ComposerTrackPill>
+    </View>
   );
 }
 
 /**
- * Bulk archive, as a row above the list rather than an icon next to the count. The pill has no
- * header to hang an icon off, and a destructive-ish action reads better with its name attached.
+ * The card's title row, and on compact the pull tab itself: the only part of the track that
+ * stays on screen, so it has to read as something you pull rather than something you read.
+ * Wide screens render the same row with no affordance, because there the card is already open.
  */
-function ArchiveFinishedRow({
-  status,
-  disabled,
+function SubagentsTrackHeader({
+  title,
+  summary,
+  collapsible,
+  isCollapsed,
   onPress,
 }: {
-  status: ArchiveFinishedStatus;
-  disabled: boolean;
+  title: string;
+  summary: string;
+  collapsible: boolean;
+  isCollapsed: boolean;
   onPress: () => void;
 }): ReactElement {
-  const { t } = useTranslation();
-
-  const renderRow = useCallback(
-    ({ active }: { active: boolean }) => (
-      <>
-        <ThemedArchive
-          size={ROW_ICON_SIZE}
-          uniProps={active ? foregroundColorMapping : foregroundMutedColorMapping}
-        />
-        <Text style={styles.rowLabel} numberOfLines={1}>
-          {t("subagents.archiveFinishedAction")}
+  const accessibilityState = useMemo(() => ({ expanded: !isCollapsed }), [isCollapsed]);
+  // React Native Web does not map `accessibilityState.expanded` to `aria-expanded`, so the web
+  // attribute is set by hand — the same workaround the composer track pill uses.
+  const ariaExpandedProps = isWeb ? { "aria-expanded": !isCollapsed } : null;
+  const content = (
+    <>
+      <View style={styles.headerLeft}>
+        <Text style={styles.headerTitle}>{title}</Text>
+        <Text style={styles.headerMeta} numberOfLines={1}>
+          {summary}
         </Text>
-        {status.kind === "archiving" ? (
-          <Text style={styles.rowTrailing} testID="subagents-track-archive-progress">
-            {status.completedCount}/{status.totalCount}
-          </Text>
-        ) : null}
-        {status.kind === "failed" ? (
-          <Text style={styles.rowTrailing} testID="subagents-track-archive-failed">
-            {t("subagents.archiveFinishedRetry", {
-              failed: status.failedCount,
-              total: status.totalCount,
-            })}
-          </Text>
-        ) : null}
-      </>
-    ),
-    [status, t],
+      </View>
+      {collapsible ? <PullChevron isCollapsed={isCollapsed} /> : null}
+    </>
   );
 
+  if (!collapsible) {
+    return (
+      <View style={styles.header} testID="subagents-track-header">
+        {content}
+      </View>
+    );
+  }
+
   return (
-    <ComposerTrackRow
-      accessibilityLabel={t("subagents.archiveFinishedAction")}
-      testID="subagents-track-archive-finished"
-      disabled={disabled}
-      // Progress and the retry count land on this row, so the panel is where the result of
-      // pressing it shows up. Dismissing would hide the thing the press produces.
-      closeOnSelect={false}
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={accessibilityState}
+      {...ariaExpandedProps}
       onPress={onPress}
+      style={[styles.header, styles.headerPull, isCollapsed && styles.headerPullCollapsed]}
+      testID="subagents-track-header"
     >
-      {renderRow}
-    </ComposerTrackRow>
+      {content}
+    </Pressable>
+  );
+}
+
+/**
+ * Points the way the tab will move: up while the rows are hidden, down once they are showing.
+ */
+function PullChevron({ isCollapsed }: { isCollapsed: boolean }): ReactElement {
+  if (isCollapsed) {
+    return <ThemedChevronUp size={14} uniProps={foregroundMutedColorMapping} />;
+  }
+  return <ThemedChevronDown size={14} uniProps={foregroundMutedColorMapping} />;
+}
+
+function SubagentStatusIcon({
+  row,
+  serverId,
+}: {
+  row: SubagentRow;
+  serverId: string;
+}): ReactElement {
+  const ProviderIcon = getProviderIcon(row.provider, serverId);
+  const isRunning =
+    row.kind === "paseo"
+      ? row.turn.phase === "open" || row.status === "running"
+      : row.status === "running";
+  const isFailed = row.status === "error" || row.status === "failed";
+  const isAttention = row.requiresAttention;
+
+  return (
+    <View style={styles.statusIconWrapper}>
+      <ProviderIcon size={14} color={styles.iconMuted.color} />
+      {isRunning ? (
+        <View
+          style={styles.statusRingOverlay}
+          accessibilityRole="progressbar"
+          accessibilityLabel="Agent running"
+        >
+          <StatusRing />
+        </View>
+      ) : null}
+      {isFailed ? <View style={styles.dotFailed} /> : null}
+      {!isFailed && isAttention ? <View style={styles.dotAttention} /> : null}
+    </View>
   );
 }
 
 interface SubagentsTrackRowProps {
   serverId: string;
   row: SubagentRow;
+  summary?: SubagentStreamSummary;
+  hydrationError?: string;
+  onRetryHydration: (row: SubagentRow) => void;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
   onOpenSubagent: (id: string) => void;
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
   onArchiveSubagent: (id: string) => void;
   onDetachSubagent?: (id: string) => void;
 }
 
-function SubagentsTrackRow({
+const SubagentsTrackRow = memo(function SubagentsTrackRow({
   serverId,
   row,
+  summary,
+  hydrationError,
+  onRetryHydration,
+  isExpanded,
+  onToggleExpand,
   onOpenSubagent,
   onOpenProviderSubagent,
   onArchiveSubagent,
@@ -185,67 +460,221 @@ function SubagentsTrackRow({
 }: SubagentsTrackRowProps): ReactElement {
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
-  const presentation = useMemo(() => buildRowPresentation(row, serverId), [row, serverId]);
+  const presentation = useMemo(() => buildSubagentRowPresentationData(row), [row]);
   const displayLabel =
     presentation.titleState === "loading" ? t("common.states.loading") : presentation.label;
-  const handlePress = useCallback(() => {
+
+  const isRunning =
+    row.kind === "paseo"
+      ? row.turn.phase === "open" || row.status === "running"
+      : row.status === "running";
+
+  const startedAt = resolveSubagentStartedAt(row);
+  const activityText = resolveSubagentActivityText(summary, presentation.subtitle, isRunning, t);
+
+  const handlePressRow = useCallback(() => {
+    onToggleExpand(row.id);
+  }, [onToggleExpand, row.id]);
+
+  const handleOpen = useCallback(() => {
     if (row.kind === "provider") {
       onOpenProviderSubagent(row.parentAgentId, row.id);
     } else {
       onOpenSubagent(row.id);
     }
   }, [onOpenProviderSubagent, onOpenSubagent, row]);
-  const handleArchivePress = useCallback(() => {
+
+  const handleArchive = useCallback(() => {
     onArchiveSubagent(row.id);
   }, [onArchiveSubagent, row.id]);
-  const handleDetachPress = useCallback(() => {
+
+  const handleDetach = useCallback(() => {
     onDetachSubagent?.(row.id);
   }, [onDetachSubagent, row.id]);
-  const actionsAlwaysVisible = isNative || isCompact;
 
-  const renderRow = useCallback(
-    ({ active }: { active: boolean }) => (
-      <>
-        <WorkspaceTabIcon presentation={presentation} backdrop={active ? "surface2" : "surface1"} />
-        <Text style={styles.rowLabel} numberOfLines={1}>
-          {displayLabel}
-        </Text>
-        {presentation.subtitle ? (
-          <Text style={styles.rowTrailing} numberOfLines={1}>
-            {presentation.subtitle}
+  return (
+    <View style={styles.rowWrapper}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={displayLabel}
+        accessibilityState={isExpanded ? ACCESSIBILITY_EXPANDED : ACCESSIBILITY_COLLAPSED}
+        testID={`subagents-track-row-${row.id}`}
+        onPress={handlePressRow}
+        style={isExpanded ? styles.rowExpanded : styles.row}
+      >
+        <View style={styles.rowPrimary} testID={`subagents-track-row-primary-${row.id}`}>
+          <SubagentStatusIcon row={row} serverId={serverId} />
+          <Text style={styles.rowLabel} numberOfLines={1}>
+            {displayLabel}
+          </Text>
+
+          {!isCompact && activityText ? (
+            <Text style={styles.rowActivity} numberOfLines={1}>
+              {activityText}
+            </Text>
+          ) : null}
+
+          {isRunning ? <SubagentElapsed startedAt={startedAt} rowId={row.id} /> : null}
+
+          {row.kind === "paseo" ? (
+            <SubagentRowActions
+              rowId={row.id}
+              displayLabel={displayLabel}
+              visible={isExpanded}
+              onDetachPress={onDetachSubagent ? handleDetach : undefined}
+              onArchivePress={handleArchive}
+            />
+          ) : null}
+
+          <ThemedChevronDown
+            size={13}
+            uniProps={foregroundMutedColorMapping}
+            style={isExpanded ? styles.chevronOpen : styles.chevronClosed}
+          />
+        </View>
+
+        {isCompact && activityText ? (
+          <Text
+            style={styles.rowActivityCompact}
+            testID={`subagents-track-activity-${row.id}`}
+            numberOfLines={1}
+          >
+            {activityText}
           </Text>
         ) : null}
+      </Pressable>
+
+      {isExpanded ? (
+        <SubagentExpandedDetails
+          row={row}
+          summary={summary}
+          hydrationError={hydrationError}
+          onRetryHydration={onRetryHydration}
+          onOpen={handleOpen}
+          onArchive={handleArchive}
+          onDetach={onDetachSubagent ? handleDetach : undefined}
+        />
+      ) : null}
+    </View>
+  );
+});
+
+function SubagentElapsed({ startedAt, rowId }: { startedAt: Date; rowId: string }): ReactElement {
+  const isPanelActive = useRetainedPanelActive();
+  const startedAtMs = startedAt.getTime();
+  const [elapsedMs, setElapsedMs] = useState(() => Math.max(0, Date.now() - startedAtMs));
+
+  useEffect(() => {
+    if (!isPanelActive) return;
+    setElapsedMs(Math.max(0, Date.now() - startedAtMs));
+    const handle = setInterval(() => {
+      setElapsedMs(Math.max(0, Date.now() - startedAtMs));
+    }, 1000);
+    return () => clearInterval(handle);
+  }, [isPanelActive, startedAtMs]);
+
+  return (
+    <Text style={styles.rowElapsed} testID={`subagents-track-elapsed-${rowId}`}>
+      {formatDuration(elapsedMs)}
+    </Text>
+  );
+}
+
+function SubagentExpandedDetails({
+  row,
+  summary,
+  hydrationError,
+  onRetryHydration,
+  onOpen,
+  onArchive,
+  onDetach,
+}: {
+  row: SubagentRow;
+  summary?: SubagentStreamSummary;
+  hydrationError?: string;
+  onRetryHydration: (row: SubagentRow) => void;
+  onOpen: () => void;
+  onArchive: () => void;
+  onDetach?: () => void;
+}): ReactElement {
+  const { t } = useTranslation();
+  const recentActions = summary?.recentActions ?? [];
+  const latestMessage = summary?.latestMessage ?? null;
+
+  const handleRetry = useCallback(() => {
+    onRetryHydration(row);
+  }, [onRetryHydration, row]);
+
+  return (
+    <View style={styles.detailsContainer} testID={`subagents-track-details-${row.id}`}>
+      {hydrationError ? (
+        <View style={styles.errorSection}>
+          <Text style={styles.errorText}>{hydrationError}</Text>
+          <Button size="xs" variant="outline" onPress={handleRetry}>
+            {t("common.actions.retry")}
+          </Button>
+        </View>
+      ) : null}
+
+      {recentActions.length > 0 ? (
+        <View style={styles.detailsSection}>
+          <Text style={styles.detailsSectionTitle}>{t("subagents.recentActions")}</Text>
+          <View style={styles.detailsActionsList}>
+            {recentActions.map((action) => {
+              const isRunning = action.status === "running" || action.status === "executing";
+              const isFailed = action.status === "failed";
+              let dotStyle = styles.actionDotCompleted;
+              if (isRunning) {
+                dotStyle = styles.actionDotWorking;
+              } else if (isFailed) {
+                dotStyle = styles.actionDotFailed;
+              }
+              return (
+                <View key={action.id} style={styles.actionItemRow}>
+                  <View style={[styles.actionDot, dotStyle]} />
+                  <Text style={styles.actionItemTitle} numberOfLines={1}>
+                    {action.name}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+
+      {latestMessage ? (
+        <View style={styles.detailsSection}>
+          <Text style={styles.detailsSectionTitle}>{t("subagents.latestMessage")}</Text>
+          <View style={styles.latestMessageBox}>
+            <Text style={styles.latestMessageText} numberOfLines={3}>
+              {latestMessage}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      <View style={styles.actionBar}>
+        <Button
+          size="sm"
+          variant="secondary"
+          leftIcon={MessageSquare}
+          testID={`subagents-track-open-${row.id}`}
+          onPress={onOpen}
+        >
+          {t("subagents.openConversation")}
+        </Button>
+
         {row.kind === "paseo" ? (
           <SubagentRowActions
             rowId={row.id}
-            displayLabel={displayLabel}
-            visible={actionsAlwaysVisible || active}
-            onDetachPress={onDetachSubagent ? handleDetachPress : undefined}
-            onArchivePress={handleArchivePress}
+            displayLabel={row.title ?? ""}
+            visible
+            onDetachPress={onDetach}
+            onArchivePress={onArchive}
           />
         ) : null}
-      </>
-    ),
-    [
-      actionsAlwaysVisible,
-      displayLabel,
-      handleArchivePress,
-      handleDetachPress,
-      onDetachSubagent,
-      presentation,
-      row.kind,
-      row.id,
-    ],
-  );
-
-  return (
-    <ComposerTrackRow
-      accessibilityLabel={displayLabel}
-      testID={`subagents-track-row-${row.id}`}
-      onPress={handlePress}
-    >
-      {renderRow}
-    </ComposerTrackRow>
+      </View>
+    </View>
   );
 }
 
@@ -337,24 +766,147 @@ function SubagentActionButton({
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // `flexBasis: "auto"` rather than `flex: 1`: a zero-basis label contributes nothing to the row's
-  // intrinsic width, so the panel measures itself at its floor and truncates every label at once.
-  rowLabel: {
-    flexGrow: 1,
+  card: {
+    width: "100%",
+    maxWidth: MAX_CONTENT_WIDTH,
+    backgroundColor: theme.colors.surface1,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    overflow: "hidden",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1.5],
+    backgroundColor: theme.colors.surface0,
+    borderBottomWidth: theme.borderWidth[1],
+    borderBottomColor: theme.colors.border,
+  },
+  // On compact the header is the entire visible track and doubles as the pull handle, so it
+  // carries a full touch target instead of a desktop title row's height, and its divider goes
+  // away while it is the last thing in the card.
+  headerPull: {
+    minHeight: 44,
+    paddingVertical: theme.spacing[2],
+  },
+  headerPullCollapsed: {
+    borderBottomWidth: 0,
+  },
+  headerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
     flexShrink: 1,
-    flexBasis: "auto",
     minWidth: 0,
-    fontSize: theme.fontSize.base,
+  },
+  headerTitle: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: "600",
     color: theme.colors.foreground,
   },
-  // Trailing metadata — provider context on a subagent row, progress on the archive row. No width
-  // cap: the panel's own ceiling bounds it. It shrinks twice as fast as the label, so a wordy
-  // provider subtitle gives way first instead of squeezing the thing that names the row.
-  rowTrailing: {
+  headerMeta: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  rowsScroll: {
+    maxHeight: 240,
+  },
+  rowsContainer: {
+    width: "100%",
+  },
+  rowWrapper: {
+    borderBottomWidth: theme.borderWidth[1],
+    borderBottomColor: theme.colors.border,
+  },
+  row: {
+    justifyContent: "center",
+    gap: theme.spacing[1],
+    minHeight: 34,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1.5],
+  },
+  rowExpanded: {
+    justifyContent: "center",
+    gap: theme.spacing[1],
+    minHeight: 34,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1.5],
+    backgroundColor: theme.colors.surface2,
+  },
+  // The parts of a row that share one line: status mark, task, live activity, elapsed, actions.
+  rowPrimary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  statusIconWrapper: {
+    width: 14,
+    height: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  statusRingOverlay: {
+    position: "absolute",
+  },
+  dotFailed: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: theme.colors.statusDanger,
+  },
+  dotAttention: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: theme.colors.statusWarning,
+  },
+  iconMuted: {
+    color: theme.colors.foregroundMuted,
+  },
+  rowLabel: {
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: theme.fontSize.sm,
+    fontWeight: "500",
+    color: theme.colors.foreground,
+  },
+  rowActivity: {
+    flexGrow: 1,
     flexShrink: 2,
     minWidth: 0,
     fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
+  },
+  // On a phone the activity does not fit beside the task, and the two of them fight for the same
+  // width until both are unreadable. Give it the row's second line instead, indented to the task.
+  rowActivityCompact: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+    marginLeft: 14 + theme.spacing[2],
+  },
+  rowElapsed: {
+    flexShrink: 0,
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foregroundMuted,
+    fontVariant: ["tabular-nums"],
+  },
+  chevronClosed: {
+    transform: [{ rotate: "0deg" }],
+  },
+  chevronOpen: {
+    transform: [{ rotate: "180deg" }],
   },
   actionClusterVisible: {
     flexDirection: "row",
@@ -376,5 +928,89 @@ const styles = StyleSheet.create((theme) => ({
   tooltipText: {
     fontSize: theme.fontSize.sm,
     color: theme.colors.foreground,
+  },
+  detailsContainer: {
+    backgroundColor: theme.colors.surface0,
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[2],
+    gap: theme.spacing[2],
+  },
+  errorSection: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: theme.colors.surface1,
+    padding: theme.spacing[1.5],
+    borderRadius: theme.borderRadius.sm,
+  },
+  errorText: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.statusDanger,
+    flexShrink: 1,
+  },
+  detailsSection: {
+    gap: theme.spacing[1],
+  },
+  detailsSectionTitle: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: "600",
+    color: theme.colors.foregroundMuted,
+    textTransform: "uppercase",
+  },
+  detailsActionsList: {
+    gap: theme.spacing[1],
+  },
+  actionItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1.5],
+  },
+  actionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  actionDotWorking: {
+    backgroundColor: theme.colors.statusWarning,
+  },
+  actionDotFailed: {
+    backgroundColor: theme.colors.statusDanger,
+  },
+  actionDotCompleted: {
+    backgroundColor: theme.colors.statusSuccess,
+  },
+  actionItemTitle: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    flexShrink: 1,
+  },
+  latestMessageBox: {
+    backgroundColor: theme.colors.surface1,
+    borderRadius: theme.borderRadius.sm,
+    padding: theme.spacing[2],
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+  },
+  latestMessageText: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.foreground,
+    lineHeight: 18,
+  },
+  actionBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: theme.spacing[1],
+  },
+  overflowToggleRow: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: theme.spacing[1.5],
+    backgroundColor: theme.colors.surface0,
+  },
+  overflowToggleText: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: "500",
+    color: theme.colors.foregroundMuted,
   },
 }));

@@ -17,7 +17,11 @@ import {
 import type { WorkspaceGitService } from "../../workspace-git-service.js";
 import type { CreatePaseoWorktreeWorkflowResult } from "../../worktree-session.js";
 import { deriveProjectKey } from "../../project-key.js";
-import { areEquivalentPaths, createRealpathAwarePathMatcher } from "../../../utils/path.js";
+import {
+  areEquivalentPaths,
+  createRealpathAwarePathMatcher,
+  getRealpathAwareRelativePath,
+} from "../../../utils/path.js";
 import type { UntrustedWorkspaceSource } from "../../workspace-automation-gate.js";
 
 export interface ResolveOrCreateWorkspaceIdInput {
@@ -48,6 +52,32 @@ export interface CreateWorktreeWorkspaceInput {
   title: string | null;
   expectsInitialAgent?: boolean;
   untrustedSource?: UntrustedWorkspaceSource;
+}
+
+/**
+ * Resolve which project root a directory selection should allocate.
+ *
+ * A Paseo-owned worktree (`~/.paseo/worktrees/<hash>/<slug>`) is a checkout of its main
+ * repository, so selecting the worktree directory must land on the main checkout's project
+ * at the same relative path. Otherwise the open/add path mints a second project rooted at
+ * the worktree itself while worktree creation attaches to the main-repository project (see
+ * `resolveSourceProjectForWorktree`), producing duplicate projects and workspaces for a
+ * single repository. Plain git worktrees keep their own exact-root project.
+ */
+export function resolvePaseoWorktreeAllocationRoot(
+  rootPath: string,
+  checkout: {
+    isPaseoOwnedWorktree?: boolean;
+    worktreeRoot?: string | null;
+    mainRepoRoot?: string | null;
+  },
+): string {
+  if (!checkout.isPaseoOwnedWorktree || !checkout.worktreeRoot || !checkout.mainRepoRoot) {
+    return rootPath;
+  }
+  const relative = getRealpathAwareRelativePath(checkout.worktreeRoot, rootPath);
+  if (relative === null) return rootPath;
+  return resolve(checkout.mainRepoRoot, relative);
 }
 
 export interface WorkspaceProvisioningService {
@@ -165,7 +195,11 @@ export function createWorkspaceProvisioningService(deps: {
       }
     } catch (error) {
       logger.error(
-        { err: error, workspaceId: workspace.workspaceId, projectId: workspace.projectId },
+        {
+          err: error,
+          workspaceId: workspace.workspaceId,
+          projectId: workspace.projectId,
+        },
         "Failed to restore workspace state after provider import failure",
       );
     }
@@ -175,10 +209,11 @@ export function createWorkspaceProvisioningService(deps: {
     const rootPath = resolve(cwd);
     const checkout = await workspaceGitService.getCheckout(rootPath);
     const timestamp = new Date().toISOString();
+    const allocationRoot = resolvePaseoWorktreeAllocationRoot(rootPath, checkout);
     return projectRegistry.getOrCreateActiveByRoot({
-      rootPath,
+      rootPath: allocationRoot,
       kind: checkout.isGit ? "git" : "non_git",
-      displayName: basename(rootPath) || rootPath,
+      displayName: basename(allocationRoot) || allocationRoot,
       projectKey: deriveProjectKey({
         rootPath,
         remoteUrl: checkout.remoteUrl,
@@ -213,13 +248,19 @@ export function createWorkspaceProvisioningService(deps: {
     const workspace = createPersistedWorkspaceRecord({
       workspaceId: generateWorkspaceId(),
       projectId: project.projectId,
-      ...initialWorkspacePlacement({ source: "checkout", cwd: normalizedCwd, checkout }),
+      ...initialWorkspacePlacement({
+        source: "checkout",
+        cwd: normalizedCwd,
+        checkout,
+      }),
       title: title?.trim() || null,
       createdAt: timestamp,
       updatedAt: timestamp,
     });
     await workspaceRegistry.upsert(workspace, context);
-    deps.lifecycle?.emit("workspace.created", { workspace: describeHookWorkspace(workspace) });
+    deps.lifecycle?.emit("workspace.created", {
+      workspace: describeHookWorkspace(workspace),
+    });
     return workspace;
   }
 
@@ -236,8 +277,20 @@ export function createWorkspaceProvisioningService(deps: {
       repoRoot,
     });
     const timestamp = new Date().toISOString();
+    // `git worktree add` publishes the worktree directory before this record is written, so a
+    // directory open can register a workspace at the same cwd in that window. Adopt that
+    // record and upsert the authoritative `created_worktree` placement onto it (including the
+    // resolved project) rather than inserting a second row for one directory.
+    const existingWorkspace =
+      (await workspaceRegistry.list())
+        .filter((workspace) => !workspace.archivedAt && areEquivalentPaths(workspace.cwd, cwd))
+        .sort(
+          (left, right) =>
+            Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+            left.workspaceId.localeCompare(right.workspaceId),
+        )[0] ?? null;
     const workspace = createPersistedWorkspaceRecord({
-      workspaceId: generateWorkspaceId(),
+      workspaceId: existingWorkspace?.workspaceId ?? generateWorkspaceId(),
       projectId: project.projectId,
       ...initialWorkspacePlacement({
         source: "created_worktree",
@@ -248,14 +301,16 @@ export function createWorkspaceProvisioningService(deps: {
         mainRepoRoot: repoRoot,
       }),
       title: input.title,
-      createdAt: timestamp,
+      createdAt: existingWorkspace?.createdAt ?? timestamp,
       updatedAt: timestamp,
       ...(input.untrustedSource ? { untrustedSource: input.untrustedSource } : {}),
     });
     await workspaceRegistry.upsert(workspace, {
       expectsInitialAgent: input.expectsInitialAgent,
     });
-    deps.lifecycle?.emit("workspace.created", { workspace: describeHookWorkspace(workspace) });
+    deps.lifecycle?.emit("workspace.created", {
+      workspace: describeHookWorkspace(workspace),
+    });
     return workspace;
   }
 

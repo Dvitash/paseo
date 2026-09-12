@@ -137,6 +137,9 @@ jobs:
       - name: Install dependencies
         run: node scripts/npm-retry.mjs ci
 
+      - name: Run targeted script tests
+        run: node --test scripts/personal-artifacts.test.mjs
+
       - name: Build desktop application
         shell: bash
         env:
@@ -170,38 +173,11 @@ jobs:
 
       - name: Stage installable desktop archives
         shell: bash
+        env:
+          DESKTOP_TARGET: ${{ inputs.desktop }}
         run: |
-          set -euo pipefail
-          dest="personal-artifacts/desktop"
-          mkdir -p "$dest"
-          release_dir="packages/desktop/release"
-
-          if [[ ! -d "$release_dir" ]]; then
-            echo "::error::Desktop release directory not found at $release_dir"
-            exit 1
-          fi
-
-          found=0
-          for item in "$release_dir"/*; do
-            if [[ -f "$item" ]]; then
-              case "$item" in
-                *.dmg|*.zip|*.AppImage|*.deb|*.rpm|*.tar.gz|*.exe)
-                  echo "Staging archive: $(basename "$item")"
-                  cp "$item" "$dest/"
-                  found=$((found + 1))
-                  ;;
-                *)
-                  echo "Skipping non-archive file: $(basename "$item")"
-                  ;;
-              esac
-            fi
-          done
-
-          if [[ "$found" -eq 0 ]]; then
-            echo "::error::No installable archives found in $release_dir"
-            exit 1
-          fi
-
+          rm -rf personal-artifacts/desktop
+          node scripts/personal-artifacts.mjs stage-desktop --target "$DESKTOP_TARGET" --release-dir packages/desktop/release --output-dir personal-artifacts/desktop
       - name: Upload desktop archives
         uses: actions/upload-artifact@v4
         with:

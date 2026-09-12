@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { X, ArrowUp, RefreshCcw, Check, Mic, Pencil } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { VolumeMeter } from "./volume-meter";
+import { DictationWaveform } from "./dictation-waveform";
 import { FOOTER_HEIGHT } from "@/constants/layout";
 import type { DictationStatus } from "@/hooks/use-dictation";
 
@@ -201,13 +202,7 @@ export function DictationOverlay({
 
       <View style={overlayStyles.centerContainer}>
         <View style={overlayStyles.meterRow}>
-          <VolumeMeter
-            volume={volume}
-            isMuted={false}
-            isSpeaking={false}
-            orientation="horizontal"
-            color={theme.colors.accentForeground}
-          />
+          <DictationWaveform volume={volume} color={theme.colors.accentForeground} />
           <Text style={overlayTimerTextStyle}>{formatDuration(duration)}</Text>
         </View>
         {isFailed ? (

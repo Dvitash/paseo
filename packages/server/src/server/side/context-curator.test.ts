@@ -89,12 +89,14 @@ describe("Side context-curator", () => {
       kind: string;
       reset: boolean;
       truncated: boolean;
+      mainAgentId: string;
       originalRequest?: string;
       activity: string;
     };
     expect(parsedContext.kind).toBe("main-session-context");
     expect(parsedContext.reset).toBe(false);
     expect(parsedContext.truncated).toBe(false);
+    expect(parsedContext.mainAgentId).toBe("main-agent-1");
     expect(parsedContext.originalRequest).toBe("Please inspect src/index.ts");
     expect(parsedContext.activity).toContain("Please inspect src/index.ts");
     expect(parsedContext.activity).toContain("I have inspected the file.");
@@ -144,7 +146,9 @@ describe("Side context-curator", () => {
     expect(secondTurnOptions).toEqual({ direction: "tail", limit: 60 });
     expect(second.isDelta).toBe(true);
     expect(second.itemCount).toBe(0);
-    expect(second.prompt).toBe("Side user request:\n\nAre there any errors?");
+    expect(second.prompt).toContain('"mainAgentId":"main-agent-1"');
+    expect(second.prompt).toContain("Are there any errors?");
+    expect(second.prompt).not.toContain("Initial request");
     expect(second.checkpoint.epoch).toBe("epoch-1");
     expect(second.checkpoint.seq).toBe(2);
     expect(second.checkpoint.recentRows).toEqual(initial.checkpoint.recentRows);

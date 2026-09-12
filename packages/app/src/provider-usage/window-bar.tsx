@@ -6,8 +6,22 @@ import { deriveTone } from "./tone";
 import type { ProviderUsageTone, ProviderUsageWindow } from "./types";
 
 function resolveUsedPct(window: ProviderUsageWindow): number | null {
-  if (window.usedPct != null) return window.usedPct;
-  if (window.remainingPct != null) return 100 - window.remainingPct;
+  if (typeof window.usedPct === "number" && Number.isFinite(window.usedPct)) {
+    return window.usedPct;
+  }
+  if (typeof window.remainingPct === "number" && Number.isFinite(window.remainingPct)) {
+    return 100 - window.remainingPct;
+  }
+  return null;
+}
+
+function resolveRemainingPct(window: ProviderUsageWindow): number | null {
+  if (typeof window.remainingPct === "number" && Number.isFinite(window.remainingPct)) {
+    return window.remainingPct;
+  }
+  if (typeof window.usedPct === "number" && Number.isFinite(window.usedPct)) {
+    return 100 - window.usedPct;
+  }
   return null;
 }
 
@@ -26,9 +40,10 @@ function fillToneStyle(tone: ProviderUsageTone) {
 
 export function ProviderUsageWindowBar({ window }: { window: ProviderUsageWindow }) {
   const usedPct = resolveUsedPct(window);
+  const remainingPct = resolveRemainingPct(window);
   const tone = window.tone ?? deriveTone(usedPct);
 
-  const fillWidth = clampPct(usedPct ?? 0);
+  const fillWidth = clampPct(remainingPct ?? 0);
   const fillStyle = useMemo<StyleProp<ViewStyle>>(
     () => [styles.fill, fillToneStyle(tone), { width: `${fillWidth}%` }],
     [fillWidth, tone],
@@ -46,7 +61,7 @@ export function ProviderUsageWindowBar({ window }: { window: ProviderUsageWindow
           {window.label}
         </Text>
         <Text style={styles.value}>
-          {usedPct != null ? formatPct(usedPct) : "—"}
+          {remainingPct != null ? `${formatPct(remainingPct)} remaining` : "—"}
           {trailing ? (
             <Text style={isAtRisk ? styles.atRisk : styles.reset}>{` · ${trailing}`}</Text>
           ) : null}

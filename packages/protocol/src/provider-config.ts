@@ -31,6 +31,8 @@ export const ProviderRuntimeSettingsSchema = z.object({
 export const ProviderPaseoToolsPolicySchema = z.object({
   enabled: z.boolean().optional(),
   disabledTools: z.array(z.string()).optional(),
+  /** When present, only these tools are offered. Takes precedence over disabledTools. */
+  enabledTools: z.array(z.string()).optional(),
 });
 
 const ProviderProfileThinkingOptionSchema = z.object({

@@ -5,6 +5,7 @@ import type pino from "pino";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
 import { Session, type SessionOptions } from "./session.js";
+import { HostPerformanceSampler } from "./host-performance/sampler.js";
 import { OWNER_PERMISSIONS } from "./authorization/index.js";
 import { asInternals, createStub } from "./test-utils/class-mocks.js";
 import { createProviderSnapshotManagerStub } from "./test-utils/session-stubs.js";
@@ -271,6 +272,7 @@ function createSessionForWorkspaceGitWatchTests(options?: {
     scriptRuntimeStore: options?.scriptRuntimeStore,
     onBranchChanged: options?.onBranchChanged,
     getDaemonTcpPort: () => 6767,
+    hostPerformanceSampler: new HostPerformanceSampler(),
   });
 
   asInternals<SessionInternals>(session).listAgentPayloads = async () => [];

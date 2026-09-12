@@ -4,9 +4,11 @@ export const DESKTOP_IDLE_POLL_INTERVAL_MS = 5_000;
 
 export interface HeartbeatPayload {
   deviceType: "web" | "mobile";
+  deviceClass?: "mobile" | "desktop";
   focusedAgentId: string | null;
   focusedTerminalId: string | null;
   lastActivityAt: string;
+  lastAppActivityAt: string;
   appVisible: boolean;
   appVisibilityChangedAt?: string;
 }
@@ -19,11 +21,11 @@ export interface HeartbeatClient {
 export interface ClientActivityTrackerInput {
   client: HeartbeatClient;
   deviceType: "web" | "mobile";
+  deviceClass?: "mobile" | "desktop";
   initialFocusedAgentId: string | null;
   initialFocusedTerminalId: string | null;
   initialAppVisible: boolean;
   now: () => number;
-  onAppResumed?: (awayMs: number) => void;
 }
 
 export interface ClientActivityTracker {
@@ -39,11 +41,13 @@ export interface ClientActivityTracker {
 export function createClientActivityTracker(
   input: ClientActivityTrackerInput,
 ): ClientActivityTracker {
-  const { client, deviceType, now, onAppResumed } = input;
+  const { client, deviceType, deviceClass, now } = input;
   let lastActivityAtMs = now();
+  // App-interaction clock: only real input inside the app window advances it.
+  // OS-idle presence (Electron) must not suppress mobile push.
+  let lastAppActivityAtMs = lastActivityAtMs;
   let appVisible = input.initialAppVisible;
   let appVisibilityChangedAtMs = now();
-  let backgroundedAtMs: number | null = appVisible ? null : now();
   let focusedAgentId = input.initialFocusedAgentId;
   let focusedTerminalId = input.initialFocusedTerminalId;
   let lastImmediateHeartbeatAtMs = 0;
@@ -52,9 +56,11 @@ export function createClientActivityTracker(
     if (!client.isConnected) return;
     client.sendHeartbeat({
       deviceType,
+      deviceClass,
       focusedAgentId,
       focusedTerminalId,
       lastActivityAt: new Date(lastActivityAtMs).toISOString(),
+      lastAppActivityAt: new Date(lastAppActivityAtMs).toISOString(),
       appVisible,
       appVisibilityChangedAt: new Date(appVisibilityChangedAtMs).toISOString(),
     });
@@ -62,6 +68,7 @@ export function createClientActivityTracker(
 
   function recordUserActivity(): void {
     lastActivityAtMs = now();
+    lastAppActivityAtMs = lastActivityAtMs;
   }
 
   function maybeSendImmediateHeartbeat(): void {
@@ -92,13 +99,7 @@ export function createClientActivityTracker(
       appVisible = nextVisible;
       appVisibilityChangedAtMs = now();
       if (!nextVisible) {
-        backgroundedAtMs = now();
         return { changed: true };
-      }
-      const at = backgroundedAtMs;
-      backgroundedAtMs = null;
-      if (at !== null) {
-        onAppResumed?.(Math.max(0, now() - at));
       }
       recordUserActivity();
       return { changed: true };
