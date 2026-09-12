@@ -16,7 +16,6 @@ import { Composer } from "@/composer";
 import { KeyboardTranslateView } from "@/components/keyboard-translate-view";
 import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import {
-  buildComposerWirePayload,
   resolveComposerAttachmentSubmitFormat,
   splitComposerAttachmentsForSubmit,
 } from "@/composer/attachments/submit";
@@ -1079,9 +1078,7 @@ function submitWorkspaceDraft(input: SubmitDraftInput): void {
   const draftId = draftIdInput?.trim() || generateDraftId();
   const clientMessageId = generateMessageId();
   const timestamp = Date.now();
-  const wirePayload = buildComposerWirePayload({
-    text: text.trim(),
-    attachments,
+  const wirePayload = splitComposerAttachmentsForSubmit(attachments, {
     format: resolveComposerAttachmentSubmitFormat({
       supportsForgeAttachments: input.supportsForgeSearch,
     }),
@@ -1099,7 +1096,7 @@ function submitWorkspaceDraft(input: SubmitDraftInput): void {
     workspaceId,
     agentId: null,
     clientMessageId,
-    text: wirePayload.text,
+    text: text.trim(),
     timestamp,
     ...(wirePayload.images.length > 0 ? { images: wirePayload.images } : {}),
     ...(wirePayload.attachments.length > 0 ? { attachments: wirePayload.attachments } : {}),

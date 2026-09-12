@@ -89,9 +89,6 @@ export const EditingTextInput = forwardRef<EditingTextInputHandle, EditingTextIn
         });
         if (selection) inputRef.current?.setSelection?.(selection.start, selection.end);
       },
-      setSelection: (start, end) => {
-        inputRef.current?.setSelection?.(start, end);
-      },
       reset: () => {
         textRef.current = "";
         const autoFocus = inputRef.current?.isFocused?.() ?? false;

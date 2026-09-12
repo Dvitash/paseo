@@ -30,9 +30,11 @@ import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { useSessionStore } from "@/stores/session-store";
 import { useVoiceOptional } from "@/contexts/voice-context";
 import { useToast } from "@/contexts/toast-context";
-import { persistAttachmentFromBlob } from "@/attachments/service";
 import { resolveVoiceUnavailableMessage } from "@/utils/server-info-capabilities";
-import { collectImageFilesFromClipboardData } from "@/utils/image-attachments-from-files";
+import {
+  collectImageFilesFromClipboardData,
+  filesToImageAttachments,
+} from "@/utils/image-attachments-from-files";
 import type { ComposerAttachment } from "@/attachments/types";
 import type { ImageAttachment, MessagePayload, TextReplacement } from "@/composer/types";
 import { focusWithRetries } from "@/utils/web-focus";
@@ -81,20 +83,6 @@ import {
   runMessageInputKeyboardAction,
   stopRealtimeVoice,
 } from "./state";
-import {
-  createInlineImageTextStore,
-  discardProvisionalInlineImageToken,
-  expandInlineImageDeletion,
-  findInlineImageTokens,
-  insertInlineImageTokensIntoText,
-  isProvisionalInlineImageCode,
-  resolveInlineImageTextEdit,
-  resolveInlineImageToken,
-  resolveProvisionalInlineImageToken,
-  snapInlineImageCaret,
-  stripInlineImageTokens,
-} from "@/composer/inline-images";
-import { InlineImageOverlay } from "./inline-image-overlay";
 
 const DEFAULT_SEND_KEYS: ShortcutKey[][] = [["Enter"]];
 const COMPOSER_INPUT_DATASET = { composerInput: "" } as const;
@@ -138,17 +126,9 @@ export interface MessageInputProps {
   attachments: ComposerAttachment[];
   cwd: string;
   attachmentMenuItems: AttachmentMenuItem[];
-  /** Removes attachments whose inline tokens were deleted/damaged (batched). */
-  onRemoveAttachments?: (attachments: ComposerAttachment[]) => void;
-  /** Reports the number of in-flight pasted images (provisional tokens). */
-  onPendingInlineImagesChange?: (count: number) => void;
-  /** Contextual content rendered below the text input (native token actions). */
-  inlineAttachmentSlot?: React.ReactNode;
   onAttachButtonRef?: (node: View | null) => void;
   onAddImages?: (images: ImageAttachment[]) => void;
   onPasteImages?: (files: readonly NativePastedFile[]) => void;
-  /** Opens an attachment (image lightbox) from an inline pill. */
-  onOpenAttachment?: (attachment: ComposerAttachment) => void;
   client: DaemonClient | null;
   /** Dictation start gate from host runtime (socket connected + directory ready). */
   isReadyForDictation?: boolean;
@@ -172,8 +152,8 @@ export interface MessageInputProps {
    *  running. "interrupt" and "steer" send immediately, "queue" queues. Required so the default
    *  lives only in DEFAULT_CLIENT_SETTINGS. */
   defaultSendBehavior: "interrupt" | "steer" | "queue";
-  /** Callback for queue button when agent is running. Return false to reject (keeps the draft). */
-  onQueue?: (payload: MessagePayload) => boolean | void;
+  /** Callback for queue button when agent is running */
+  onQueue?: (payload: MessagePayload) => void;
   /** Optional handler used when submit button is in loading state. */
   onSubmitLoadingPress?: () => void;
   /** Intercept key press events before default handling. Return true to prevent default. */
@@ -197,25 +177,9 @@ export interface MessageInputProps {
 }
 
 export interface MessageInputRef {
-  /** Sets the native selection (native only; web uses the DOM directly). */
-  setSelection?: (selection: { start: number; end: number }) => void;
-  /**
-   * Inserts `[image:…]` tokens at the caret. Items with `metadata` resolve
-   * immediately (picker/menu paste); items without get provisional tokens to
-   * settle via `settleInlineImageToken`. Returns codes in item order.
-   */
-  insertInlineImageTokens?: (
-    items: readonly { fileName?: string | null; metadata?: ImageAttachment | null }[],
-  ) => string[];
-  /**
-   * Resolves a provisional token to the persisted attachment, or discards it
-   * when `metadata` is null. Returns false when the token is already gone
-   * (user deleted it mid-paste) — the caller should drop that image.
-   */
-  settleInlineImageToken?: (code: string, metadata: ImageAttachment | null) => boolean;
-  getText: () => string;
   focus: () => void;
   blur: () => void;
+  getText: () => string;
   getInputSnapshot: () => ComposerInputSnapshot;
   replaceText: (text: string, selection?: { start: number; end: number }) => void;
   runKeyboardAction: (action: MessageInputKeyboardActionKind) => boolean;
@@ -249,7 +213,6 @@ interface TextAreaHandle {
   scrollTop?: number;
   selectionStart?: number | null;
   selectionEnd?: number | null;
-  setSelectionRange?: (start: number, end: number) => void;
   style?: {
     height?: string;
     overflowY?: string;
@@ -423,38 +386,12 @@ interface DesktopKeyPressContext {
   input: ComposerKeyPressEvent["input"];
   submitOnEnter: boolean;
   isAgentRunning: boolean;
-  onQueue: ((payload: MessagePayload) => boolean | void) | undefined;
+  onQueue: ((payload: MessagePayload) => void) | undefined;
   isSubmitDisabled: boolean;
-  /** Deletes a text range (used to swallow inline image tokens atomically). */
-  deleteRange: (start: number, end: number) => void;
-  /** Reports token codes removed by an edit so their attachments can go. */
-  onInlineTokensRemoved: (codes: string[]) => void;
   isSubmitLoading: boolean;
   disabled: boolean;
   handleAlternateSendAction: () => void;
   handleDefaultSendAction: () => void;
-}
-
-function handleInlineImageTokenDeletion(
-  event: WebTextInputKeyPressEvent,
-  ctx: DesktopKeyPressContext,
-): boolean {
-  const key = event.nativeEvent.key;
-  if (key !== "Backspace" && key !== "Delete") return false;
-  const deletion = expandInlineImageDeletion({
-    text: ctx.input.text,
-    start: ctx.input.selection.start,
-    end: ctx.input.selection.end,
-    direction: key === "Backspace" ? "backward" : "forward",
-  });
-  if (!deletion) return false;
-  event.preventDefault();
-  const removedCodes = findInlineImageTokens(ctx.input.text)
-    .filter((token) => token.start >= deletion.start && token.end <= deletion.end)
-    .map((token) => token.code);
-  ctx.deleteRange(deletion.start, deletion.end);
-  if (removedCodes.length > 0) ctx.onInlineTokensRemoved(removedCodes);
-  return true;
 }
 
 function handleDesktopKeyPressImpl(
@@ -473,8 +410,6 @@ function handleDesktopKeyPressImpl(
   }
 
   const { shiftKey, metaKey, ctrlKey } = event.nativeEvent;
-
-  if (handleInlineImageTokenDeletion(event, ctx)) return;
 
   if (event.nativeEvent.key !== "Enter") return;
   if (!ctx.submitOnEnter) return;
@@ -505,23 +440,20 @@ interface PasteImagesEffectArgs {
   isDictating: boolean;
   isRealtimeVoiceForCurrentAgent: boolean;
   onAddImages: ((images: ImageAttachment[]) => void) | undefined;
-  /** Inserts provisional tokens at the caret; returns codes in file order. */
-  insertTokens: (
-    items: readonly { fileName?: string | null; metadata?: ImageAttachment | null }[],
-  ) => string[];
-  /** Settles one provisional token; false means the token was deleted mid-paste. */
-  settleToken: (code: string, metadata: ImageAttachment | null) => boolean;
 }
 
 function usePasteImagesEffect(args: PasteImagesEffectArgs): void {
-  const { getWebTextArea } = args;
-  // Callbacks and gates live in a ref: re-renders must not tear down the
-  // listener or orphan an in-flight paste's settle.
-  const argsRef = useRef(args);
-  argsRef.current = args;
+  const {
+    getWebTextArea,
+    isConnected,
+    disabled,
+    isDictating,
+    isRealtimeVoiceForCurrentAgent,
+    onAddImages,
+  } = args;
 
   useEffect(() => {
-    if (!isWeb) return;
+    if (!isWeb || !onAddImages) return;
 
     const textarea = getWebTextArea() as
       | (TextAreaHandle & {
@@ -539,16 +471,6 @@ function usePasteImagesEffect(args: PasteImagesEffectArgs): void {
 
     let disposed = false;
     const handlePaste = (event: ClipboardEvent) => {
-      const {
-        isConnected,
-        disabled,
-        isDictating,
-        isRealtimeVoiceForCurrentAgent,
-        onAddImages,
-        insertTokens,
-        settleToken,
-      } = argsRef.current;
-      if (!onAddImages) return;
       if (!isConnected || disabled || isDictating || isRealtimeVoiceForCurrentAgent) return;
 
       const imageFiles = collectImageFilesFromClipboardData(event.clipboardData);
@@ -556,36 +478,11 @@ function usePasteImagesEffect(args: PasteImagesEffectArgs): void {
 
       event.preventDefault();
 
-      // Insert provisional tokens synchronously so the caret position is
-      // captured at paste time and concurrent pastes keep their order.
-      const codes = insertTokens(imageFiles.map(({ file }) => ({ fileName: file.name })));
-
-      void Promise.all(
-        imageFiles.map(async ({ file, mimeType }) => {
-          try {
-            return await persistAttachmentFromBlob({
-              blob: file,
-              mimeType,
-              fileName: file.name,
-            });
-          } catch (error) {
-            console.error("[MessageInput] Failed to persist pasted image:", error);
-            return null;
-          }
-        }),
-      )
-        .then((persisted) => {
-          if (disposed) return undefined;
-          const resolved: ImageAttachment[] = [];
-          persisted.forEach((metadata, index) => {
-            // A false settle means the user deleted the provisional token
-            // mid-paste: drop the image instead of attaching it.
-            if (settleToken(codes[index], metadata)) {
-              if (metadata) resolved.push(metadata);
-            }
-          });
-          if (resolved.length > 0) onAddImages(resolved);
-          return undefined;
+      void filesToImageAttachments(imageFiles)
+        .then((pastedAttachments) => {
+          if (disposed || pastedAttachments.length === 0) return;
+          onAddImages(pastedAttachments);
+          return;
         })
         .catch((error) => {
           console.error("[MessageInput] Failed to process pasted images:", error);
@@ -597,8 +494,16 @@ function usePasteImagesEffect(args: PasteImagesEffectArgs): void {
       disposed = true;
       textarea.removeEventListener?.("paste", handlePaste);
     };
-  }, [getWebTextArea]);
+  }, [
+    disabled,
+    getWebTextArea,
+    isConnected,
+    isDictating,
+    isRealtimeVoiceForCurrentAgent,
+    onAddImages,
+  ]);
 }
+
 function useAutoFocusOnWebEffect(
   textInputRef: React.MutableRefObject<ComposerTextInputHandle | null>,
   autoFocus: boolean,
@@ -738,7 +643,6 @@ interface ComposerTextSurfaceProps {
   onKeyPress: ((event: WebTextInputKeyPressEvent) => void) | undefined;
   onSelectionChange: (event: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => void;
   onPasteImages: ((files: readonly NativePastedFile[]) => void) | undefined;
-  inlineImageOverlay?: React.ReactNode;
   onPasteError: (message: string) => void;
   focusHintVisible: boolean;
   focusInputKeys: ShortcutChord | null | undefined;
@@ -781,7 +685,6 @@ function ComposerTextSurface(props: ComposerTextSurfaceProps): React.ReactElemen
         onPasteError={props.onPasteError}
         autoFocus={props.autoFocus}
       />
-      {props.inlineImageOverlay}
       <FocusHint
         visible={props.focusHintVisible}
         focusInputKeys={props.focusInputKeys}
@@ -1044,8 +947,7 @@ interface QueueMessageContext {
   value: string;
   attachments: ComposerAttachment[];
   cwd: string;
-  /** Returns false when the queue rejects the payload (e.g. pending paste). */
-  onQueue: ((payload: MessagePayload) => boolean | void) | undefined;
+  onQueue: ((payload: MessagePayload) => void) | undefined;
   replaceText: (text: string) => void;
   onMinimizeHeight: () => void;
 }
@@ -1054,8 +956,7 @@ function queueMessageImpl(ctx: QueueMessageContext): void {
   if (!ctx.onQueue) return;
   const trimmed = ctx.value.trim();
   if (!trimmed && ctx.attachments.length === 0) return;
-  const accepted = ctx.onQueue({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd });
-  if (accepted === false) return;
+  ctx.onQueue({ text: trimmed, attachments: ctx.attachments, cwd: ctx.cwd });
   ctx.replaceText("");
   ctx.onMinimizeHeight();
 }
@@ -1160,10 +1061,6 @@ interface ResolvedMessageInputProps {
   onPasteImages: ((files: readonly NativePastedFile[]) => void) | undefined;
   client: DaemonClient | null;
   isReadyForDictation: boolean | undefined;
-  onOpenAttachment: ((attachment: ComposerAttachment) => void) | undefined;
-  onRemoveAttachments: ((attachments: ComposerAttachment[]) => void) | undefined;
-  onPendingInlineImagesChange: ((count: number) => void) | undefined;
-  inlineAttachmentSlot: React.ReactNode;
   placeholder: string | undefined;
   autoFocus: boolean;
   autoFocusKey: string | undefined;
@@ -1176,7 +1073,7 @@ interface ResolvedMessageInputProps {
   voiceAgentId: string | undefined;
   isAgentRunning: boolean;
   defaultSendBehavior: "interrupt" | "steer" | "queue";
-  onQueue: ((payload: MessagePayload) => boolean | void) | undefined;
+  onQueue: ((payload: MessagePayload) => void) | undefined;
   onSubmitLoadingPress: (() => void) | undefined;
   onKeyPressCallback: ((event: ComposerKeyPressEvent) => boolean) | undefined;
   onSelectionChangeCallback: ((selection: { start: number; end: number }) => void) | undefined;
@@ -1211,10 +1108,6 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     onPasteImages: props.onPasteImages,
     client: props.client,
     isReadyForDictation: props.isReadyForDictation,
-    onOpenAttachment: props.onOpenAttachment,
-    onRemoveAttachments: props.onRemoveAttachments,
-    onPendingInlineImagesChange: props.onPendingInlineImagesChange,
-    inlineAttachmentSlot: props.inlineAttachmentSlot,
     placeholder: props.placeholder,
     autoFocus: props.autoFocus ?? false,
     autoFocusKey: props.autoFocusKey,
@@ -1272,10 +1165,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       isReadyForDictation,
       placeholder,
       autoFocus,
-      onOpenAttachment,
-      onRemoveAttachments,
-      onPendingInlineImagesChange,
-      inlineAttachmentSlot,
       autoFocusKey,
       disabled,
       leftContent,
@@ -1322,9 +1211,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
     const isInputFocusedRef = useRef(false);
     const valueRef = useRef(value);
     const selectionRef = useRef({ start: value.length, end: value.length });
-    // Live text for the inline-image overlay: the `value` prop lags on web
-    // because draft publication is deferred until after paint.
-    const [inlineImageTextStore] = useState(() => createInlineImageTextStore(value));
     const appliedTextReplacementKeyRef = useRef(textReplacement.key);
     const webTextareaRef = useRef<HTMLElement | null>(null);
     const composerHeight = useComposerHeight({
@@ -1354,7 +1240,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       (nextText: string, selection?: { start: number; end: number }) => {
         updateComposerHeightForText?.(valueRef.current, nextText);
         valueRef.current = nextText;
-        inlineImageTextStore.set(nextText);
         updateLiveTextPresence(nextText);
         selectionRef.current = selection ?? { start: nextText.length, end: nextText.length };
         if (nextText === "") {
@@ -1364,68 +1249,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         }
         onChangeText(nextText);
       },
-      [onChangeText, updateComposerHeightForText, updateLiveTextPresence, inlineImageTextStore],
-    );
-
-    // Provisional `[image:…]` codes awaiting persistence. The set size is the
-    // pending-paste count reported to the parent (submit gating + spinner).
-    const pendingInlineImageCodesRef = useRef(new Set<string>());
-    const notifyPendingInlineImages = useCallback(() => {
-      onPendingInlineImagesChange?.(pendingInlineImageCodesRef.current.size);
-    }, [onPendingInlineImagesChange]);
-
-    const insertInlineImageTokens = useCallback(
-      (
-        items: readonly { fileName?: string | null; metadata?: ImageAttachment | null }[],
-      ): string[] => {
-        const snapshot = getComposerInputSnapshot(
-          textInputRef.current,
-          valueRef.current,
-          selectionRef.current,
-        );
-        const result = insertInlineImageTokensIntoText({
-          text: snapshot.text,
-          start: snapshot.selection.start,
-          end: snapshot.selection.end,
-          items,
-        });
-        for (const code of result.provisionalCodes) {
-          pendingInlineImageCodesRef.current.add(code);
-        }
-        if (result.provisionalCodes.length > 0) notifyPendingInlineImages();
-        replaceText(result.text, { start: result.caret, end: result.caret });
-        return result.codes;
-      },
-      [notifyPendingInlineImages, replaceText],
-    );
-
-    const settleInlineImageToken = useCallback(
-      (code: string, metadata: ImageAttachment | null): boolean => {
-        const pending = pendingInlineImageCodesRef.current;
-        const wasPending = pending.delete(code);
-        if (wasPending) notifyPendingInlineImages();
-        const snapshot = getComposerInputSnapshot(
-          textInputRef.current,
-          valueRef.current,
-          selectionRef.current,
-        );
-        const applied = metadata
-          ? resolveProvisionalInlineImageToken({
-              text: snapshot.text,
-              code,
-              attachment: metadata,
-              caret: snapshot.selection.start,
-            })
-          : discardProvisionalInlineImageToken({
-              text: snapshot.text,
-              code,
-              caret: snapshot.selection.start,
-            });
-        if (!applied) return false;
-        replaceText(applied.text, { start: applied.caret, end: applied.caret });
-        return true;
-      },
-      [notifyPendingInlineImages, replaceText],
+      [onChangeText, updateComposerHeightForText, updateLiveTextPresence],
     );
 
     useImperativeHandle(ref, () => ({
@@ -1454,11 +1278,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
           toggleRealtimeVoiceMute: () => voice?.toggleMute(),
         }),
       getNativeElement: () => (isWeb ? getTextInputNativeElement(textInputRef.current) : null),
-      setSelection: (selection) => {
-        textInputRef.current?.setSelection?.(selection.start, selection.end);
-      },
-      insertInlineImageTokens: insertInlineImageTokens,
-      settleInlineImageToken,
     }));
     const sendAfterTranscriptRef = useRef(false);
     const serverInfo = useSessionStore(
@@ -1479,18 +1298,12 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       updateComposerHeightForText?.(valueRef.current, textReplacement.text);
       valueRef.current = textReplacement.text;
       updateLiveTextPresence(textReplacement.text);
-      inlineImageTextStore.set(textReplacement.text);
       if (textReplacement.text === "") {
         textInputRef.current?.reset();
       } else {
         textInputRef.current?.replaceText(textReplacement.text);
       }
-    }, [
-      textReplacement,
-      updateComposerHeightForText,
-      updateLiveTextPresence,
-      inlineImageTextStore,
-    ]);
+    }, [textReplacement, updateComposerHeightForText, updateLiveTextPresence]);
 
     useEffect(() => {
       return () => {
@@ -1768,52 +1581,16 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       isDictating,
       isRealtimeVoiceForCurrentAgent,
       onAddImages,
-      insertTokens: insertInlineImageTokens,
-      settleToken: settleInlineImageToken,
     });
 
     const handleSelectionChange = useCallback(
       (event: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
         const start = event.nativeEvent.selection?.start ?? 0;
         const end = event.nativeEvent.selection?.end ?? start;
-        // A collapsed caret can't sit inside an inline image token: snap it to
-        // the nearest boundary so typing never splits a token.
-        if (start === end) {
-          const snapped = snapInlineImageCaret(valueRef.current, start);
-          if (snapped !== start) {
-            if (isWeb) {
-              const textarea = getWebTextAreaImpl(textInputRef.current);
-              textarea?.setSelectionRange?.(snapped, snapped);
-            } else {
-              textInputRef.current?.setSelection?.(snapped, snapped);
-            }
-            selectionRef.current = { start: snapped, end: snapped };
-            onSelectionChangeCallback?.({ start: snapped, end: snapped });
-            return;
-          }
-        }
         selectionRef.current = { start, end };
         onSelectionChangeCallback?.({ start, end });
       },
       [onSelectionChangeCallback],
-    );
-
-    const deleteInputRange = useCallback(
-      (start: number, end: number) => {
-        const snapshot = getComposerInputSnapshot(
-          textInputRef.current,
-          valueRef.current,
-          selectionRef.current,
-        );
-        const nextText = `${snapshot.text.slice(0, start)}${snapshot.text.slice(end)}`;
-        replaceText(nextText, { start, end: start });
-      },
-      [replaceText],
-    );
-
-    const getTextareaElement = useCallback(
-      () => getTextInputNativeElement(textInputRef.current),
-      [],
     );
 
     const shouldHandleWebKeyPress = isWeb;
@@ -1831,8 +1608,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         submitOnEnter: shouldSubmitOnEnter,
         isAgentRunning,
         onQueue,
-        deleteRange: deleteInputRange,
-        onInlineTokensRemoved: handleInlineTokensRemoved,
         isSubmitDisabled,
         isSubmitLoading,
         disabled,
@@ -1892,56 +1667,14 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       t,
     });
 
-    // Removing or damaging a token removes its attachment. This is the
-    // backstop for edits that bypass the web keypress interception: native
-    // Backspace (no preventDefault), cut, undo, and IME commits.
-    const handleInlineTokensRemoved = useCallback(
-      (codes: string[]) => {
-        const pending = pendingInlineImageCodesRef.current;
-        const removedAttachments: ComposerAttachment[] = [];
-        for (const code of codes) {
-          if (isProvisionalInlineImageCode(code)) {
-            // Deleting a provisional token cancels that pending paste.
-            pending.delete(code);
-            continue;
-          }
-          const attachment = resolveInlineImageToken(
-            { start: 0, end: 0, code, label: null },
-            attachments,
-          );
-          if (attachment) removedAttachments.push(attachment);
-        }
-        onPendingInlineImagesChange?.(pending.size);
-        if (removedAttachments.length > 0) onRemoveAttachments?.(removedAttachments);
-      },
-      [attachments, onPendingInlineImagesChange, onRemoveAttachments],
-    );
     const handleInputChange = useCallback(
       (nextValue: string) => {
-        const edit = resolveInlineImageTextEdit({
-          previousText: valueRef.current,
-          nextText: nextValue,
-          caret: selectionRef.current.start,
-        });
-        if (edit) {
-          replaceText(edit.text, { start: edit.caret, end: edit.caret });
-          handleInlineTokensRemoved(edit.removedCodes);
-          return;
-        }
         updateComposerHeightForText?.(valueRef.current, nextValue);
         valueRef.current = nextValue;
-        inlineImageTextStore.set(nextValue);
         updateLiveTextPresence(nextValue);
         onChangeText(nextValue);
       },
-      [
-        handleInlineTokensRemoved,
-        inlineImageTextStore,
-        onChangeText,
-        replaceText,
-        updateComposerHeightForText,
-        updateLiveTextPresence,
-      ],
+      [onChangeText, updateComposerHeightForText, updateLiveTextPresence],
     );
 
     const handleInputFocus = useCallback(() => {
@@ -2024,54 +1757,6 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       [surfacePresentation.overlay.opacity],
     );
 
-    const handleInlineAttachmentRemove = useCallback(
-      (attachment: ComposerAttachment) => {
-        // The input owns its text: strip the token before telling the parent
-        // to drop the attachment, so no dead `[image:…]` remains.
-        const snapshot = getComposerInputSnapshot(
-          textInputRef.current,
-          valueRef.current,
-          selectionRef.current,
-        );
-        const stripped = stripInlineImageTokens({
-          text: snapshot.text,
-          attachment,
-          attachments,
-          caret: snapshot.selection.start,
-        });
-        if (stripped.text !== snapshot.text) {
-          replaceText(stripped.text, { start: stripped.caret, end: stripped.caret });
-        }
-        onRemoveAttachments?.([attachment]);
-      },
-      [attachments, onRemoveAttachments, replaceText],
-    );
-
-    const inlineImageOverlay = useMemo(
-      () =>
-        mode.showAttachments ? (
-          <InlineImageOverlay
-            textStore={inlineImageTextStore}
-            getTextarea={getTextareaElement}
-            attachments={attachments}
-            onOpenAttachment={onOpenAttachment}
-            onRemoveAttachment={handleInlineAttachmentRemove}
-          />
-        ) : undefined,
-      [
-        attachments,
-        getTextareaElement,
-        handleInlineAttachmentRemove,
-        inlineImageTextStore,
-        mode.showAttachments,
-        onOpenAttachment,
-      ],
-    );
-
-    // Native can't embed views inside TextInput, so tokens stay as plain
-    // `[image:…]` text and the parent renders interactive pills for them in
-    // `inlineAttachmentSlot` below the input.
-
     const renderAttachButtonIcon = useCallback(
       ({ hovered }: { hovered?: boolean }) => (
         <AttachButtonIcon
@@ -2139,11 +1824,8 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
               focusHintLabel={t("composer.input.focusHint", {
                 shortcut: focusInputKeys ? formatShortcut(focusInputKeys[0], getShortcutOs()) : "",
               })}
-              inlineImageOverlay={inlineImageOverlay}
             />
           </RenderProfile>
-
-          {inlineAttachmentSlot}
 
           {/* Button row */}
           <View style={styles.buttonRow}>

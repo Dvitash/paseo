@@ -2,8 +2,8 @@ import { useCallback, useMemo, useReducer } from "react";
 import { useTranslation } from "react-i18next";
 import type { ComposerAttachment } from "@/attachments/types";
 import {
-  buildComposerWirePayload,
   resolveComposerAttachmentSubmitFormat,
+  splitComposerAttachmentsForSubmit,
 } from "@/composer/attachments/submit";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { handoffCreatedAgentMessageSubmission } from "@/composer/submission/writer";
@@ -270,14 +270,11 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
       const supportsForgeSearch =
         useSessionStore.getState().sessions[pendingServerId]?.serverInfo?.features?.forgeSearch ===
         true;
-      const wirePayload = buildComposerWirePayload({
-        text: trimmedPrompt,
-        attachments,
+      const wirePayload = splitComposerAttachmentsForSubmit(attachments, {
         format: resolveComposerAttachmentSubmitFormat({
           supportsForgeAttachments: supportsForgeSearch,
         }),
       });
-      const wireText = wirePayload.text;
       const images = wirePayload.images;
 
       const hasAttachmentContent = images.length > 0 || wirePayload.attachments.length > 0;
@@ -297,9 +294,10 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
         dispatch({ type: "DRAFT_SET_ERROR", message: validationError });
         throw error;
       }
+
       const attempt: CreateAttempt = {
         clientMessageId: generateMessageId(),
-        text: wireText,
+        text: trimmedPrompt,
         timestamp: new Date(),
         ...(images && images.length > 0 ? { images } : {}),
         ...(wirePayload.attachments.length > 0 ? { attachments: wirePayload.attachments } : {}),

@@ -3,10 +3,9 @@ import { expect, test as baseTest } from "../support/fixtures";
 import { expectAgentIdle } from "../support/helpers/agent-stream";
 import {
   attachImageFromMenu,
+  expectAttachmentPill,
   expectComposerVisible,
-  expectInlineImageMarker,
   submitMessage,
-  submitMessagePreservingAttachments,
 } from "../support/helpers/composer";
 import { clickNewChat, gotoWorkspace } from "../support/helpers/launcher";
 import { seedWorkspace } from "../support/helpers/seed-client";
@@ -839,9 +838,9 @@ test("keeps the first prompt of a new agent in place through authoritative hydra
     gate.holdNextServerMessage("fetch_agent_timeline_response");
     gate.setAgentStreamEventSuppressed("timeline", true);
     await attachImageFromMenu(page, FIRST_PROMPT_IMAGE);
-    await expectInlineImageMarker(page);
+    await expectAttachmentPill(page, "composer-image-attachment-pill");
     await recordTurnFrames(page, prompt);
-    await submitMessagePreservingAttachments(page, prompt);
+    await submitMessage(page, prompt);
 
     const submittedRow = page.getByTestId("user-message").filter({ hasText: prompt }).first();
     await expect(submittedRow).toBeVisible();

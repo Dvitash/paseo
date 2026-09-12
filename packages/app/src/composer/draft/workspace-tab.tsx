@@ -25,7 +25,6 @@ import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { useWorkspaceDraftSubmissionStore } from "@/stores/workspace-draft-submission-store";
 import { useAgentControlCommandCenterActions } from "@/command-center/agent-control-registration";
 import { encodeImages } from "@/utils/encode-images";
-import { assertComposerWireImagesEncoded } from "@/composer/attachments/submit";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { shouldAutoFocusWorkspaceDraftComposer } from "@/screens/workspace/workspace-draft-pane-focus";
 import {
@@ -196,8 +195,6 @@ async function submitDraftCreateRequest(input: {
   });
 
   const imagesData = await encodeImages(images);
-  // Indexed `[image:N]` references break if encoding silently drops an image.
-  assertComposerWireImagesEncoded({ text, images: images ?? [], encoded: imagesData });
   const attachmentsArray = Array.isArray(attachments) ? attachments : undefined;
   const result = await client.createAgent({
     config,

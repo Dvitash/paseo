@@ -151,7 +151,6 @@ import {
   resolveWorkspaceFileDrop,
   type WorkspaceFileDragPayload,
 } from "@/attachments/workspace-file-drag";
-import { isImageAttachmentAnchored, stripInlineImageTokens } from "@/composer/inline-images";
 
 const composerImageAttachmentPersister: Pick<
   AttachmentPersister,
@@ -342,7 +341,6 @@ interface RenderAttachmentTrayArgs {
     openGithub: (kind: string, numberLabel: string) => string;
     removeGithub: (kind: string, numberLabel: string) => string;
   };
-  hiddenImageIds: ReadonlySet<string>;
 }
 
 function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | null {
@@ -352,18 +350,11 @@ function renderAttachmentTray(args: RenderAttachmentTrayArgs): ReactElement | nu
     handleOpenAttachment,
     handleRemoveAttachment,
     labels,
-    hiddenImageIds,
   } = args;
-  const visible = selectedAttachments
-    .map((attachment, index) => ({ attachment, index }))
-    .filter(
-      ({ attachment }) =>
-        attachment.kind !== "image" || !hiddenImageIds.has(attachment.metadata.id),
-    );
-  if (visible.length === 0) return null;
+  if (selectedAttachments.length === 0) return null;
   return (
     <View style={styles.attachmentTray} testID="composer-attachment-tray">
-      {visible.map(({ attachment, index }) =>
+      {selectedAttachments.map((attachment, index) =>
         renderComposerAttachmentPill({
           attachment,
           index,
@@ -1266,14 +1257,7 @@ function ComposerContentImpl({
   const cursorPublication = useMemo(() => new AfterPaintPublication<number>(setCursorIndex), []);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
-  const [pendingInlineImageCount, setPendingInlineImageCount] = useState(0);
-  // Ref mirror of the pending count: submit gates on it synchronously, before
-  // the state update re-renders the disabled button.
-  const pendingImagePastesRef = useRef(0);
-  const handlePendingInlineImagesChange = useCallback((count: number) => {
-    pendingImagePastesRef.current = count;
-    setPendingInlineImageCount(count);
-  }, []);
+  const [pendingNativeImagePastes, setPendingNativeImagePastes] = useState(0);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false);
   const [isGithubPickerOpen, setIsGithubPickerOpen] = useState(false);
@@ -1410,32 +1394,14 @@ function ComposerContentImpl({
   >(null);
   const onSubmitMessageRef = useRef(onSubmitMessage);
 
-  // Attachment-only registration for paths that already own their token:
-  // `onAddImages` (web paste) and the native settle path insert+settle tokens
-  // themselves, so they must not re-anchor.
-  const registerImages = useCallback(
+  const addImages = useCallback(
     (images: ImageAttachment[]) => {
-      if (images.length === 0) return;
       setSelectedAttachments((prev) => [
         ...prev,
         ...images.map((metadata) => ({ kind: "image" as const, metadata })),
       ]);
     },
     [setSelectedAttachments],
-  );
-  // Picker, menu, clipboard, and drop ingress anchor a resolved token at the
-  // caret so the image renders inline, then register the attachment so the
-  // token resolves and submits. `insertInlineImageTokens` is a no-op when the
-  // input isn't mounted, which degrades to tray-only.
-  const addImages = useCallback(
-    (images: ImageAttachment[]) => {
-      if (images.length === 0) return;
-      messageInputRef.current?.insertInlineImageTokens?.(
-        images.map((metadata) => ({ fileName: metadata.fileName, metadata })),
-      );
-      registerImages(images);
-    },
-    [registerImages],
   );
 
   const addFiles = useCallback(
@@ -1653,10 +1619,6 @@ function ComposerContentImpl({
 
   const handleSubmit = useCallback(
     (payload: MessagePayload) => {
-      // Synchronous gate: a paste still persisting must not send a provisional
-      // token or drop the image. The ref closes the same-tick gap before the
-      // pending-count state re-renders the disabled button.
-      if (pendingImagePastesRef.current > 0) return;
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
@@ -1719,39 +1681,26 @@ function ComposerContentImpl({
 
   const handleNativePasteImages = useCallback(
     (files: readonly NativePastedFile[]) => {
-      // Provisional tokens go in synchronously so the caret position is
-      // captured at paste time; each settles once its image persists.
-      const codes =
-        messageInputRef.current?.insertInlineImageTokens?.(
-          files.map((file) => ({ fileName: file.fileName })),
-        ) ?? [];
+      setPendingNativeImagePastes((pending) => pending + 1);
       void pickAndPersistImages({
         pickImages: async () => normalizeNativePastedImages(files),
         persister: composerImageAttachmentPersister,
       })
         .then((newImages) => {
-          const resolved: ImageAttachment[] = [];
-          newImages.forEach((metadata, index) => {
-            const code = codes[index];
-            // A false settle means the user deleted the provisional token
-            // mid-paste: drop the image instead of attaching it.
-            const settled =
-              code !== undefined &&
-              (messageInputRef.current?.settleInlineImageToken?.(code, metadata) ?? false);
-            if (settled || code === undefined) resolved.push(metadata);
-          });
-          if (resolved.length > 0) registerImages(resolved);
+          if (newImages.length > 0) {
+            addImages(newImages);
+          }
           return undefined;
         })
         .catch((error) => {
           console.error("[Composer] Failed to persist pasted image:", error);
-          for (const code of codes) {
-            messageInputRef.current?.settleInlineImageToken?.(code, null);
-          }
           toastErrorRef.current(t("composer.errors.pasteImageFailed"));
+        })
+        .finally(() => {
+          setPendingNativeImagePastes((pending) => Math.max(0, pending - 1));
         });
     },
-    [registerImages, t],
+    [addImages, t],
   );
 
   const uploadPickedFiles = useCallback(
@@ -1825,8 +1774,7 @@ function ComposerContentImpl({
 
   const handleRemoveAttachment = useCallback(
     (index: number) => {
-      const removed = selectedAttachments[index];
-      forgeAutoAttach.markForgeAttachmentRemoved(removed);
+      forgeAutoAttach.markForgeAttachmentRemoved(selectedAttachments[index]);
       const didRemoveWorkspaceAttachment = removeAttachment({
         selectedAttachments,
         index,
@@ -1834,78 +1782,9 @@ function ComposerContentImpl({
       if (didRemoveWorkspaceAttachment) {
         return;
       }
-      if (removed?.kind === "image") {
-        const input = messageInputRef.current;
-        if (input) {
-          const snapshot = input.getInputSnapshot();
-          const stripped = stripInlineImageTokens({
-            text: snapshot.text,
-            attachment: removed,
-            attachments: selectedAttachments,
-            caret: snapshot.selection.start,
-          });
-          if (stripped.text !== snapshot.text) {
-            input.replaceText(stripped.text, {
-              start: stripped.caret,
-              end: stripped.caret,
-            });
-          }
-        }
-      }
       setSelectedAttachments((prev) =>
         removeComposerAttachmentAtIndex({ attachments: prev, index, deleteAttachments }),
       );
-    },
-    [forgeAutoAttach, removeAttachment, selectedAttachments, setSelectedAttachments],
-  );
-
-  // Batch removal for inline-token deletions: one state update, one
-  // deleteAttachments call. Workspace attachments route through the
-  // workspace store instead of the selected list. Image attachments also
-  // strip their `[image:…]` tokens from the draft so no dead text remains.
-  const handleRemoveAttachmentsById = useCallback(
-    (toRemove: ComposerAttachment[]) => {
-      if (toRemove.length === 0) return;
-      const indices = new Set<number>();
-      const imageMetadata: ImageAttachment[] = [];
-      const removedImages: Extract<ComposerAttachment, { kind: "image" }>[] = [];
-      for (const attachment of toRemove) {
-        const index = selectedAttachments.indexOf(attachment);
-        if (index < 0 || indices.has(index)) continue;
-        forgeAutoAttach.markForgeAttachmentRemoved(attachment);
-        if (removeAttachment({ selectedAttachments, index })) continue;
-        indices.add(index);
-        if (attachment.kind === "image") {
-          imageMetadata.push(attachment.metadata);
-          removedImages.push(attachment);
-        }
-      }
-      if (imageMetadata.length > 0) void deleteAttachments(imageMetadata);
-      if (indices.size > 0) {
-        setSelectedAttachments((prev) => prev.filter((_, i) => !indices.has(i)));
-      }
-      const input = messageInputRef.current;
-      if (input && removedImages.length > 0) {
-        let snapshot = input.getInputSnapshot();
-        for (const image of removedImages) {
-          const stripped = stripInlineImageTokens({
-            text: snapshot.text,
-            attachment: image,
-            attachments: selectedAttachments,
-            caret: snapshot.selection.start,
-          });
-          if (stripped.text !== snapshot.text) {
-            input.replaceText(stripped.text, {
-              start: stripped.caret,
-              end: stripped.caret,
-            });
-            snapshot = {
-              text: stripped.text,
-              selection: { start: stripped.caret, end: stripped.caret },
-            };
-          }
-        }
-      }
     },
     [forgeAutoAttach, removeAttachment, selectedAttachments, setSelectedAttachments],
   );
@@ -1999,25 +1878,22 @@ function ComposerContentImpl({
   );
 
   const handleQueue = useCallback(
-    (payload: MessagePayload): boolean => {
-      // Reject while a paste is still persisting so the draft survives.
-      if (pendingImagePastesRef.current > 0) return false;
+    (payload: MessagePayload) => {
       const outgoingAttachments = buildOutgoingAttachments(attachments);
       const clientSlashCommand = resolveClientSlashCommand({
         text: payload.text,
         hasAttachments: outgoingAttachments.length > 0,
       });
       if (clientSlashCommand && runClientSlashCommand(clientSlashCommand)) {
-        return true;
+        return;
       }
       const pluginSlashCommand = resolvePluginClientSlashCommand({
         text: payload.text,
         hasAttachments: outgoingAttachments.length > 0,
         commands: pluginClientSlashCommands,
       });
-      if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return true;
+      if (pluginSlashCommand && runPluginClientSlashCommand(pluginSlashCommand)) return;
       queueMessage(payload.text, outgoingAttachments);
-      return true;
     },
     [
       attachments,
@@ -2347,64 +2223,6 @@ function ComposerContentImpl({
     [isComposerLocked],
   );
 
-  // Images with a live `[image:CODE]` token render inline — as overlay pills
-  // inside the text on web, and as pills below the input on native. Either
-  // way they leave the top tray.
-  const hiddenImageIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const attachment of selectedAttachments) {
-      if (
-        attachment.kind === "image" &&
-        isImageAttachmentAnchored(userInput, attachment, selectedAttachments)
-      ) {
-        ids.add(attachment.metadata.id);
-      }
-    }
-    return ids;
-  }, [selectedAttachments, userInput]);
-
-  // Native can't render pills inside the text, so anchored images get a pill
-  // row under the input instead. Web renders nothing here — the overlay owns it.
-  const inlineAttachmentTray = useMemo(() => {
-    if (!isNative) return null;
-    const anchored = selectedAttachments
-      .map((attachment, index) => ({ attachment, index }))
-      .filter(
-        ({ attachment }) =>
-          attachment.kind === "image" && hiddenImageIds.has(attachment.metadata.id),
-      );
-    if (anchored.length === 0) return null;
-    return (
-      <View style={styles.attachmentTray} testID="composer-inline-attachment-tray">
-        {anchored.map(({ attachment, index }) =>
-          renderComposerAttachmentPill({
-            attachment,
-            index,
-            disabled: isComposerLocked,
-            onOpen: handleOpenAttachment,
-            onRemove: handleRemoveAttachment,
-            labels: {
-              openImage: t("composer.attachments.openImage"),
-              removeImage: t("composer.attachments.removeImage"),
-              removeFile: t("composer.attachments.removeFile"),
-              openGithub: (kind: string, numberLabel: string) =>
-                t("composer.attachments.openGithub", { kind, number: numberLabel }),
-              removeGithub: (kind: string, numberLabel: string) =>
-                t("composer.attachments.removeGithub", { kind, number: numberLabel }),
-            },
-          }),
-        )}
-      </View>
-    );
-  }, [
-    handleOpenAttachment,
-    handleRemoveAttachment,
-    hiddenImageIds,
-    isComposerLocked,
-    selectedAttachments,
-    t,
-  ]);
-
   const attachmentTray = useMemo(
     () =>
       renderAttachmentTray({
@@ -2412,7 +2230,6 @@ function ComposerContentImpl({
         isComposerLocked,
         handleOpenAttachment,
         handleRemoveAttachment,
-        hiddenImageIds,
         labels: {
           openImage: t("composer.attachments.openImage"),
           removeImage: t("composer.attachments.removeImage"),
@@ -2423,18 +2240,8 @@ function ComposerContentImpl({
             t("composer.attachments.removeGithub", { kind, number: numberLabel }),
         },
       }),
-    [
-      handleOpenAttachment,
-      handleRemoveAttachment,
-      hiddenImageIds,
-      isComposerLocked,
-      selectedAttachments,
-      t,
-    ],
+    [handleOpenAttachment, handleRemoveAttachment, isComposerLocked, selectedAttachments, t],
   );
-
-  const isSubmitLoadingVisible =
-    isProcessing || isSubmitLoading || isUploadingFile || pendingInlineImageCount > 0;
 
   const queueList = useMemo(
     () =>
@@ -2450,6 +2257,8 @@ function ComposerContentImpl({
 
   const messageInputContainerRef = useRef<View>(null);
 
+  const isSubmitLoadingVisible =
+    isProcessing || isSubmitLoading || isUploadingFile || pendingNativeImagePastes > 0;
   const isSubmitDisabled =
     isSubmitLoadingVisible || (waitForForgeAutoAttachOnSubmit && forgeAutoAttach.isResolving);
 
@@ -2534,13 +2343,9 @@ function ComposerContentImpl({
                   preserveHeightOnSubmit={submitBehavior === "preserve-and-lock"}
                   attachments={selectedAttachments}
                   cwd={cwd}
-                  onOpenAttachment={handleOpenAttachment}
-                  onRemoveAttachments={handleRemoveAttachmentsById}
-                  onPendingInlineImagesChange={handlePendingInlineImagesChange}
-                  inlineAttachmentSlot={inlineAttachmentTray}
                   attachmentMenuItems={attachmentMenuItems}
                   onAttachButtonRef={handleAttachButtonRef}
-                  onAddImages={registerImages}
+                  onAddImages={addImages}
                   onPasteImages={handleNativePasteImages}
                   client={client}
                   isReadyForDictation={isDictationReady}

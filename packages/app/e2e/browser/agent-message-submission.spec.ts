@@ -12,8 +12,9 @@ import {
 import { gateNextAgentMessage } from "../support/helpers/agent-message-gate";
 import {
   attachImageFromMenu,
+  expectComposerDraft,
   expectComposerEditable,
-  expectInlineImageMarker,
+  expectAttachmentPill,
   expectComposerVisible,
   cancelAgent,
   composerLocator,
@@ -55,7 +56,6 @@ import {
   emitSettledAssistantImage,
   expectAssistantImageRendered,
 } from "../support/helpers/assistant-images";
-import { escapeRegex } from "../support/helpers/regex";
 
 const IMAGE = {
   name: "message-submission.png",
@@ -158,11 +158,9 @@ const test = baseTest.extend<{
 
 async function submitMessageWithImage(page: Page, prompt: string): Promise<Locator> {
   await attachImageFromMenu(page, IMAGE);
-  await expectInlineImageMarker(page);
+  await expectAttachmentPill(page, "composer-image-attachment-pill");
   const composer = page.getByRole("textbox", { name: "Message agent..." }).first();
-  // Type at the caret (not .fill) so the inline image token survives.
-  await composer.focus();
-  await composer.pressSequentially(prompt);
+  await composer.fill(prompt);
   await composer.press("Enter");
   const nextFrame = await composer.evaluate(
     (composerElement, submittedPrompt) =>
@@ -181,7 +179,9 @@ async function submitMessageWithImage(page: Page, prompt: string): Promise<Locat
               document.querySelector('[data-testid="turn-working-indicator"]'),
             ),
             composerValue: composerInput.value,
-            attachmentPresent: Boolean(document.querySelector("[data-inline-image]")),
+            attachmentPresent: Boolean(
+              document.querySelector('[data-testid="composer-image-attachment-pill"]'),
+            ),
           });
         });
       }),
@@ -198,7 +198,7 @@ async function submitMessageWithImage(page: Page, prompt: string): Promise<Locat
 
 async function submitImageOnlyMessage(page: Page): Promise<Locator> {
   await attachImageFromMenu(page, IMAGE);
-  await expectInlineImageMarker(page);
+  await expectAttachmentPill(page, "composer-image-attachment-pill");
   await page.getByRole("textbox", { name: "Message agent..." }).first().press("Enter");
   const userMessage = page.getByTestId("user-message").last();
   await expect(userMessage).toBeVisible();
@@ -210,7 +210,7 @@ async function expectPendingSubmission(page: Page, userMessage: Locator): Promis
   await expect(userMessage).toBeVisible();
   await expect(page.getByTestId("turn-working-indicator")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message agent..." }).first()).toHaveValue("");
-  await expect(page.locator("[data-inline-image]")).toHaveCount(0);
+  await expect(page.getByTestId("composer-image-attachment-pill")).toHaveCount(0);
   await expect(userMessage.getByTestId("user-message-timestamp")).toBeAttached();
   await expect(userMessage.getByTestId("user-message-trailing-row")).toHaveCSS("opacity", "0");
   await expect(userMessage).toHaveAttribute("aria-busy", "true");
@@ -264,10 +264,9 @@ async function beginTimelineRowStabilityCheck(
 
 async function submitMessageThatWillBeRejected(page: Page, prompt: string): Promise<void> {
   await attachImageFromMenu(page, IMAGE);
-  await expectInlineImageMarker(page);
+  await expectAttachmentPill(page, "composer-image-attachment-pill");
   const composer = page.getByRole("textbox", { name: "Message agent..." }).first();
-  await composer.focus();
-  await composer.pressSequentially(prompt);
+  await composer.fill(prompt);
   await composer.press("Enter");
 }
 
@@ -278,12 +277,9 @@ async function expectRejectedSubmissionRestored(
   await expect(page.getByRole("alert").filter({ hasText: input.errorMessage })).toBeVisible({
     timeout: 30_000,
   });
-  // The restored draft is the wire text: the inline image token plus the prompt.
-  await expect(page.getByRole("textbox", { name: "Message agent..." }).first()).toHaveValue(
-    new RegExp(`\\[image:[a-z0-9._#-]+\\]${escapeRegex(input.prompt)}`),
-  );
+  await expectComposerDraft(page, input.prompt);
   await expectComposerEditable(page);
-  await expectInlineImageMarker(page);
+  await expectAttachmentPill(page, "composer-image-attachment-pill");
   await expect(page.getByTestId("user-message").filter({ hasText: input.prompt })).toHaveCount(0);
   if (input.preservesActiveTurn) {
     await expect(page.getByTestId("turn-working-indicator")).toBeVisible();
@@ -299,7 +295,7 @@ async function retryRestoredSubmission(page: Page, prompt: string): Promise<void
   await expect(userMessage).toHaveCount(1);
   await expect(userMessage).toHaveAttribute("aria-busy", "false", { timeout: 30_000 });
   await expect(userMessage.getByRole("button", { name: "Open image attachment" })).toBeVisible();
-  await expect(page.locator("[data-inline-image]")).toHaveCount(0);
+  await expect(page.getByTestId("composer-image-attachment-pill")).toHaveCount(0);
 }
 
 async function configureSteerInSettings(page: Page): Promise<void> {
@@ -388,10 +384,7 @@ async function expectQueuedSendFailuresRestored(page: Page, prompts: string[]): 
 }
 
 async function expectFailedSubmissionRestored(page: Page, prompt: string): Promise<void> {
-  // The restored draft is the wire text: the inline image token plus the prompt.
-  await expect(page.getByRole("textbox", { name: "Message agent..." }).first()).toHaveValue(
-    new RegExp(`\\[image:[a-z0-9._#-]+\\]${escapeRegex(prompt)}`),
-  );
+  await expectComposerDraft(page, prompt);
   await expectComposerEditable(page);
   await expect(page.getByTestId("user-message").filter({ hasText: prompt })).toHaveCount(0);
 }
@@ -1164,10 +1157,10 @@ test.describe("Agent message submission", () => {
 
       expect(gate.getClientRequestCount("send_agent_message_request")).toBe(sendsBefore + 1);
       expect(gate.getClientRequestCount("cancel_agent_request")).toBe(cancelsBefore);
-      const lastRequest = gate.getClientRequests("send_agent_message_request").at(-1);
-      // The wire text prefixes the prompt with the resolved `[image:N]` tag.
-      expect(lastRequest?.text).toMatch(new RegExp(`^\\[image:\\d+\\]${escapeRegex(prompt)}$`));
-      expect(lastRequest).toMatchObject({ activeTurnBehavior: "steer" });
+      expect(gate.getClientRequests("send_agent_message_request").at(-1)).toMatchObject({
+        text: prompt,
+        activeTurnBehavior: "steer",
+      });
     } finally {
       gate.restore();
       await agent.cleanup();
