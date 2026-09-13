@@ -94,6 +94,12 @@ describe("splitMarkdownBlocks", () => {
     ).toEqual(["Before", "> First\n>\n> Second", "    first()\n\n    second()", "After"]);
   });
 
+  it("keeps blank lines inside math blocks as one block", () => {
+    expect(
+      splitMarkdownBlocks("Before\n\n$$\n\\int_0^1 x dx\n\n\\int_0^1 y dy\n$$\n\nAfter"),
+    ).toEqual(["Before", "$$\n\\int_0^1 x dx\n\n\\int_0^1 y dy\n$$", "After"]);
+  });
+
   it("preserves single newlines without blank separators", () => {
     const text = "| Name | Value |\n| --- | --- |\n| **one** | `two` |";
     expect(splitMarkdownBlocks(text)).toEqual([text]);

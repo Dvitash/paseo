@@ -647,7 +647,11 @@ function escapeAttribute(value: string): string {
 
 function getProtectedMarkdownRanges(source: string): ProtectedMarkdownRange[] {
   const fencedRanges = getFencedCodeRanges(source);
-  return mergeProtectedRanges([...fencedRanges, ...getInlineCodeRanges(source, fencedRanges)]);
+  const codeRanges = mergeProtectedRanges([
+    ...fencedRanges,
+    ...getInlineCodeRanges(source, fencedRanges),
+  ]);
+  return mergeProtectedRanges([...codeRanges, ...getMathRanges(source, codeRanges)]);
 }
 
 function getFencedCodeRanges(source: string): ProtectedMarkdownRange[] {
@@ -741,6 +745,79 @@ function findClosingBacktickRun(
   }
 }
 
+function countPrecedingBackslashes(source: string, pos: number): number {
+  let count = 0;
+  let p = pos - 1;
+  while (p >= 0 && source.charCodeAt(p) === 0x5c) {
+    count += 1;
+    p -= 1;
+  }
+  return count;
+}
+
+function findClosingInlineMath(source: string, start: number): number | null {
+  const len = source.length;
+  let match = start;
+
+  while (match < len) {
+    if (source.charCodeAt(match) === 0x0a) {
+      return null;
+    }
+    if (source[match] === "$" && countPrecedingBackslashes(source, match) % 2 === 0) {
+      const prevChar = source.charCodeAt(match - 1);
+      const afterClose = match + 1 < len ? source.charCodeAt(match + 1) : -1;
+      const validClose =
+        prevChar !== 0x20 && prevChar !== 0x09 && !(afterClose >= 0x30 && afterClose <= 0x39);
+      if (validClose) {
+        return match + 1;
+      }
+    }
+    match += 1;
+  }
+
+  return null;
+}
+
+function getMathRanges(
+  source: string,
+  codeRanges: ProtectedMarkdownRange[],
+): ProtectedMarkdownRange[] {
+  const ranges: ProtectedMarkdownRange[] = [];
+  const len = source.length;
+  let i = 0;
+
+  while (i < len) {
+    if (isProtectedIndex(i, codeRanges)) {
+      i += 1;
+      continue;
+    }
+
+    if (source.slice(i, i + 2) === "$$") {
+      const close = source.indexOf("$$", i + 2);
+      const end = close === -1 ? len : close + 2;
+      ranges.push({ start: i, end });
+      i = end;
+      continue;
+    }
+
+    if (source[i] === "$" && countPrecedingBackslashes(source, i) % 2 === 0) {
+      const nextChar = i + 1 < len ? source.charCodeAt(i + 1) : -1;
+      const validOpen = nextChar !== 0x20 && nextChar !== 0x09;
+      if (validOpen) {
+        const end = findClosingInlineMath(source, i + 1);
+        if (end !== null) {
+          ranges.push({ start: i, end });
+          i = end;
+          continue;
+        }
+      }
+    }
+
+    i += 1;
+  }
+
+  return ranges;
+}
 function mergeProtectedRanges(ranges: ProtectedMarkdownRange[]): ProtectedMarkdownRange[] {
   const sorted = [...ranges].sort((a, b) => a.start - b.start);
   const merged: ProtectedMarkdownRange[] = [];

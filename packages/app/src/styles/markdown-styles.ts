@@ -346,6 +346,23 @@ export function createMarkdownStyles(theme: Theme) {
     },
 
     // =========================================================================
+    // MATH
+    // =========================================================================
+
+    math_inline: {
+      ...webSelectableTextStyle,
+      color: theme.colors.foreground,
+    },
+
+    math_block: {
+      ...webSelectableTextStyle,
+      color: theme.colors.foreground,
+      marginVertical: theme.spacing[3],
+      alignItems: "center" as const,
+      justifyContent: "center" as const,
+      width: "100%" as const,
+    },
+    // =========================================================================
     // BREAKS
     // =========================================================================
 

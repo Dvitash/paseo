@@ -333,6 +333,12 @@ describe("splitHtmlishMarkdown", () => {
       { kind: "details", summary: "Safe", body: '<iframe src="x"></iframe>' },
     ]);
   });
+  it("protects inline and block math with angle brackets from being parsed as HTML", () => {
+    const source = "Math $a < b$ and $x < y > z$ and $$\\alpha < \\beta$$ here.";
+
+    expect(splitHtmlishMarkdown(source)).toEqual([{ kind: "markdown", text: source }]);
+    expect(normalizeHtmlishMarkdown(source)).toBe(source);
+  });
 });
 
 function withoutArrayToSorted<T>(callback: () => T): T {

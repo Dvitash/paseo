@@ -55,6 +55,20 @@ turndown.addRule("compactListItem", {
     return `${start + index}. ${item}\n`;
   },
 });
+turndown.addRule("mathInline", {
+  filter: (node) => node.nodeName.toLowerCase() === "math-inline",
+  replacement: (content, node) => {
+    const latex = (node as HTMLElement).getAttribute("data-paseo-math-latex") ?? content;
+    return `$${latex}$`;
+  },
+});
+turndown.addRule("mathBlock", {
+  filter: (node) => node.nodeName.toLowerCase() === "math-block",
+  replacement: (content, node) => {
+    const latex = (node as HTMLElement).getAttribute("data-paseo-math-latex") ?? content;
+    return `\n\n$$\n${latex.trim()}\n$$\n\n`;
+  },
+});
 
 export function createAssistantSelectionClipboardContent(
   selection: Selection | null,
@@ -439,6 +453,12 @@ function restoreMarkdownElements(container: HTMLElement): void {
       const alignment = element.getAttribute(MARKDOWN_COPY_ALIGN_ATTRIBUTE);
       if (alignment) {
         semanticElement.setAttribute("align", alignment);
+      }
+    }
+    if (tagName === "math-inline" || tagName === "math-block") {
+      const latex = element.getAttribute("data-paseo-math-latex");
+      if (latex) {
+        semanticElement.setAttribute("data-paseo-math-latex", latex);
       }
     }
     element.replaceWith(semanticElement);

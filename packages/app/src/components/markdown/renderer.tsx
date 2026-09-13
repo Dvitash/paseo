@@ -24,6 +24,7 @@ import Markdown, {
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
 import { MarkdownFenceBlock } from "@/components/markdown/fence";
+import { MathBlock, MathInline } from "./math";
 import { MarkdownParagraphView, MarkdownTextSpan } from "@/components/markdown-text";
 import { MarkdownTableCellText } from "@/components/markdown-text-selection";
 import { getMarkdownListMarker, getMarkdownListSpacing } from "@/utils/markdown-list";
@@ -733,6 +734,18 @@ export function createSharedMarkdownRules(): RenderRules {
         {colorMarkdownLinkChildren(children, styles.link.color)}
       </SharedMarkdownLink>
     ),
+    math_inline: (
+      node: ASTNode,
+      _children: ReactNode[],
+      _parent: ASTNode[],
+      styles: MarkdownStyles,
+    ) => <MathInline key={node.key} latex={node.content} style={styles.math_inline} />,
+    math_block: (
+      node: ASTNode,
+      _children: ReactNode[],
+      _parent: ASTNode[],
+      styles: MarkdownStyles,
+    ) => <MathBlock key={node.key} latex={node.content} style={styles.math_block} />,
   };
 }
 

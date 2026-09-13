@@ -69,6 +69,7 @@ import { markdownNodeContainsType } from "@/utils/markdown-ast";
 import { useStableEvent } from "@/hooks/use-stable-event";
 import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
 import { MarkdownFenceBlock } from "@/components/markdown/fence";
+import { MathBlock, MathInline } from "@/components/markdown/math";
 import type { MarkdownPhase } from "@/components/markdown/fence/types";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
 import { useRevealedText } from "@/hooks/use-revealed-text";
@@ -1948,6 +1949,18 @@ export const AssistantMessage = memo(function AssistantMessage({
           />
         );
       },
+      math_inline: (
+        node: ASTNode,
+        _children: ReactNode[],
+        _parent: ASTNode[],
+        styles: MarkdownStyles,
+      ) => <MathInline key={node.key} latex={node.content} style={styles.math_inline} />,
+      math_block: (
+        node: ASTNode,
+        _children: ReactNode[],
+        _parent: ASTNode[],
+        styles: MarkdownStyles,
+      ) => <MathBlock key={node.key} latex={node.content} style={styles.math_block} />,
     };
   }, [client, fileLinkActions, markdownParser, occurrenceKey, phase, serverId, workspaceRoot]);
 

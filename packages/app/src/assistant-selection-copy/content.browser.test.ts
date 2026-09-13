@@ -340,6 +340,29 @@ describe("assistant selection copy ranges", () => {
       "const answer = true;",
     );
   });
+  it("copies inline math with dollar delimiters", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `
+      <div data-testid="assistant-message">
+        <div data-paseo-markdown-tag="p">The scalar <span data-paseo-markdown-tag="math-inline" data-paseo-math-latex="w"><span>w</span></span> here.</div>
+      </div>
+    `;
+    document.body.append(host);
+    const p = host.querySelector('[data-paseo-markdown-tag="p"]')!;
+    expect(copiedMarkdown(selectNodeContents(p))).toBe("The scalar $w$ here.");
+  });
+
+  it("copies block math with double dollar delimiters", () => {
+    const host = document.createElement("div");
+    host.innerHTML = `
+      <div data-testid="assistant-message">
+        <div data-paseo-markdown-tag="math-block" data-paseo-math-latex="E = mc^2"><div>E = mc^2</div></div>
+      </div>
+    `;
+    document.body.append(host);
+    const block = host.querySelector('[data-paseo-markdown-tag="math-block"]')!;
+    expect(copiedMarkdown(selectNodeContents(block))).toBe("$$\nE = mc^2\n$$");
+  });
 });
 
 /**

@@ -30,6 +30,8 @@ export const markdownCopyDataSet = {
   ignore: { paseoMarkdownIgnore: "true" },
   li: { paseoMarkdownTag: "li" },
   listMarker: { paseoMarkdownIgnore: "true", paseoMarkdownListMarker: "true" },
+  mathBlock: { paseoMarkdownTag: "math-block" },
+  mathInline: { paseoMarkdownTag: "math-inline" },
   ol: { paseoMarkdownTag: "ol" },
   p: { paseoMarkdownTag: "p" },
   pre: { paseoMarkdownTag: "pre" },

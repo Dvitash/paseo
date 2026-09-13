@@ -1,6 +1,8 @@
 import MarkdownIt from "markdown-it";
+import { markdownMathPlugin } from "./markdown-math-plugin";
 
 const markdownBlockParser = new MarkdownIt();
+markdownBlockParser.use(markdownMathPlugin);
 // Only block line ranges are consumed here. Inline parsing belongs to the renderer,
 // not the splitter that runs on every streaming text reveal.
 markdownBlockParser.core.ruler.enableOnly(["normalize", "block"]);
