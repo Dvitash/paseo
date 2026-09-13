@@ -136,6 +136,7 @@ import type { StoredAgentRecord } from "./agent/agent-storage.js";
 import type { AgentStorage } from "./agent/agent-storage.js";
 import { getSideChatService, type SideChatService } from "./side/side-chat-service.js";
 import { HostPerformanceSampler } from "./host-performance/sampler.js";
+import { HostTokenUsageSampler } from "./host-token-usage/sampler.js";
 import {
   ImportSessionsRequestError,
   importProviderSession,
@@ -529,6 +530,7 @@ export interface SessionOptions {
   providerSnapshotManager: ProviderSnapshotManager;
   providerUsageService: ProviderUsageService;
   hostPerformanceSampler: HostPerformanceSampler;
+  hostTokenUsageSampler?: HostTokenUsageSampler;
   hubExecutionAgents?: HubExecutionAgents;
   hubRelationships?: HubRelationshipManagement;
   serviceProxy?: ServiceProxySubsystem;
@@ -746,6 +748,7 @@ export class Session {
   private readonly terminalManager: TerminalManager | null;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
   private readonly hostPerformanceSampler: HostPerformanceSampler;
+  private readonly hostTokenUsageSampler: HostTokenUsageSampler;
   private readonly serviceProxy: ServiceProxySubsystem | null;
   private readonly scriptRuntimeStore: WorkspaceScriptRuntimeStore | null;
   private readonly getDaemonTcpPort: (() => number | null) | null;
@@ -773,6 +776,7 @@ export class Session {
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
   private readonly sideChatService: SideChatService;
 
+  // eslint-disable-next-line complexity
   constructor(options: SessionOptions) {
     const {
       clientId,
@@ -850,6 +854,7 @@ export class Session {
     this.projectIcons = new ProjectIconReader(paseoHome);
     this.worktreesRoot = worktreesRoot;
     this.hostPerformanceSampler = hostPerformanceSampler;
+    this.hostTokenUsageSampler = options.hostTokenUsageSampler ?? new HostTokenUsageSampler();
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
     this.unsubscribePluginChanges = this.subscribeToPluginChanges(pluginRuntime);
@@ -2532,6 +2537,7 @@ export class Session {
     }
   }
 
+  // eslint-disable-next-line complexity
   private dispatchAgentConfigMessage(msg: SessionInboundMessage): Promise<void> | undefined {
     switch (msg.type) {
       case "set_agent_mode_request":
@@ -2566,6 +2572,8 @@ export class Session {
         return this.daemonSession.handleDiagnosticsRequest(msg);
       case "host.performance.get_snapshot.request":
         return this.handleHostPerformanceGetSnapshotRequest(msg);
+      case "host.token_usage.get_snapshot.request":
+        return this.handleHostTokenUsageGetSnapshotRequest(msg);
       case "daemon.update.request":
         return this.daemonSession.handleUpdateRequest(msg);
       case "set_daemon_config_request":
@@ -2601,6 +2609,18 @@ export class Session {
     const snapshot = await this.hostPerformanceSampler.getSnapshot();
     this.emit({
       type: "host.performance.get_snapshot.response",
+      payload: {
+        requestId: msg.requestId,
+        snapshot,
+      },
+    });
+  }
+  private async handleHostTokenUsageGetSnapshotRequest(
+    msg: Extract<SessionInboundMessage, { type: "host.token_usage.get_snapshot.request" }>,
+  ): Promise<void> {
+    const snapshot = await this.hostTokenUsageSampler.getSnapshot(msg.force);
+    this.emit({
+      type: "host.token_usage.get_snapshot.response",
       payload: {
         requestId: msg.requestId,
         snapshot,

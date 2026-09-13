@@ -92,6 +92,7 @@ import {
 } from "./websocket/runtime-metrics.js";
 import { ProviderUsageService } from "../services/quota-fetcher/service.js";
 import { HostPerformanceSampler } from "./host-performance/sampler.js";
+import { HostTokenUsageSampler } from "./host-token-usage/sampler.js";
 import { getProcessMemoryDiagnostics, getProcessUptimeSeconds } from "./process-diagnostics.js";
 import {
   CLIENT_SHUTDOWN_RPC_REASON,
@@ -603,6 +604,7 @@ export class VoiceAssistantWebSocketServer {
   private unsubscribeDaemonConfigChange: (() => void) | null = null;
   private readonly providerUsageService: ProviderUsageService;
   private readonly hostPerformanceSampler: HostPerformanceSampler;
+  private readonly hostTokenUsageSampler: HostTokenUsageSampler;
   private unsubscribeTerminalActivity: (() => void) | null = null;
   private readonly browserToolsBroker: BrowserToolsBroker | null;
   private readonly hubRelationships: HubRelationshipManagement | null;
@@ -745,6 +747,7 @@ export class VoiceAssistantWebSocketServer {
       logger: this.logger,
     });
     this.hostPerformanceSampler = new HostPerformanceSampler();
+    this.hostTokenUsageSampler = new HostTokenUsageSampler();
 
     this.wss = this.createWebSocketServer(server, wsConfig, auth);
     this.startRuntimeMetricsInterval();
@@ -1487,6 +1490,7 @@ export class VoiceAssistantWebSocketServer {
       providerSnapshotManager: this.providerSnapshotManager,
       providerUsageService: this.providerUsageService,
       hostPerformanceSampler: this.hostPerformanceSampler,
+      hostTokenUsageSampler: this.hostTokenUsageSampler,
       hubExecutionAgents: options.hubExecutionAgents,
       hubRelationships: options.hubRelationships,
       serviceProxy: this.serviceProxy ?? undefined,
@@ -1689,6 +1693,8 @@ export class VoiceAssistantWebSocketServer {
       features: {
         sideChat: true,
         hostPerformance: true,
+        // COMPAT(hostTokenUsage): added in v0.8.0-beta.1, remove gate after 2027-03-13.
+        hostTokenUsage: true,
         // COMPAT(modelTurnMetrics): added in v0.8.0; remove gate after 2027-03-09.
         modelTurnMetrics: true,
         agentRequestReceipts: true,

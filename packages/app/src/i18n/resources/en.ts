@@ -2981,6 +2981,20 @@ export const en = {
     trendLastMinute: "Last 60 seconds",
     selectHost: "Select host",
   },
+  tokenUsage: {
+    title: "Token usage",
+    input: "Input",
+    cacheRead: "Cache read",
+    output: "Output",
+    refresh: "Refresh",
+    refreshing: "Refreshing...",
+    loading: "Loading token usage...",
+    empty: "No token usage data",
+    unavailable: "Token usage telemetry unavailable on this host",
+    hostUpgradeRequired: "Update the host daemon to view token usage",
+    errorTitle: "Unable to load token usage",
+    retry: "Retry",
+  },
 } as const;
 
 type WidenStringLeaves<T> = {

@@ -2887,4 +2887,18 @@ export const ko: TranslationResources = {
     trendLastMinute: "지난 60초",
     selectHost: "호스트 선택",
   },
+  tokenUsage: {
+    title: "토큰 사용량",
+    input: "입력",
+    cacheRead: "캐시 읽기",
+    output: "출력",
+    refresh: "새로고침",
+    refreshing: "새로고침 중...",
+    loading: "토큰 사용량 불러오는 중...",
+    empty: "토큰 사용량 데이터 없음",
+    unavailable: "이 호스트에서 토큰 사용량 원격 측정을 사용할 수 없습니다",
+    hostUpgradeRequired: "토큰 사용량을 보려면 호스트 데몬을 업데이트하세요",
+    errorTitle: "토큰 사용량을 불러올 수 없습니다",
+    retry: "다시 시도",
+  },
 };

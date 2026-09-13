@@ -2837,4 +2837,18 @@ export const zhCN: TranslationResources = {
     trendLastMinute: "过去 60 秒",
     selectHost: "选择主机",
   },
+  tokenUsage: {
+    title: "Token 使用量",
+    input: "输入",
+    cacheRead: "缓存读取",
+    output: "输出",
+    refresh: "刷新",
+    refreshing: "刷新中...",
+    loading: "正在加载 Token 使用量...",
+    empty: "暂无 Token 使用量数据",
+    unavailable: "此主机暂不支持 Token 使用量遥测",
+    hostUpgradeRequired: "请更新主机守护程序以查看 Token 使用量",
+    errorTitle: "无法加载 Token 使用量",
+    retry: "重试",
+  },
 };

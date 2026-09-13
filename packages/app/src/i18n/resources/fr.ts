@@ -2945,4 +2945,18 @@ export const fr: TranslationResources = {
     trendLastMinute: "60 dernières secondes",
     selectHost: "Sélectionner l'hôte",
   },
+  tokenUsage: {
+    title: "Utilisation des jetons",
+    input: "Entrée",
+    cacheRead: "Lecture du cache",
+    output: "Sortie",
+    refresh: "Actualiser",
+    refreshing: "Actualisation...",
+    loading: "Chargement de l'utilisation des jetons...",
+    empty: "Aucune donnée d'utilisation des jetons",
+    unavailable: "Télémétrie d'utilisation des jetons indisponible sur cet hôte",
+    hostUpgradeRequired: "Mettez à jour le démon hôte pour afficher l'utilisation des jetons",
+    errorTitle: "Impossible de charger l'utilisation des jetons",
+    retry: "Réessayer",
+  },
 };

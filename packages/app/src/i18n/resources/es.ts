@@ -2936,4 +2936,18 @@ export const es: TranslationResources = {
     trendLastMinute: "Últimos 60 segundos",
     selectHost: "Seleccionar host",
   },
+  tokenUsage: {
+    title: "Uso de tokens",
+    input: "Entrada",
+    cacheRead: "Lectura de caché",
+    output: "Salida",
+    refresh: "Actualizar",
+    refreshing: "Actualizando...",
+    loading: "Cargando uso de tokens...",
+    empty: "Sin datos de uso de tokens",
+    unavailable: "Telemetría de uso de tokens no disponible en este host",
+    hostUpgradeRequired: "Actualiza el daemon del host para ver el uso de tokens",
+    errorTitle: "No se puede cargar el uso de tokens",
+    retry: "Reintentar",
+  },
 };

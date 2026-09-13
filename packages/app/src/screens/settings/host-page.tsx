@@ -57,6 +57,7 @@ import {
 } from "@/runtime/host-runtime";
 import { ProvidersSection } from "@/screens/settings/providers-section";
 import { ProviderUsageSettingsSection } from "@/provider-usage/settings-section";
+import { TokenUsageSettingsSection } from "@/token-usage/settings-section";
 import { useProviderUsage } from "@/provider-usage/use-provider-usage";
 import { HostAppearanceSection } from "@/screens/settings/host-appearance-section";
 import { HostWebPushSection } from "@/screens/settings/host-web-push-section";
@@ -342,6 +343,7 @@ export function HostUsagePage({ serverId }: { serverId: string }) {
 
   return (
     <View>
+      <TokenUsageSettingsSection serverId={serverId} />
       <ProviderUsageSettingsSection
         view={providerUsageView}
         onRefresh={handleRefresh}

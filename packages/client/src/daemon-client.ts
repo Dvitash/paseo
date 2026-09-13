@@ -26,6 +26,7 @@ import {
   type ServerInfoStatusPayload,
   type WebPushSubscription,
   type HostPerformanceSnapshot,
+  type HostTokenUsageSnapshot,
 } from "@getpaseo/protocol/messages";
 import { validateWSOutboundMessage } from "@getpaseo/protocol/validation/ws-outbound";
 import type {
@@ -5110,6 +5111,22 @@ export class DaemonClient {
         timeout: options?.timeout,
         message: {
           type: "host.performance.get_snapshot.request",
+        },
+      });
+    return payload.snapshot;
+  }
+  async getHostTokenUsageSnapshot(options?: {
+    requestId?: string;
+    timeout?: number;
+    force?: boolean;
+  }): Promise<HostTokenUsageSnapshot> {
+    const payload =
+      await this.sendNamespacedCorrelatedSessionRequest<"host.token_usage.get_snapshot.response">({
+        requestId: options?.requestId,
+        timeout: options?.timeout,
+        message: {
+          type: "host.token_usage.get_snapshot.request",
+          force: options?.force,
         },
       });
     return payload.snapshot;

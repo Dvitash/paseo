@@ -41,6 +41,13 @@ export type {
   HostPerformanceSample,
   HostPerformanceSnapshot,
 } from "@getpaseo/protocol/host-performance";
+export type {
+  HostTokenUsageGetSnapshotRequest,
+  HostTokenUsageGetSnapshotResponse,
+  HostTokenUsageRangeItem,
+  HostTokenUsageRanges,
+  HostTokenUsageSnapshot,
+} from "@getpaseo/protocol/host-token-usage";
 import {
   createTerminalActions,
   type PaseoTerminalActions,

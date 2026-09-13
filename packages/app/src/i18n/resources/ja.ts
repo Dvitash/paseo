@@ -2900,4 +2900,18 @@ export const ja: TranslationResources = {
     trendLastMinute: "過去60秒間",
     selectHost: "ホストを選択",
   },
+  tokenUsage: {
+    title: "トークン使用量",
+    input: "入力",
+    cacheRead: "キャッシュ読み取り",
+    output: "出力",
+    refresh: "更新",
+    refreshing: "更新中...",
+    loading: "トークン使用量を読み込み中...",
+    empty: "トークン使用量データがありません",
+    unavailable: "このホストではトークン使用量テレメトリを利用できません",
+    hostUpgradeRequired: "トークン使用量を表示するにはホストデーモンを更新してください",
+    errorTitle: "トークン使用量を読み込めません",
+    retry: "再試行",
+  },
 } as const;

@@ -66,6 +66,30 @@ export {
   type HostPerformanceSnapshot,
 };
 import {
+  HostTokenUsageGetSnapshotRequestSchema,
+  HostTokenUsageGetSnapshotResponseSchema,
+  HostTokenUsageRangeItemSchema,
+  HostTokenUsageRangesSchema,
+  HostTokenUsageSnapshotSchema,
+  type HostTokenUsageGetSnapshotRequest,
+  type HostTokenUsageGetSnapshotResponse,
+  type HostTokenUsageRangeItem,
+  type HostTokenUsageRanges,
+  type HostTokenUsageSnapshot,
+} from "./host-token-usage.js";
+export {
+  HostTokenUsageGetSnapshotRequestSchema,
+  HostTokenUsageGetSnapshotResponseSchema,
+  HostTokenUsageRangeItemSchema,
+  HostTokenUsageRangesSchema,
+  HostTokenUsageSnapshotSchema,
+  type HostTokenUsageGetSnapshotRequest,
+  type HostTokenUsageGetSnapshotResponse,
+  type HostTokenUsageRangeItem,
+  type HostTokenUsageRanges,
+  type HostTokenUsageSnapshot,
+};
+import {
   SideChatGetRequestSchema,
   SideChatSendRequestSchema,
   SideChatStopRequestSchema,
@@ -3283,6 +3307,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   HubManagementDaemonPermissionsUpdateRequestSchema,
   DiagnosticsRequestSchema,
   HostPerformanceGetSnapshotRequestSchema,
+  HostTokenUsageGetSnapshotRequestSchema,
   PluginCatalogGetRequestSchema,
   PluginListRequestSchema,
   PluginLogsGetRequestSchema,
@@ -3779,6 +3804,8 @@ export const ServerInfoStatusPayloadSchema = z
         dictationConfig: z.boolean().optional(),
         webPush: z.boolean().optional(),
         hostPerformance: z.boolean().optional(),
+        // COMPAT(hostTokenUsage): added in v0.8.0-beta.1, remove gate after 2027-03-13.
+        hostTokenUsage: z.boolean().optional(),
       })
       .optional(),
   })
@@ -6685,6 +6712,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   PushWebUnsubscribeResponseSchema,
   PushWebTestResponseSchema,
   HostPerformanceGetSnapshotResponseSchema,
+  HostTokenUsageGetSnapshotResponseSchema,
   RpcErrorMessageSchema,
   ArtifactMessageSchema,
   AgentUpdateMessageSchema,

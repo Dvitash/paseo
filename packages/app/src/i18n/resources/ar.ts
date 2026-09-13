@@ -2871,4 +2871,18 @@ export const ar: TranslationResources = {
     trendLastMinute: "آخر 60 ثانية",
     selectHost: "تحديد المضيف",
   },
+  tokenUsage: {
+    title: "استخدام الرموز",
+    input: "إدخال",
+    cacheRead: "قراءة الذاكرة المؤقتة",
+    output: "إخراج",
+    refresh: "تحديث",
+    refreshing: "جارٍ التحديث...",
+    loading: "جارٍ تحميل استخدام الرموز...",
+    empty: "لا توجد بيانات استخدام الرموز",
+    unavailable: "قياس استخدام الرموز غير متوفر على هذا المضيف",
+    hostUpgradeRequired: "قم بتحديث برنامج المضيف لعرض استخدام الرموز",
+    errorTitle: "تعذر تحميل استخدام الرموز",
+    retry: "إعادة المحاولة",
+  },
 };

@@ -2918,4 +2918,18 @@ export const ptBR: TranslationResources = {
     trendLastMinute: "Últimos 60 segundos",
     selectHost: "Selecionar host",
   },
+  tokenUsage: {
+    title: "Uso de tokens",
+    input: "Entrada",
+    cacheRead: "Leitura do cache",
+    output: "Saída",
+    refresh: "Atualizar",
+    refreshing: "Atualizando...",
+    loading: "Carregando uso de tokens...",
+    empty: "Sem dados de uso de tokens",
+    unavailable: "Telemetria de uso de tokens indisponível neste host",
+    hostUpgradeRequired: "Atualize o daemon do host para visualizar o uso de tokens",
+    errorTitle: "Não foi possível carregar o uso de tokens",
+    retry: "Tentar novamente",
+  },
 };
