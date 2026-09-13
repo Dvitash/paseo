@@ -1,6 +1,5 @@
 import React, { useMemo, type CSSProperties } from "react";
 import { renderToString } from "katex";
-import "katex/dist/katex.min.css";
 import type { MathProps } from "./types";
 
 const INLINE_MATH_STYLE: CSSProperties = {
