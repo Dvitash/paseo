@@ -109,11 +109,18 @@ class FakeDaemonClient {
     });
   }
 
-  ensureConnected(): void {
+  private ensureConnectedOutcome = true;
+
+  setEnsureConnectedOutcome(outcome: boolean): void {
+    this.ensureConnectedOutcome = outcome;
+  }
+
+  ensureConnected(): Promise<boolean> {
     this.ensureConnectedCalls += 1;
     if (this.state.status !== "connected") {
       this.setConnectionState({ status: "connected" });
     }
+    return Promise.resolve(this.ensureConnectedOutcome);
   }
 
   getConnectionState(): ConnectionState {
@@ -2012,6 +2019,119 @@ describe("HostRuntimeStore", () => {
     queryClient.removeQueries({ queryKey: configKey });
     store.syncHosts([]);
     useSessionStore.getState().clearSession(host.serverId);
+  });
+
+  it("gates foreground resume refresh per host behind connection verification", async () => {
+    const healthyHost = makeHost({
+      serverId: "srv_resume_healthy",
+      connections: [{ id: "direct:lan:6767", type: "directTcp", endpoint: "lan:6767" }],
+    });
+    const staleHost = makeHost({
+      serverId: "srv_resume_stale",
+      connections: [
+        {
+          id: "direct:lan:6768",
+          type: "directTcp",
+          endpoint: "lan:6768",
+        },
+      ],
+    });
+    const healthyClient = new FakeDaemonClient();
+    healthyClient.setConnectionState({ status: "connected" });
+    const staleClient = new FakeDaemonClient();
+    staleClient.setConnectionState({ status: "connected" });
+    const clientsByServerId = new Map<string, FakeDaemonClient>([
+      [healthyHost.serverId, healthyClient],
+      [staleHost.serverId, staleClient],
+    ]);
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: ({ host }) =>
+          (clientsByServerId.get(host.serverId) ??
+            new FakeDaemonClient()) as unknown as DaemonClient,
+        connectToDaemon: async ({ host: hostProfile }) => ({
+          client: (clientsByServerId.get(hostProfile.serverId) ??
+            new FakeDaemonClient()) as unknown as DaemonClient,
+          serverId: hostProfile.serverId,
+          hostname: hostProfile.label ?? null,
+        }),
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    for (const host of [healthyHost, staleHost]) {
+      useSessionStore
+        .getState()
+        .initializeSession(
+          host.serverId,
+          clientsByServerId.get(host.serverId)! as unknown as DaemonClient,
+          1,
+        );
+      useSessionStore.getState().updateSessionServerInfo(host.serverId, {
+        serverId: host.serverId,
+        hostname: null,
+        version: "test",
+        features: { workspaceMultiplicity: false },
+      });
+    }
+    store.syncHosts([healthyHost, staleHost]);
+    await waitForHostOnline(store, healthyHost.serverId);
+    await waitForHostOnline(store, staleHost.serverId);
+
+    const releaseDemand = store.acquireDirectoryDemand(healthyHost.serverId);
+    await healthyClient.waitForFetches(1);
+    store.acquireDirectoryDemand(staleHost.serverId);
+    await staleClient.waitForFetches(1);
+    await vi.waitFor(() => {
+      expect(store.getSnapshot(healthyHost.serverId)?.agentDirectoryStatus).toBe("ready");
+      expect(store.getSnapshot(staleHost.serverId)?.agentDirectoryStatus).toBe("ready");
+    });
+
+    healthyClient.fetchAgentsResponses.push(
+      makeFetchAgentsPayload({
+        entries: [
+          makeFetchAgentsEntry({
+            id: "agent-resumed-while-healthy",
+            cwd: "/tmp/resume",
+            updatedAt: "2026-09-12T10:00:00.000Z",
+          }),
+        ],
+      }),
+    );
+    staleClient.fetchAgentsResponses.push(
+      makeFetchAgentsPayload({
+        entries: [
+          makeFetchAgentsEntry({
+            id: "agent-must-not-refresh",
+            cwd: "/tmp/resume",
+            updatedAt: "2026-09-12T10:00:00.000Z",
+          }),
+        ],
+      }),
+    );
+
+    store.setAppVisible(false);
+    staleClient.setEnsureConnectedOutcome(false);
+    store.setAppVisible(true);
+
+    await vi.waitFor(() => {
+      expect(
+        useSessionStore
+          .getState()
+          .sessions[healthyHost.serverId]?.agents.has("agent-resumed-while-healthy"),
+      ).toBe(true);
+    });
+    await vi.waitFor(() => {
+      expect(staleClient.ensureConnectedCalls).toBe(1);
+    });
+    expect(
+      useSessionStore.getState().sessions[staleHost.serverId]?.agents.has("agent-must-not-refresh"),
+    ).toBe(false);
+
+    releaseDemand();
+    store.syncHosts([]);
+    useSessionStore.getState().clearSession(healthyHost.serverId);
+    useSessionStore.getState().clearSession(staleHost.serverId);
   });
 
   it("owns the session replica for the registered host lifecycle", async () => {

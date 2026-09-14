@@ -482,7 +482,7 @@ export interface PaseoApi {
 export interface PaseoClient extends PaseoApi {
   connect(): Promise<void>;
   close(): Promise<void>;
-  ensureConnected(): void;
+  ensureConnected(): Promise<boolean>;
   getConnectionState(): ConnectionState;
 }
 

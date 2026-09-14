@@ -334,6 +334,8 @@ export interface DaemonClientConfig {
   webSocketFactory?: WebSocketFactory;
   logger?: Logger;
   connectTimeoutMs?: number;
+  /** Foreground health-check budget for ensureConnected verification. */
+  ensureConnectedHealthCheckTimeoutMs?: number;
   e2ee?: {
     enabled?: boolean;
     daemonPublicKeyB64?: string;
@@ -952,7 +954,7 @@ const DEFAULT_LIVENESS_TIMEOUT_MS = 5000;
 const LIVENESS_HEARTBEAT_INTERVAL_MS = 10_000;
 const LIVENESS_HEARTBEAT_TIMEOUT_MS = 15_000;
 const LIVENESS_FAILURE_RECONNECT_THRESHOLD = 2;
-export const ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS = 5000;
+export const ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS = 2_000;
 
 /** Default timeout for waiting for connection before sending queued messages */
 const DEFAULT_SEND_QUEUE_TIMEOUT_MS = DEFAULT_SESSION_RPC_TIMEOUT_MS;
@@ -1154,7 +1156,14 @@ export class DaemonClient {
   private livenessHeartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLivenessRttMs: number | null = null;
   private consecutiveLivenessFailures = 0;
-  private activeEnsureConnectedCheck: DaemonTransport | null = null;
+  private activeEnsureConnectedCheck: {
+    transport: DaemonTransport;
+    token: number;
+    promise: Promise<boolean>;
+    startedAt: number;
+  } | null = null;
+  private ensureConnectedCheckToken = 0;
+  private connectDeadlineAt: number | null = null;
 
   constructor(private config: DaemonClientConfig) {
     this.logger = config.logger ?? consoleLogger;
@@ -1290,6 +1299,10 @@ export class DaemonClient {
       );
       this.resetConnectTimeout();
       const timeoutMs = Math.max(1, this.config.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
+      // Deadline mirror of the connect timeout: a handshake frozen past it by app
+      // suspension must not pin a foreground verification that arrives before the
+      // overdue timer fires.
+      this.connectDeadlineAt = perfNow() + timeoutMs;
       this.connectTimeout = setTimeout(() => {
         if (this.connectionState.status !== "connecting") {
           return;
@@ -1435,44 +1448,110 @@ export class DaemonClient {
     );
   }
 
-  ensureConnected(): void {
+  /**
+   * Foreground connectivity verification. Resolves `true` when a connected transport
+   * answered a fresh ping correlated to this call; `false` when the transport failed
+   * verification (it is retired and a reconnect started) or when a connection attempt
+   * is still in flight. Never rejects.
+   *
+   * A check is only shared while it is younger than its own budget: an in-flight check
+   * inherited from before a suspension must not satisfy a new foreground verification,
+   * so a stale one is replaced instead of coalesced.
+   */
+  ensureConnected(): Promise<boolean> {
     if (this.connectionState.status === "disposed") {
-      return;
+      return Promise.resolve(false);
     }
     if (!this.shouldReconnect) {
       this.shouldReconnect = true;
     }
     if (this.connectionState.status === "connecting") {
-      return;
+      if (this.connectDeadlineAt != null && perfNow() > this.connectDeadlineAt) {
+        // A handshake started before suspension cannot pin foreground recovery.
+        this.disposeTransport(1001, "Connection attempt expired");
+        this.scheduleReconnect({
+          reason: "Connection attempt expired",
+          event: "CONNECT_ATTEMPT_EXPIRED",
+          reasonCode: "connect_timeout",
+        });
+      } else if (this.connectPromise) {
+        return this.connectPromise
+          .then(() => this.connectionState.status === "connected")
+          .catch(() => false);
+      } else {
+        return Promise.resolve(false);
+      }
     }
     if (this.connectionState.status === "connected") {
       const currentTransport = this.transport;
-      if (!currentTransport || this.activeEnsureConnectedCheck === currentTransport) {
-        return;
+      if (!currentTransport) {
+        return Promise.resolve(false);
       }
-      this.activeEnsureConnectedCheck = currentTransport;
-      void this.verifyConnectedTransportHealth(currentTransport).catch(() => {});
-      return;
+      const active = this.activeEnsureConnectedCheck;
+      const healthCheckTimeoutMs = Math.max(
+        1,
+        this.config.ensureConnectedHealthCheckTimeoutMs ?? ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS,
+      );
+      // Coalesce only a young check. One inherited from before a suspension has
+      // exhausted its budget, so it cannot prove this foreground attempt reached the
+      // host; replace it instead of sharing its outcome.
+      if (
+        active &&
+        active.transport === currentTransport &&
+        perfNow() - active.startedAt <= healthCheckTimeoutMs
+      ) {
+        return active.promise;
+      }
+      const token = ++this.ensureConnectedCheckToken;
+      const promise = this.verifyConnectedTransportHealth(currentTransport, token);
+      this.activeEnsureConnectedCheck = {
+        transport: currentTransport,
+        token,
+        promise,
+        startedAt: perfNow(),
+      };
+      return promise;
     }
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
     if (this.connectPromise) {
+      const pendingConnect = this.connectPromise;
       this.attemptConnect();
-      return;
+      return pendingConnect
+        .then(() => this.connectionState.status === "connected")
+        .catch(() => false);
     }
-    void this.connect().catch(() => {});
+    return this.connect()
+      .then(() => this.connectionState.status === "connected")
+      .catch(() => false);
   }
 
-  private async verifyConnectedTransportHealth(currentTransport: DaemonTransport): Promise<void> {
+  private async verifyConnectedTransportHealth(
+    currentTransport: DaemonTransport,
+    token: number,
+  ): Promise<boolean> {
     // A correlated reply proves this foreground check reached the host; an old
     // heartbeat pong buffered while the app was suspended must not satisfy it.
     try {
-      await this.ping({ timeoutMs: ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS });
+      await this.ping({
+        timeoutMs: Math.max(
+          1,
+          this.config.ensureConnectedHealthCheckTimeoutMs ??
+            ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS,
+        ),
+      });
+      return this.connectionState.status === "connected" && this.transport === currentTransport;
     } catch (error) {
-      if (this.connectionState.status !== "connected" || this.transport !== currentTransport) {
-        return;
+      if (
+        this.connectionState.status !== "connected" ||
+        this.transport !== currentTransport ||
+        // A superseded check (a newer foreground verification started) may not retire
+        // the transport or its replacement.
+        this.activeEnsureConnectedCheck?.token !== token
+      ) {
+        return false;
       }
       const reason =
         error instanceof Error && error.message.trim().length > 0
@@ -1484,9 +1563,10 @@ export class DaemonClient {
         event: "HEALTH_CHECK_FAILED",
         reasonCode: "health_check_failed",
       });
-      this.ensureConnected();
+      void this.ensureConnected();
+      return false;
     } finally {
-      if (this.activeEnsureConnectedCheck === currentTransport) {
+      if (this.activeEnsureConnectedCheck?.token === token) {
         this.activeEnsureConnectedCheck = null;
       }
     }

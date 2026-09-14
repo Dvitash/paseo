@@ -747,7 +747,7 @@ test("backgrounding preserves the hot membership and resumes only the visible ag
   world.expectNoPendingFetch();
 });
 
-test("resuming during an in-flight catch-up parks exactly one follow-up tail", async () => {
+test("resuming during an in-flight catch-up supersedes it with a fresh tail", async () => {
   const world = new TimelineWorld();
   world.sync.setConnected(true);
   world.sync.replaceVisibleAgentIds("workspace", ["agent-a"]);
@@ -760,15 +760,15 @@ test("resuming during an in-flight catch-up parks exactly one follow-up tail", a
   world.sync.setActive(false);
   world.sync.setActive(true);
 
-  // The pre-background request may have snapshotted before inactivity, so it is not reused.
-  world.expectNoPendingFetch();
-  world.expectNoPendingMembership();
+  // The resume tail starts immediately instead of parking behind the pre-background read.
+  const resumed = await world.nextFetch("agent-a");
+  expect(resumed.request).toEqual({ direction: "tail", limit: 40, projection: "projected" });
 
+  // The pre-suspension response cannot satisfy the resume or apply twice.
   inFlight.respond({ hasNewer: false });
+  expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("pending");
 
-  const followUp = await world.nextFetch("agent-a");
-  expect(followUp.request).toEqual({ direction: "tail", limit: 40, projection: "projected" });
-  followUp.respond({ hasNewer: false });
+  resumed.respond({ hasNewer: false });
   await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("agent-a")).toBe("ready"));
   world.expectNoPendingFetch();
 });

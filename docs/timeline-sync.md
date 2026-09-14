@@ -75,6 +75,9 @@ Opening, reconnecting, or revisiting after a selective-delivery coverage gap fet
 page.
 Focus alone does not mutate timeline state; the tail response is compared with the local
 authoritative range first.
+A resume supersedes a catch-up still in flight from before the suspension instead of queueing
+behind it — a hung pre-suspension read must not pin recovery — and the generation guard discards the
+stale read's response when it settles.
 
 - The same epoch and `window.maxSeq` is an exact display no-op. The app advances synchronization
   bookkeeping without replacing timeline arrays, preserving an upward-scrolled viewport.

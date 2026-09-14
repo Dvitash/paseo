@@ -722,8 +722,8 @@ export class HostRuntimeController {
     await this.runProbeCycleNow();
   }
 
-  ensureConnected(): void {
-    this.activeClient?.ensureConnected();
+  ensureConnected(): Promise<boolean> {
+    return this.activeClient?.ensureConnected().catch(() => false) ?? Promise.resolve(false);
   }
 
   markAgentDirectorySyncLoading(): void {
@@ -1387,6 +1387,7 @@ export class HostRuntimeStore {
   private hostListVersion = 0;
   private hostRegistryLoaded = false;
   private appVisible = true;
+  private foregroundResumeGeneration = 0;
   private hosts: HostProfile[] = [];
   private hostAppearanceMutationTail: Promise<void> = Promise.resolve();
   private hostRegistryStatus: HostRegistryStatus = "loading";
@@ -2330,7 +2331,7 @@ export class HostRuntimeStore {
 
   ensureConnectedAll(): void {
     for (const controller of this.controllers.values()) {
-      controller.ensureConnected();
+      void controller.ensureConnected();
     }
   }
 
@@ -2344,16 +2345,41 @@ export class HostRuntimeStore {
       return;
     }
 
-    this.ensureConnectedAll();
-    if (!resumed) return;
-    for (const [serverId, controller] of this.controllers) {
-      if (controller.getSnapshot().connectionStatus !== "online") continue;
-      void this.directorySyncByServer
-        .get(serverId)
-        ?.refreshDemand()
-        .catch(() => undefined);
-      this.invalidateHostQueries(serverId);
-    }
+    const resumeGeneration = ++this.foregroundResumeGeneration;
+    const resumedAt = Date.now();
+    // Each host verifies independently: one unreachable host must not block the rest,
+    // and fresh requests wait for the transport they will use to be proven usable.
+    void Promise.all(
+      Array.from(this.controllers, async ([serverId, controller]) => {
+        const verified = await controller.ensureConnected();
+        const snapshot = controller.getSnapshot();
+        const elapsedMs = Date.now() - resumedAt;
+        if (!resumed || !verified) {
+          console.debug("[HostRuntime] foreground connection verification", {
+            serverId,
+            resumeGeneration,
+            verified,
+            connectionStatus: snapshot.connectionStatus,
+            connectionEpoch: snapshot.connectionEpoch,
+            clientGeneration: snapshot.clientGeneration,
+            elapsedMs,
+          });
+          return;
+        }
+        console.debug("[HostRuntime] foreground host verified, refreshing", {
+          serverId,
+          resumeGeneration,
+          connectionEpoch: snapshot.connectionEpoch,
+          clientGeneration: snapshot.clientGeneration,
+          elapsedMs,
+        });
+        void this.directorySyncByServer
+          .get(serverId)
+          ?.refreshDemand()
+          .catch(() => undefined);
+        this.invalidateHostQueries(serverId);
+      }),
+    ).catch(() => undefined);
   }
 
   runProbeCycleNow(serverId?: string): Promise<void> {

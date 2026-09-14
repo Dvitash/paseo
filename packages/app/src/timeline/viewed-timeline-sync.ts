@@ -537,8 +537,10 @@ function decideCatchUp(input: {
   resume?: boolean;
 }): CatchUpDecision {
   if (!input.current) return "replace";
-  // A request started before suspension cannot cover resume; queue a fresh tail behind it.
-  if (input.resume) return input.current.status === "running" ? "keep-and-park" : "replace";
+  // A request started before suspension cannot cover resume, and parking the resume
+  // tail behind it lets a hung pre-suspension read pin recovery. Supersede it: the
+  // generation guard discards the stale read's response when it settles.
+  if (input.resume) return "replace";
   if (input.supersede) {
     if (
       input.current.status === "running" &&

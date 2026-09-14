@@ -1313,7 +1313,7 @@ test("stale timeout from a closed or replaced transport does not dispose newer c
 
     client.ensureConnected();
 
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS / 2);
 
     first.triggerClose({ code: 1006, reason: "network drop" });
     expect(client.getConnectionState().status).toBe("disconnected");
@@ -1357,7 +1357,7 @@ test("stale timeout after client.close() does not trigger reconnect", async () =
 
     client.ensureConnected();
 
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS / 2);
 
     await client.close();
     expect(client.getConnectionState().status).toBe("disposed");
@@ -1419,6 +1419,220 @@ test("subsequent retries follow backoff when network remains unavailable after s
   }
 });
 
+test("ensureConnected resolves true on a fresh correlated pong and preserves the transport", async () => {
+  useHeartbeatClock();
+  try {
+    const mock = createMockTransport({ autoAnswerSessionPing: true });
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_await_healthy",
+      logger: noopLogger,
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+
+    const initialConnect = client.connect();
+    mock.triggerOpen();
+    await initialConnect;
+    expect(client.getConnectionState().status).toBe("connected");
+
+    await expect(client.ensureConnected()).resolves.toBe(true);
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(mock.closeCalls).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ensureConnected resolves false and retires a transport that fails the foreground check", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport({ autoAnswerSessionPing: true });
+    const transports = [first, second];
+    let transportIndex = 0;
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_await_unhealthy",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+    clients.push(client);
+
+    const initialConnect = client.connect();
+    first.triggerOpen();
+    await initialConnect;
+
+    const verification = client.ensureConnected();
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+    await expect(verification).resolves.toBe(false);
+    expect(first.closeCalls).toHaveLength(1);
+    expect(client.getConnectionState().status).toBe("connecting");
+    expect(transportIndex).toBe(2);
+
+    second.triggerOpen();
+    expect(client.getConnectionState().status).toBe("connected");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("an expired in-flight handshake cannot pin a foreground verification", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport({ autoAnswerSessionPing: true });
+    const transports = [first, second];
+    let transportIndex = 0;
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_expired_handshake",
+      logger: noopLogger,
+      connectTimeoutMs: 1_000,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+    clients.push(client);
+
+    void client.connect().catch(() => undefined);
+    expect(client.getConnectionState().status).toBe("connecting");
+
+    // A foreground verification arriving while the handshake is young waits for it.
+    const pendingVerification = client.ensureConnected();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(client.getConnectionState().status).toBe("connecting");
+
+    // The handshake deadline passes: the frozen attempt is retired and recovery
+    // proceeds on a fresh transport instead of waiting on the stale one.
+    await vi.advanceTimersByTimeAsync(600);
+    expect(client.getConnectionState().status).toBe("disconnected");
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(transportIndex).toBe(2);
+
+    second.triggerOpen();
+    await expect(pendingVerification).resolves.toBe(true);
+    expect(client.getConnectionState().status).toBe("connected");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a superseded foreground check cannot retire the transport its replacement verified", async () => {
+  useHeartbeatClock();
+  try {
+    const first = createMockTransport();
+    const second = createMockTransport({ autoAnswerSessionPing: true });
+    const transports = [first, second];
+    let transportIndex = 0;
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_superseded_check",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => {
+        const t = transports[transportIndex];
+        if (!t) throw new Error("unexpected extra reconnect");
+        transportIndex += 1;
+        return t.transport;
+      },
+    });
+    clients.push(client);
+
+    const initialConnect = client.connect();
+    first.triggerOpen();
+    await initialConnect;
+
+    const staleCheck = client.ensureConnected();
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+    expect(first.closeCalls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(transportIndex).toBe(2);
+
+    // Replacement transport verifies; the stale check settles without retiring it.
+    second.triggerOpen();
+    await expect(client.ensureConnected()).resolves.toBe(true);
+    expect(client.getConnectionState().status).toBe("connected");
+    await expect(staleCheck).resolves.toBe(false);
+    expect(second.closeCalls).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a pre-suspension check still pending on return cannot satisfy a new foreground verification", async () => {
+  useHeartbeatClock();
+  let fakeNow = 10_000;
+  const perfSpy = vi.spyOn(performance, "now").mockImplementation(() => fakeNow);
+  try {
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "clsk_frozen_check",
+      logger: noopLogger,
+      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+
+    const initialConnect = client.connect();
+    mock.triggerOpen();
+    await initialConnect;
+
+    // The check starts before the app is suspended.
+    const suspendedCheck = client.ensureConnected();
+    mock.sent.length = 0;
+
+    // Suspension freezes timers while the clock advances past the check's budget.
+    fakeNow += 60_000;
+
+    // The frozen check is stale: the foreground call starts a fresh correlated ping
+    // instead of sharing the suspended check's outcome.
+    const resumedVerification = client.ensureConnected();
+    const sessionPings = mock.sent.filter((data) => {
+      const parsed = z
+        .object({ type: z.string(), message: z.object({ type: z.string() }) })
+        .safeParse(JSON.parse(assertStr(data)));
+      return (
+        parsed.success && parsed.data.type === "session" && parsed.data.message.type === "ping"
+      );
+    });
+    expect(sessionPings).toHaveLength(1);
+
+    // The fresh correlated pong proves the surviving transport; the frozen check's
+    // overdue timeout settles without retiring the transport it can no longer speak for.
+    const freshPing = parseSentFrame(mock.sent.at(-1));
+    mock.triggerMessage(
+      wrapSessionMessage({
+        type: "pong",
+        payload: {
+          requestId: freshPing.requestId,
+          clientSentAt: Date.now(),
+          serverReceivedAt: Date.now(),
+          serverSentAt: Date.now(),
+        },
+      }),
+    );
+    await expect(resumedVerification).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(ENSURE_CONNECTED_HEALTH_CHECK_TIMEOUT_MS);
+    await expect(suspendedCheck).resolves.toBe(false);
+    expect(client.getConnectionState().status).toBe("connected");
+    expect(mock.closeCalls).toHaveLength(0);
+  } finally {
+    perfSpy.mockRestore();
+    vi.useRealTimers();
+  }
+});
 test("keeps the transport connected when a session RPC ping times out", async () => {
   const logger = createMockLogger();
   const mock = createMockTransport();

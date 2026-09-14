@@ -4,22 +4,14 @@ import { AppState } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useClientActivity } from "@/hooks/use-client-activity";
-import { useAppVisible } from "@/hooks/use-app-visible";
 import { startPushNotifications } from "@/push-notifications";
-import {
-  createSetAgentInitializing,
-  refreshAgentInitializationTimeout,
-} from "@/hooks/use-agent-initialization";
 import type { StreamItem } from "@/types/stream";
-import { deriveAgentStreamTurnLiveness } from "@/timeline/session-stream-reducers";
-import { planTimelineTailFetch } from "@/timeline/timeline-sync-plan";
 import { requestTimelineReplacement } from "@/timeline/timeline-replacement";
+import { deriveAgentStreamTurnLiveness } from "@/timeline/session-stream-reducers";
 import {
-  consumeForcedTimelineTailReplacement,
-  type TimelineDeliveryMode,
-  type TimelineResponsePayload,
-  type ViewedTimelineOwner,
-} from "@/timeline/viewed-timeline-sync";
+  getTimelineDeliveryMode,
+  useViewedTimelineOwner,
+} from "@/contexts/use-viewed-timeline-owner";
 import type { AgentAttachment, SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import { parseServerInfoStatusPayload } from "@getpaseo/protocol/messages";
 import {
@@ -36,21 +28,11 @@ import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import { getHostRuntimeStore, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useVoiceAudioEngineOptional, useVoiceRuntimeOptional } from "@/contexts/voice-context";
 import type { AudioPlaybackSource } from "@/voice/audio-engine-types";
-import {
-  selectAgentTimelineState,
-  useSessionStore,
-  type SessionState,
-} from "@/stores/session-store";
+import { useSessionStore, type SessionState } from "@/stores/session-store";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { sendOsNotification } from "@/utils/os-notifications";
 import { signalAgentAttentionAlert } from "@/utils/attention-alerts";
-import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
-import {
-  getInitKey,
-  getInitDeferred,
-  createInitDeferred,
-  rejectInitDeferred,
-} from "@/utils/agent-initialization";
+import { getIsAppActivelyVisible } from "@/utils/app-visibility";
 import { encodeImages } from "@/utils/encode-images";
 import { derivePendingPermissionKey } from "@/utils/agent-snapshots";
 import type { AttachmentMetadata } from "@/attachments/types";
@@ -79,11 +61,6 @@ interface BufferedAudioChunk {
   audio: string;
   format: string;
   id: string;
-}
-
-// COMPAT(selectiveAgentTimeline): added in v0.1.106, remove after 2027-01-12.
-function getTimelineDeliveryMode(selectiveAgentTimeline?: boolean): TimelineDeliveryMode {
-  return selectiveAgentTimeline ? "selective" : "legacy";
 }
 
 function decodeBase64Chunk(base64: string): Uint8Array {
@@ -237,7 +214,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   const flushAgentLastActivity = useSessionStore((state) => state.flushAgentLastActivity);
   const setPendingPermissions = useSessionStore((state) => state.setPendingPermissions);
   const updateSessionServerInfo = useSessionStore((state) => state.updateSessionServerInfo);
-  const setViewedTimelineSync = useSessionStore((state) => state.setViewedTimelineSync);
   const upsertWorkspaceSetupProgress = useWorkspaceSetupStore((state) => state.upsertProgress);
 
   // Track focused agent for heartbeat
@@ -250,11 +226,13 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
   const _sessionStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attentionNotifiedRef = useRef<Map<string, number>>(new Map());
   const appStateRef = useRef(AppState.currentState);
-  const forcedTimelineTailReplacements = useRef(new Set<string>());
-  const viewedTimelineSyncRef = useRef<ViewedTimelineOwner | null>(null);
+  const { viewedTimelineSyncRef, applyTimelineResponse } = useViewedTimelineOwner({
+    serverId,
+    client,
+    isConnected,
+  });
   const audioOutputBuffersRef = useRef<Map<string, BufferedAudioChunk[]>>(new Map());
   const activeAudioGroupsRef = useRef<Set<string>>(new Set());
-  const isAppVisible = useAppVisible();
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
@@ -265,11 +243,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       subscription.remove();
     };
   }, []);
-
-  useEffect(() => {
-    viewedTimelineSyncRef.current?.setActive(isAppVisible);
-  }, [isAppVisible]);
-
   // Client activity tracking (heartbeat, push token registration)
   useClientActivity({
     client,
@@ -407,100 +380,6 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     },
     [serverId, upsertWorkspaceSetupProgress],
   );
-
-  const applyTimelineResponse = useCallback((receivedPayload: TimelineResponsePayload) => {
-    const payload = consumeForcedTimelineTailReplacement(
-      receivedPayload,
-      forcedTimelineTailReplacements.current,
-    );
-    const owner = viewedTimelineSyncRef.current;
-    if (!owner) throw new Error("Viewed timeline owner is unavailable");
-    owner.applyTimelineResponse(payload);
-  }, []);
-
-  useEffect(() => {
-    const setAgentInitializing = createSetAgentInitializing(serverId, setInitializingAgents);
-    const initialDeliveryMode = getTimelineDeliveryMode(
-      client.getLastServerInfoMessage()?.features?.selectiveAgentTimeline,
-    );
-    const sync = getHostRuntimeStore().createViewedTimelineOwner(serverId, {
-      initialDeliveryMode,
-      setSubscription: (agentIds) => client.setAgentTimelineSubscription(agentIds),
-      readCursor: (agentId) => {
-        const timeline = selectAgentTimelineState(
-          useSessionStore.getState().sessions[serverId],
-          agentId,
-        );
-        return timeline.status === "synced" && timeline.range
-          ? { epoch: timeline.range.epoch, endSeq: timeline.range.endSeq }
-          : undefined;
-      },
-      fetchPage: async (agentId, request) => {
-        const session = useSessionStore.getState().sessions[serverId];
-        const initKey = getInitKey(serverId, agentId);
-        const shouldInitialize = selectAgentTimelineState(session, agentId).status !== "synced";
-        if (shouldInitialize) {
-          if (!getInitDeferred(initKey)) {
-            const deferred = createInitDeferred(initKey, request.direction ?? "tail");
-            void deferred.promise.catch(() => undefined);
-          }
-          refreshAgentInitializationTimeout({
-            key: initKey,
-            agentId,
-            setAgentInitializing,
-          });
-          setAgentInitializing(agentId, true);
-        }
-        try {
-          const page = await getHostRuntimeStore().fetchAgentTimeline(serverId, agentId, request);
-          if (shouldInitialize && getInitDeferred(initKey)) {
-            refreshAgentInitializationTimeout({ key: initKey, agentId, setAgentInitializing });
-          }
-          return page;
-        } catch (error) {
-          if (shouldInitialize) {
-            setAgentInitializing(agentId, false);
-            rejectInitDeferred(initKey, error instanceof Error ? error : new Error(String(error)));
-          }
-          throw error;
-        }
-      },
-      fetchLatestTail: async (agentId) => {
-        forcedTimelineTailReplacements.current.add(agentId);
-        try {
-          return await getHostRuntimeStore().fetchAgentTimeline(
-            serverId,
-            agentId,
-            planTimelineTailFetch(),
-          );
-        } finally {
-          forcedTimelineTailReplacements.current.delete(agentId);
-        }
-      },
-      reportError: (error) => {
-        console.warn("[Session] viewed timeline synchronization failed", { serverId, error });
-      },
-      schedule: (task, delayMs) => {
-        const timeout = setTimeout(task, delayMs);
-        return () => clearTimeout(timeout);
-      },
-    });
-    viewedTimelineSyncRef.current = sync;
-    setViewedTimelineSync(serverId, sync);
-    sync.setActive(getIsAppVisible(appStateRef.current));
-
-    return () => {
-      if (viewedTimelineSyncRef.current === sync) {
-        viewedTimelineSyncRef.current = null;
-      }
-      setViewedTimelineSync(serverId, null);
-      sync.dispose();
-    };
-  }, [client, serverId, setInitializingAgents, setViewedTimelineSync]);
-
-  useEffect(() => {
-    viewedTimelineSyncRef.current?.setConnected(isConnected);
-  }, [isConnected]);
 
   // Daemon message handlers - directly update Zustand store
   useEffect(() => {
@@ -787,6 +666,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     client,
     queryClient,
     serverId,
+    viewedTimelineSyncRef,
     setIsPlayingAudio,
     setAgentStreamTail,
     setAgentStreamHead,

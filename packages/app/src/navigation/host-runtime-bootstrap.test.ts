@@ -1,3 +1,6 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { describe, expect, it } from "vitest";
 import {
   resolveStartupBlocker,
@@ -403,7 +406,10 @@ describe("host runtime app lifecycle", () => {
       let listener: ((state: "active" | "inactive" | "background") => void) | undefined;
       let subscribed = true;
       const dispose = bindHostRuntimeAppState(
-        { setAppVisible: (visible) => visibility.push(visible) },
+        {
+          setAppVisible: (visible) => visibility.push(visible),
+          ensureConnectedAll: () => undefined,
+        },
         {
           currentState,
           addEventListener: (_event, handler) => {
@@ -426,4 +432,28 @@ describe("host runtime app lifecycle", () => {
       expect(subscribed).toBe(false);
     },
   );
+
+  it("treats network restoration as a reason to verify connections, and stops after dispose", () => {
+    const ensureConnectedCalls: number[] = [];
+    const dispose = bindHostRuntimeAppState(
+      {
+        setAppVisible: () => undefined,
+        ensureConnectedAll: () => {
+          ensureConnectedCalls.push(1);
+        },
+      },
+      {
+        currentState: "active",
+        addEventListener: () => ({ remove: () => {} }),
+      },
+    );
+
+    window.dispatchEvent(new Event("online"));
+    window.dispatchEvent(new Event("online"));
+    expect(ensureConnectedCalls).toHaveLength(2);
+
+    dispose();
+    window.dispatchEvent(new Event("online"));
+    expect(ensureConnectedCalls).toHaveLength(2);
+  });
 });

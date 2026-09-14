@@ -1,4 +1,5 @@
 import type { AppState } from "react-native";
+import { isWeb } from "@/constants/platform";
 import type { ActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import type {
   DaemonStartCondition,
@@ -253,12 +254,24 @@ export function resolveStartupRoute(input: ResolveStartupRouteInput): StartupRou
 }
 
 export function bindHostRuntimeAppState(
-  store: { setAppVisible: (visible: boolean) => void },
+  store: { setAppVisible: (visible: boolean) => void; ensureConnectedAll: () => void },
   appState: Pick<typeof AppState, "currentState" | "addEventListener">,
 ): () => void {
   const subscription = appState.addEventListener("change", (state) => {
     store.setAppVisible(state === "active");
   });
   store.setAppVisible(appState.currentState === "active");
-  return () => subscription.remove();
+  // Network restoration is a reason to attempt recovery, not proof the daemon is
+  // reachable: ensureConnected verifies with a fresh correlated ping before any
+  // refresh is issued.
+  const handleOnline = () => store.ensureConnectedAll();
+  if (isWeb && typeof window !== "undefined") {
+    window.addEventListener("online", handleOnline);
+  }
+  return () => {
+    subscription.remove();
+    if (isWeb && typeof window !== "undefined") {
+      window.removeEventListener("online", handleOnline);
+    }
+  };
 }
