@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useRouter } from "expo-router";
-import { ChevronDown } from "lucide-react-native";
+import { ChevronDown, RefreshCw } from "lucide-react-native";
 import { buildSettingsHostSectionRoute } from "@/utils/host-routes";
 import {
   DropdownMenu,
@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useAppVisible } from "@/hooks/use-app-visible";
@@ -48,7 +49,7 @@ export const SidebarTokenUsageBar = memo(function SidebarTokenUsageBar() {
   const [range, setRange] = useState<TimeRangeKey>("24h");
 
   const isLive = isRetainedPanelActive && isAppVisible && isConnected;
-  const { view } = useTokenUsage(serverId, {
+  const { view, refresh, isRefreshing } = useTokenUsage(serverId, {
     enabled: isRetainedPanelActive && isConnected,
     refetchInterval: isLive ? 60_000 : false,
   });
@@ -64,6 +65,10 @@ export const SidebarTokenUsageBar = memo(function SidebarTokenUsageBar() {
 
   const handleHoverIn = useCallback(() => setIsHovered(true), []);
   const handleHoverOut = useCallback(() => setIsHovered(false), []);
+
+  const handleRefresh = useCallback(() => {
+    void refresh();
+  }, [refresh]);
 
   const rangeMenuItems = useMemo(
     () =>
@@ -123,6 +128,15 @@ export const SidebarTokenUsageBar = memo(function SidebarTokenUsageBar() {
           </Text>
         </TooltipContent>
       </Tooltip>
+      <Button
+        variant="ghost"
+        size="xs"
+        leftIcon={RefreshCw}
+        loading={isRefreshing}
+        onPress={handleRefresh}
+        accessibilityLabel={t("tokenUsage.refresh")}
+        testID="sidebar-token-usage-refresh"
+      />
       <DropdownMenu>
         <DropdownMenuTrigger
           style={styles.rangeTrigger}
