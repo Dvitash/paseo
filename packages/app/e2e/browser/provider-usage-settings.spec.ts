@@ -103,7 +103,8 @@ test.describe("provider usage settings", () => {
     await usageFixture.waitForRequestCount(1);
     const card = page.getByTestId("provider-usage-card");
     await expect(card.getByText("77%")).toBeVisible({ timeout: 10_000 });
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    // The token usage card on the same page also renders a Refresh button.
+    await card.getByRole("button", { name: "Refresh", exact: true }).click();
     await usageFixture.waitForRequestCount(2);
 
     expect(usageFixture.requestCount()).toBe(2);

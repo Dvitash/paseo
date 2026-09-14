@@ -66,7 +66,10 @@ export default defineConfig({
   // so it scans the native files and dies on imports react-native-web has no answer for.
   // Unbundled, the same imports go through the resolver below and land on the web files.
   optimizeDeps: {
-    include: ["react/jsx-runtime"],
+    // jsx-dev-runtime is injected by the automatic JSX transform at render time,
+    // so the entry scan misses it; without it here the optimizer bundles it
+    // mid-run and the reload fails whichever browser test file triggered it.
+    include: ["react/jsx-runtime", "react/jsx-dev-runtime"],
     exclude: ["react-native-reanimated"],
     esbuildOptions: {
       resolveExtensions: [

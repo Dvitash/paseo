@@ -361,8 +361,18 @@ function getTimelineItems(rows: AgentTimelineRow[]): AgentTimelineItem[] {
 // The leading-edge flush emits the first chunk of a burst as its own row. Clients
 // read the projected timeline, where mergeAssistantChunks/mergeReasoningChunks
 // join those contiguous rows back together, so history reads the same either way.
+// The projection also stamps startedAt/endedAt onto tool call rows for the app's
+// wall-clock display; timeline-projection.test.ts owns those assertions, and these
+// tests assert coalescing structure, so strip the stamps before comparing.
+function stripProjectionToolCallStamps(item: AgentTimelineItem): AgentTimelineItem {
+  if (item.type !== "tool_call") return item;
+  return { ...item, startedAt: undefined, endedAt: undefined };
+}
+
 function getProjectedTimelineItems(rows: AgentTimelineRow[]): AgentTimelineItem[] {
-  return projectTimelineRows({ rows, mode: "projected" }).map((entry) => entry.item);
+  return projectTimelineRows({ rows, mode: "projected" }).map((entry) =>
+    stripProjectionToolCallStamps(entry.item),
+  );
 }
 
 function expectContiguousRowSeqs(rows: AgentTimelineRow[], expected: number[]): void {
