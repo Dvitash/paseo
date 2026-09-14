@@ -2853,5 +2853,9 @@ export const zhCN: TranslationResources = {
     hostUpgradeRequired: "请更新主机守护程序以查看 Token 使用量",
     errorTitle: "无法加载 Token 使用量",
     retry: "重试",
+    sidebarInput: "输入",
+    sidebarCacheRead: "缓存",
+    sidebarOutput: "输出",
+    sidebarTooltip: "Token 使用量 · 近 24 小时",
   },
 };

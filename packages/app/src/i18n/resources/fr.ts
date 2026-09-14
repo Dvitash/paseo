@@ -2961,5 +2961,9 @@ export const fr: TranslationResources = {
     hostUpgradeRequired: "Mettez à jour le démon hôte pour afficher l'utilisation des jetons",
     errorTitle: "Impossible de charger l'utilisation des jetons",
     retry: "Réessayer",
+    sidebarInput: "Entr.",
+    sidebarCacheRead: "Cache",
+    sidebarOutput: "Sort.",
+    sidebarTooltip: "Utilisation des jetons · 24 dernières heures",
   },
 };

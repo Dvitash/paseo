@@ -2942,5 +2942,9 @@ export const ru: TranslationResources = {
     hostUpgradeRequired: "Обновите демон хоста для просмотра использования токенов",
     errorTitle: "Не удалось загрузить данные об использовании токенов",
     retry: "Повторить",
+    sidebarInput: "Вход",
+    sidebarCacheRead: "Кэш",
+    sidebarOutput: "Выход",
+    sidebarTooltip: "Использование токенов · последние 24 часа",
   },
 };

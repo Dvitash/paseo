@@ -2934,5 +2934,9 @@ export const ptBR: TranslationResources = {
     hostUpgradeRequired: "Atualize o daemon do host para visualizar o uso de tokens",
     errorTitle: "Não foi possível carregar o uso de tokens",
     retry: "Tentar novamente",
+    sidebarInput: "Ent",
+    sidebarCacheRead: "Cache",
+    sidebarOutput: "Saí",
+    sidebarTooltip: "Uso de tokens · últimas 24 horas",
   },
 };

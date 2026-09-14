@@ -13,7 +13,7 @@ export function tokenUsageQueryKey(serverId: string | null | undefined) {
 
 export function useTokenUsage(
   serverId: string | null | undefined,
-  options: { enabled?: boolean } = {},
+  options: { enabled?: boolean; refetchInterval?: number | false } = {},
 ): {
   view: TokenUsageView;
   refresh: () => Promise<void>;
@@ -48,6 +48,7 @@ export function useTokenUsage(
     dataShape: "value",
     staleTimeMs: 60_000,
     enabled: canFetch,
+    refetchInterval: options.refetchInterval,
     retry: false,
     networkMode: "always",
   });

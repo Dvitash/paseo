@@ -2903,5 +2903,9 @@ export const ko: TranslationResources = {
     hostUpgradeRequired: "토큰 사용량을 보려면 호스트 데몬을 업데이트하세요",
     errorTitle: "토큰 사용량을 불러올 수 없습니다",
     retry: "다시 시도",
+    sidebarInput: "입력",
+    sidebarCacheRead: "캐시",
+    sidebarOutput: "출력",
+    sidebarTooltip: "토큰 사용량 · 최근 24시간",
   },
 };

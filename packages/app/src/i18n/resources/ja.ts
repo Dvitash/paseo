@@ -2916,5 +2916,9 @@ export const ja: TranslationResources = {
     hostUpgradeRequired: "トークン使用量を表示するにはホストデーモンを更新してください",
     errorTitle: "トークン使用量を読み込めません",
     retry: "再試行",
+    sidebarInput: "入力",
+    sidebarCacheRead: "キャッシュ",
+    sidebarOutput: "出力",
+    sidebarTooltip: "トークン使用量 · 過去24時間",
   },
 } as const;

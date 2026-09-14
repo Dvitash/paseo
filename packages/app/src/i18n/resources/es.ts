@@ -2952,5 +2952,9 @@ export const es: TranslationResources = {
     hostUpgradeRequired: "Actualiza el daemon del host para ver el uso de tokens",
     errorTitle: "No se puede cargar el uso de tokens",
     retry: "Reintentar",
+    sidebarInput: "Ent",
+    sidebarCacheRead: "Caché",
+    sidebarOutput: "Sal",
+    sidebarTooltip: "Uso de tokens · últimas 24 horas",
   },
 };

@@ -2887,5 +2887,9 @@ export const ar: TranslationResources = {
     hostUpgradeRequired: "قم بتحديث برنامج المضيف لعرض استخدام الرموز",
     errorTitle: "تعذر تحميل استخدام الرموز",
     retry: "إعادة المحاولة",
+    sidebarInput: "داخل",
+    sidebarCacheRead: "ذاكرة",
+    sidebarOutput: "خارج",
+    sidebarTooltip: "استخدام الرموز · آخر 24 ساعة",
   },
 };

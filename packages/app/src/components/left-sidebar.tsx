@@ -52,6 +52,7 @@ import { openHostOverview } from "@/navigation/settings-navigation";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarProviderUsageBar } from "@/provider-usage/sidebar-bar";
+import { SidebarTokenUsageBar } from "@/token-usage/sidebar-bar";
 import { SidebarHostPerformanceBar } from "@/host-performance/sidebar-bar";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
 
@@ -606,6 +607,7 @@ function MobileSidebar({
 
         <SidebarHostPerformanceBar visible={active} />
         <SidebarProviderUsageBar />
+        <SidebarTokenUsageBar />
         <SidebarFooter
           theme={theme}
           handleOpenProject={handleOpenProject}
@@ -785,6 +787,7 @@ function DesktopSidebar({
 
         <SidebarHostPerformanceBar visible={active} />
         <SidebarProviderUsageBar />
+        <SidebarTokenUsageBar />
         <SidebarFooter
           theme={theme}
           handleOpenProject={handleOpenProject}

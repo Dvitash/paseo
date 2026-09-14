@@ -2997,6 +2997,10 @@ export const en = {
     hostUpgradeRequired: "Update the host daemon to view token usage",
     errorTitle: "Unable to load token usage",
     retry: "Retry",
+    sidebarInput: "In",
+    sidebarCacheRead: "Cache",
+    sidebarOutput: "Out",
+    sidebarTooltip: "Token usage · last 24 hours",
   },
 } as const;
 
