@@ -24,3 +24,12 @@ test("a hidden desktop page is neither visible nor actively visible", () => {
   expect(isAppVisible(input)).toBe(false);
   expect(isAppActivelyVisible(input)).toBe(false);
 });
+
+test("a visible PWA is not hidden by a stale native-style AppState value", () => {
+  expect(isAppVisible({ appState: "background", native: false, documentVisible: true })).toBe(true);
+});
+
+test("native visibility still follows AppState rather than document state", () => {
+  expect(isAppVisible({ appState: "background", native: true, documentVisible: true })).toBe(false);
+  expect(isAppVisible({ appState: "active", native: true, documentVisible: false })).toBe(true);
+});

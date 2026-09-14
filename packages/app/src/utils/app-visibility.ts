@@ -12,7 +12,8 @@ interface ActiveAppVisibilityInput extends AppVisibilityInput {
 }
 
 export function isAppVisible(input: AppVisibilityInput): boolean {
-  return input.appState === "active" && (input.native || input.documentVisible);
+  // A stale native-style AppState value must not veto a visible browser/PWA.
+  return input.native ? input.appState === "active" : input.documentVisible;
 }
 
 export function isAppActivelyVisible(input: ActiveAppVisibilityInput): boolean {

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { useAppVisible } from "@/hooks/use-app-visible";
+import { isWeb } from "@/constants/platform";
+import { subscribeBrowserLifecycle } from "@/utils/browser-lifecycle-source";
+import { createForegroundTimelineRecovery } from "./foreground-timeline-recovery";
+import { queryClient } from "@/data/query-client";
+import { invalidateCheckoutGitQueriesForServer } from "@/git/query-keys";
+import { invalidateServerDataQueriesAfterReconnect } from "@/data/push-router";
+import { schedulesQueryBaseKey } from "@/schedules/aggregated-schedules";
 import {
   createSetAgentInitializing,
   refreshAgentInitializationTimeout,
@@ -139,7 +146,51 @@ export function useViewedTimelineOwner(
     sync.setConnected(isConnected);
     sync.setActive(isAppVisible);
 
+    const foreground = createForegroundTimelineRecovery({
+      verifyConnection: () => client.ensureConnected(),
+      setActive: (active) => sync.setActive(active),
+      synchronize: () => {
+        // Revalidate delivery even if the socket and rendered booleans survived.
+        // This resets subscription/catch-up ownership, not the UI or its cache.
+        sync.setConnected(false);
+        sync.setActive(true);
+        sync.setConnected(true);
+        void getHostRuntimeStore()
+          .refreshDirectories(serverId)
+          .catch((error) => {
+            console.warn("[Session] foreground directory refresh failed", { serverId, error });
+          });
+        void invalidateCheckoutGitQueriesForServer(queryClient, serverId);
+        invalidateServerDataQueriesAfterReconnect({ queryClient, serverId });
+        void queryClient.invalidateQueries({ queryKey: schedulesQueryBaseKey });
+        console.debug("[Session] PWA foreground verified, timeline revalidation requested", {
+          serverId,
+        });
+      },
+      schedule: (task, delayMs) => {
+        const timeout = setTimeout(task, delayMs);
+        return () => clearTimeout(timeout);
+      },
+      reportError: (error) => {
+        console.warn("[Session] PWA foreground recovery failed", { serverId, error });
+      },
+    });
+    const unsubscribeLifecycle = subscribeBrowserLifecycle((event) => {
+      if (event.type === "hidden") {
+        foreground.suspend();
+      } else {
+        console.debug("[Session] PWA foreground recovery requested", {
+          serverId,
+          generation: event.generation,
+          reason: event.reason,
+        });
+        foreground.resume();
+      }
+    });
+
     return () => {
+      unsubscribeLifecycle();
+      foreground.dispose();
       if (viewedTimelineSyncRef.current === sync) {
         viewedTimelineSyncRef.current = null;
       }
@@ -152,7 +203,9 @@ export function useViewedTimelineOwner(
   }, [client, serverId, setInitializingAgents, setViewedTimelineSync]);
 
   useEffect(() => {
-    viewedTimelineSyncRef.current?.setActive(isAppVisible);
+    // Browser edges are delivered synchronously above. React may coalesce the
+    // hidden/visible renders during suspension and miss the boolean transition.
+    if (!isWeb) viewedTimelineSyncRef.current?.setActive(isAppVisible);
   }, [isAppVisible]);
 
   useEffect(() => {
