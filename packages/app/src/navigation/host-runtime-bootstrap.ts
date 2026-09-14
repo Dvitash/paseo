@@ -1,5 +1,6 @@
 import type { AppState } from "react-native";
 import { isWeb } from "@/constants/platform";
+import { subscribeBrowserLifecycle } from "@/utils/browser-lifecycle-source";
 import type { ActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import type {
   DaemonStartCondition,
@@ -257,6 +258,15 @@ export function bindHostRuntimeAppState(
   store: { setAppVisible: (visible: boolean) => void; ensureConnectedAll: () => void },
   appState: Pick<typeof AppState, "currentState" | "addEventListener">,
 ): () => void {
+  // The installed PWA runs this DOM path, not the native AppState lifecycle.
+  if (isWeb && typeof document !== "undefined" && typeof window !== "undefined") {
+    const unsubscribe = subscribeBrowserLifecycle((event) => {
+      store.setAppVisible(event.type === "resume");
+    });
+    store.setAppVisible(document.visibilityState === "visible");
+    return unsubscribe;
+  }
+
   const subscription = appState.addEventListener("change", (state) => {
     store.setAppVisible(state === "active");
   });
