@@ -54,6 +54,59 @@ describe("tool-call presentation", () => {
     });
   });
 
+  it("summarizes streamed thinking with the estimated token count", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "thinking",
+      status: "running",
+      error: null,
+      detail: { type: "unknown", input: "reasoning".repeat(40), output: null },
+      resolveIcon: fakeResolveIcon,
+      tokenCount: 489,
+    });
+
+    expect(presentation.displayName).toBe("Thinking");
+    expect(presentation.summary).toBe("489 tokens");
+  });
+
+  it("groups digits in large thinking counts", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "thinking",
+      status: "running",
+      error: null,
+      detail: { type: "unknown", input: "reasoning", output: null },
+      resolveIcon: fakeResolveIcon,
+      tokenCount: 12345,
+    });
+
+    expect(presentation.summary).toBe("12,345 tokens");
+  });
+
+  it("omits the thinking summary when no tokens have streamed", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "thinking",
+      status: "running",
+      error: null,
+      detail: { type: "unknown", input: null, output: null },
+      resolveIcon: fakeResolveIcon,
+      tokenCount: 0,
+    });
+
+    expect(presentation.summary).toBeUndefined();
+  });
+
+  it("ignores the token count for non-thinking calls", () => {
+    const presentation = buildToolCallPresentation({
+      toolName: "exec_command",
+      status: "running",
+      error: null,
+      detail: { type: "unknown", input: "ls", output: null },
+      resolveIcon: fakeResolveIcon,
+      tokenCount: 489,
+    });
+
+    expect(presentation.summary).toBeUndefined();
+  });
+
   it("marks running calls without meaningful detail as loading details", () => {
     const presentation = buildToolCallPresentation({
       toolName: "exec_command",

@@ -334,6 +334,9 @@ export const ru: TranslationResources = {
     activity: {
       details: "Подробности",
     },
+    thinking: {
+      tokens: "{{tokens}} токенов",
+    },
     dictation: {
       start: "Начать диктовку голосом",
       cancel: "Отменить диктовку",

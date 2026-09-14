@@ -3046,6 +3046,8 @@ interface ToolCallProps {
   onOpenFilePath?: (filePath: string) => void;
   defaultExpanded?: boolean;
   forceInline?: boolean;
+  /** Thinking-badge token estimate; ignored for every other tool name. */
+  tokenCount?: number;
   maxDetailHeight?: number;
 }
 
@@ -3067,6 +3069,7 @@ export const ToolCall = memo(function ToolCall({
   onOpenFilePath,
   defaultExpanded,
   forceInline = false,
+  tokenCount,
   maxDetailHeight = 400,
 }: ToolCallProps) {
   const { t } = useTranslation();
@@ -3100,8 +3103,9 @@ export const ToolCall = memo(function ToolCall({
         metadata,
         cwd,
         resolveIcon: resolveToolCallIcon,
+        tokenCount,
       }),
-    [toolName, status, error, effectiveDetail, metadata, cwd],
+    [toolName, status, error, effectiveDetail, metadata, cwd, tokenCount],
   );
   const { displayName, summary } = useMemo(() => {
     if (presentation.hub) {
@@ -3277,8 +3281,9 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.isLastInSequence !== next.isLastInSequence) return false;
   if (previous.disableOuterSpacing !== next.disableOuterSpacing) return false;
   if (previous.onOpenFilePath !== next.onOpenFilePath) return false;
-  if (previous.defaultExpanded !== next.defaultExpanded) return false;
   if (previous.forceInline !== next.forceInline) return false;
+  if (previous.tokenCount !== next.tokenCount) return false;
+  if (previous.defaultExpanded !== next.defaultExpanded) return false;
   if (previous.maxDetailHeight !== next.maxDetailHeight) return false;
   return true;
 }

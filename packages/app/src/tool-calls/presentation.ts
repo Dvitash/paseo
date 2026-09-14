@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import type { ToolCallDisplayInput } from "@/utils/tool-call-display";
+import { i18n } from "@/i18n/i18next";
 import { buildToolCallDisplayModel } from "@/utils/tool-call-display";
 import { extractToolCallFilePath } from "@/utils/extract-tool-call-file-path";
 import {
@@ -21,6 +22,8 @@ interface BuildToolCallPresentationInput {
   cwd?: string;
   metadata?: Record<string, unknown>;
   resolveIcon: ToolCallIconResolver;
+  /** Streamed-thinking token estimate; only the thinking badge renders it. */
+  tokenCount?: number;
 }
 
 export interface ToolCallPresentation {
@@ -82,10 +85,17 @@ export function buildToolCallPresentation(
   const hasDetails = Boolean(input.error) || hasMeaningfulToolCallDetail(input.detail);
   const evaluation = getEvalPresentation(input.toolName, input.detail, input.error);
   const hub = getHubPresentation(input.toolName, input.detail, input.status);
+  // The thinking badge counts streamed reasoning as a live progress signal.
+  // The count itself is the caller's ~4 chars-per-token estimate; the daemon
+  // sends no per-delta token counts.
+  const thinkingTokenSummary =
+    input.toolName === "thinking" && input.tokenCount
+      ? i18n.t("message.thinking.tokens", { tokens: input.tokenCount.toLocaleString() })
+      : undefined;
 
   return {
     displayName: displayModel.displayName,
-    summary: evaluation?.title ?? hub?.summary ?? displayModel.summary,
+    summary: evaluation?.title ?? hub?.summary ?? displayModel.summary ?? thinkingTokenSummary,
     errorText: displayModel.errorText,
     icon: input.resolveIcon(input.toolName, input.detail),
     isLoadingDetails,

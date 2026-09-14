@@ -332,6 +332,9 @@ export const zhCN: TranslationResources = {
     activity: {
       details: "详情",
     },
+    thinking: {
+      tokens: "{{tokens}} tokens",
+    },
     dictation: {
       start: "开始语音听写",
       cancel: "取消听写",

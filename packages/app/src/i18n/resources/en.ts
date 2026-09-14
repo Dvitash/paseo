@@ -330,6 +330,9 @@ export const en = {
     activity: {
       details: "Details",
     },
+    thinking: {
+      tokens: "{{tokens}} tokens",
+    },
     dictation: {
       start: "Start voice dictation",
       cancel: "Cancel dictation",

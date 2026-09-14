@@ -335,6 +335,9 @@ export const ptBR: TranslationResources = {
     activity: {
       details: "Detalhes",
     },
+    thinking: {
+      tokens: "{{tokens}} tokens",
+    },
     dictation: {
       start: "Iniciar ditado por voz",
       cancel: "Cancelar ditado",

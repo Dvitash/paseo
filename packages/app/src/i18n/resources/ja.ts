@@ -335,6 +335,9 @@ export const ja: TranslationResources = {
     activity: {
       details: "詳細",
     },
+    thinking: {
+      tokens: "{{tokens}}トークン",
+    },
     dictation: {
       start: "音声入力を開始",
       cancel: "音声入力をキャンセル",

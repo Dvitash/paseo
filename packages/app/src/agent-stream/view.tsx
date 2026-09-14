@@ -1292,6 +1292,10 @@ function ThoughtSlot({
   defaultExpanded,
 }: ThoughtSlotProps) {
   const revealedText = useRevealedText(text, status === "ready" ? "complete" : "streaming");
+  // Counted from the full streamed text, not the paced reveal, so the badge
+  // ticks with real provider deltas. ~4 chars per token; a progress signal,
+  // not accounting — the daemon sends no per-delta token counts.
+  const tokenCount = text ? Math.ceil(text.length / 4) : 0;
   return (
     <ToolCallSlot
       itemId={itemId}
@@ -1302,6 +1306,7 @@ function ThoughtSlot({
       isLastInSequence={isLastInSequence}
       defaultExpanded={defaultExpanded}
       forceInline={defaultExpanded}
+      tokenCount={tokenCount}
     />
   );
 }

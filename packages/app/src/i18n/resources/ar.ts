@@ -332,6 +332,9 @@ export const ar: TranslationResources = {
     activity: {
       details: "تفاصيل",
     },
+    thinking: {
+      tokens: "{{tokens}} رموز",
+    },
     dictation: {
       start: "بدء الإملاء الصوتي",
       cancel: "إلغاء الإملاء",

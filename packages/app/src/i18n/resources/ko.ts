@@ -333,6 +333,9 @@ export const ko: TranslationResources = {
     activity: {
       details: "세부 정보",
     },
+    thinking: {
+      tokens: "{{tokens}} 토큰",
+    },
     dictation: {
       start: "음성 받아쓰기 시작",
       cancel: "받아쓰기 취소",

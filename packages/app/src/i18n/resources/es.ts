@@ -335,6 +335,9 @@ export const es: TranslationResources = {
     activity: {
       details: "Detalles",
     },
+    thinking: {
+      tokens: "{{tokens}} tokens",
+    },
     dictation: {
       start: "Iniciar dictado de voz",
       cancel: "Cancelar dictado",
