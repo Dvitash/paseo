@@ -2964,6 +2964,6 @@ export const fr: TranslationResources = {
     sidebarInput: "Entr.",
     sidebarCacheRead: "Cache",
     sidebarOutput: "Sort.",
-    sidebarTooltip: "Utilisation des jetons · 24 dernières heures",
+    sidebarTooltip: "Utilisation des jetons · {{range}}",
   },
 };

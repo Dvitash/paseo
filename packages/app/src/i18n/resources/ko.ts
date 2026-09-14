@@ -2906,6 +2906,6 @@ export const ko: TranslationResources = {
     sidebarInput: "입력",
     sidebarCacheRead: "캐시",
     sidebarOutput: "출력",
-    sidebarTooltip: "토큰 사용량 · 최근 24시간",
+    sidebarTooltip: "토큰 사용량 · {{range}}",
   },
 };

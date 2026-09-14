@@ -2937,6 +2937,6 @@ export const ptBR: TranslationResources = {
     sidebarInput: "Ent",
     sidebarCacheRead: "Cache",
     sidebarOutput: "Saí",
-    sidebarTooltip: "Uso de tokens · últimas 24 horas",
+    sidebarTooltip: "Uso de tokens · {{range}}",
   },
 };

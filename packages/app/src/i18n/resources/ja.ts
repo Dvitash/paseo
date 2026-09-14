@@ -2919,6 +2919,6 @@ export const ja: TranslationResources = {
     sidebarInput: "入力",
     sidebarCacheRead: "キャッシュ",
     sidebarOutput: "出力",
-    sidebarTooltip: "トークン使用量 · 過去24時間",
+    sidebarTooltip: "トークン使用量 · {{range}}",
   },
 } as const;

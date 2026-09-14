@@ -2890,6 +2890,6 @@ export const ar: TranslationResources = {
     sidebarInput: "داخل",
     sidebarCacheRead: "ذاكرة",
     sidebarOutput: "خارج",
-    sidebarTooltip: "استخدام الرموز · آخر 24 ساعة",
+    sidebarTooltip: "استخدام الرموز · {{range}}",
   },
 };

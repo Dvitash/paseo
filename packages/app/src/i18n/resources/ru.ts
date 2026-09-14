@@ -2945,6 +2945,6 @@ export const ru: TranslationResources = {
     sidebarInput: "Вход",
     sidebarCacheRead: "Кэш",
     sidebarOutput: "Выход",
-    sidebarTooltip: "Использование токенов · последние 24 часа",
+    sidebarTooltip: "Использование токенов · {{range}}",
   },
 };

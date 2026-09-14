@@ -2856,6 +2856,6 @@ export const zhCN: TranslationResources = {
     sidebarInput: "输入",
     sidebarCacheRead: "缓存",
     sidebarOutput: "输出",
-    sidebarTooltip: "Token 使用量 · 近 24 小时",
+    sidebarTooltip: "Token 使用量 · {{range}}",
   },
 };

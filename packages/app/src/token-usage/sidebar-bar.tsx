@@ -118,7 +118,9 @@ export const SidebarTokenUsageBar = memo(function SidebarTokenUsageBar() {
           </Pressable>
         </TooltipTrigger>
         <TooltipContent side="top" align="center" offset={8}>
-          <Text style={styles.tooltipText}>{t("tokenUsage.title")}</Text>
+          <Text style={styles.tooltipText}>
+            {t("tokenUsage.sidebarTooltip", { range: rangeItem.label })}
+          </Text>
         </TooltipContent>
       </Tooltip>
       <DropdownMenu>

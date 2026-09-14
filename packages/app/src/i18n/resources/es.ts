@@ -2955,6 +2955,6 @@ export const es: TranslationResources = {
     sidebarInput: "Ent",
     sidebarCacheRead: "Caché",
     sidebarOutput: "Sal",
-    sidebarTooltip: "Uso de tokens · últimas 24 horas",
+    sidebarTooltip: "Uso de tokens · {{range}}",
   },
 };

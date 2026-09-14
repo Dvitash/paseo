@@ -3000,7 +3000,7 @@ export const en = {
     sidebarInput: "In",
     sidebarCacheRead: "Cache",
     sidebarOutput: "Out",
-    sidebarTooltip: "Token usage · last 24 hours",
+    sidebarTooltip: "Token usage · {{range}}",
   },
 } as const;
 
