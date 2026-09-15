@@ -1,228 +1,241 @@
 // @vitest-environment jsdom
 
-import { renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStandalonePwaViewportHeal } from "./use-standalone-pwa-viewport-heal";
 
-const IPHONE_UA =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
-const PIXEL_UA =
-  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36";
-
+const HEIGHT = "--paseo-viewport-height";
+const TOP = "--paseo-viewport-top";
 let root: HTMLDivElement;
-let displayAtReflow: string | null;
+let input: HTMLTextAreaElement;
+let layoutHeight: number;
+let viewport: EventTarget & { height: number; pageTop: number; scale: number };
 
-function setViewport(width: number, height: number) {
-  Object.defineProperty(window, "innerWidth", { value: width, configurable: true });
-  Object.defineProperty(window, "innerHeight", { value: height, configurable: true });
+function flush() {
+  act(() => vi.advanceTimersByTime(20));
 }
-
-function setUserAgent(userAgent: string) {
-  Object.defineProperty(window.navigator, "userAgent", { value: userAgent, configurable: true });
-  Object.defineProperty(window.navigator, "platform", {
-    value: userAgent.includes("iPhone") ? "iPhone" : "Linux armv81",
-    configurable: true,
-  });
-  Object.defineProperty(window.navigator, "maxTouchPoints", {
-    value: 5,
-    configurable: true,
-  });
+function resize(height: number, pageTop = 0) {
+  viewport.height = height;
+  viewport.pageTop = pageTop;
+  viewport.dispatchEvent(new Event("resize"));
+  flush();
 }
-
-function setStandalone(standalone: boolean) {
-  Object.defineProperty(window.navigator, "standalone", {
-    value: standalone,
-    configurable: true,
-  });
+function heightStyle() {
+  return document.documentElement.style.getPropertyValue(HEIGHT);
 }
-
-function fireFocusOut(relatedTarget: EventTarget | null = null) {
-  const event = new Event("focusout", { bubbles: true });
-  Object.defineProperty(event, "relatedTarget", { value: relatedTarget });
-  window.dispatchEvent(event);
-}
-
-function fireResize() {
-  window.dispatchEvent(new Event("resize"));
+function topStyle() {
+  return document.documentElement.style.getPropertyValue(TOP);
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
+  document.documentElement.classList.add("ios-standalone");
   root = document.createElement("div");
   root.id = "root";
+  input = document.createElement("textarea");
+  input.value = "Keep this draft";
+  root.appendChild(input);
   document.body.appendChild(root);
-  displayAtReflow = null;
-  // The hook reads offsetHeight while display is "none"; capture the display
-  // value at that moment to observe the flip.
-  vi.spyOn(root, "offsetHeight", "get").mockImplementation(() => {
-    displayAtReflow = root.style.display;
-    return 0;
-  });
-  setViewport(390, 844);
-  setUserAgent(IPHONE_UA);
-  setStandalone(true);
-  // Match screen height to innerHeight so the launch heal stays inert unless
-  // a test stubs a shortfall; clear visualViewport so compensation tests
-  // control it explicitly.
-  Object.defineProperty(window.screen, "height", { value: 844, configurable: true });
-  Object.defineProperty(window, "visualViewport", {
-    value: undefined,
-    configurable: true,
-    writable: true,
-  });
+  layoutHeight = 844;
+  vi.spyOn(document.body, "getBoundingClientRect").mockImplementation(
+    () => ({ height: layoutHeight }) as DOMRect,
+  );
+  viewport = Object.assign(new EventTarget(), { height: 785, pageTop: 0, scale: 1 });
+  vi.stubGlobal("visualViewport", viewport);
+  vi.stubGlobal("innerHeight", 785);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
+    window.setTimeout(() => callback(0), 16),
+  );
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => window.clearTimeout(id));
 });
 
 afterEach(() => {
-  document.documentElement.style.removeProperty("--paseo-viewport-compensation");
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
+  cleanup();
   root.remove();
+  document.documentElement.classList.remove("ios-standalone");
+  document.documentElement.style.removeProperty(HEIGHT);
+  document.documentElement.style.removeProperty(TOP);
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("useStandalonePwaViewportHeal", () => {
-  it("flips #root display to force a viewport re-measure after keyboard close", () => {
+  it("leaves the full-height CSS shell in charge when both reported heights are short", () => {
+    input.focus(); // Autofocus does not imply a software keyboard.
     renderHook(() => useStandalonePwaViewportHeal());
-    // Keyboard opened and closed: viewport stuck short.
-    setViewport(390, 785);
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBe("none");
-    expect(root.style.display).toBe("");
+    expect(heightStyle()).toBe("");
+    expect(topStyle()).toBe("0px");
+    expect(document.activeElement).toBe(input);
   });
 
-  it("does nothing when the viewport is not stuck", () => {
-    renderHook(() => useStandalonePwaViewportHeal());
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBeNull();
-  });
-
-  it("does nothing outside standalone display mode", () => {
-    setStandalone(false);
-    renderHook(() => useStandalonePwaViewportHeal());
-    setViewport(390, 785);
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBeNull();
-  });
-
-  it("skips the flip when focus moved to another editable during the delay", () => {
-    renderHook(() => useStandalonePwaViewportHeal());
-    setViewport(390, 785);
-    fireFocusOut();
-    // Before the 140ms timer fires, focus lands on a new input (iOS reports
-    // relatedTarget=null, so the schedule-time check cannot catch this).
-    const input = document.createElement("input");
-    root.appendChild(input);
+  it("positions the root in document coordinates above a keyboard present at mount", () => {
     input.focus();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBeNull();
-    // When that editor blurs, the heal retries.
-    input.blur();
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBe("none");
-  });
-  it("does nothing on non-iOS standalone installs", () => {
-    setUserAgent(PIXEL_UA);
+    viewport.height = 500;
+    viewport.pageTop = 80;
     renderHook(() => useStandalonePwaViewportHeal());
-    setViewport(390, 785);
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBeNull();
-  });
-
-  it("keeps the height baseline when a heal fires mid-dismissal and retries on recovery", () => {
-    renderHook(() => useStandalonePwaViewportHeal());
-    setViewport(390, 785);
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBe("none");
-    // The flip did not restore the height (keyboard still animating away).
-    // A later partial recovery must trigger another heal, not a new baseline.
-    displayAtReflow = null;
-    setViewport(390, 800);
-    fireResize();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBe("none");
-  });
-
-  it("resets the baseline only when the width changes (rotation)", () => {
-    renderHook(() => useStandalonePwaViewportHeal());
-    setViewport(844, 390);
-    fireResize();
-    // Landscape height is the new baseline; no heal should fire.
-    fireFocusOut();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBeNull();
-  });
-
-  it("schedules a heal when the viewport shrinks with nothing focused", () => {
-    renderHook(() => useStandalonePwaViewportHeal());
-    setViewport(390, 785);
-    fireResize();
-    vi.advanceTimersByTime(200);
-    expect(displayAtReflow).toBe("none");
-  });
-  it("sets --paseo-viewport-compensation to the visualViewport shortfall", () => {
-    Object.defineProperty(window, "visualViewport", {
-      value: {
-        height: 878, // innerHeight (844) + 34px dead band
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      },
-      configurable: true,
-    });
-    renderHook(() => useStandalonePwaViewportHeal());
-    expect(document.documentElement.style.getPropertyValue("--paseo-viewport-compensation")).toBe(
-      "34px",
-    );
-  });
-
-  it("sets --paseo-viewport-compensation to 0 when the viewport is not short", () => {
-    Object.defineProperty(window, "visualViewport", {
-      value: {
-        height: 844,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      },
-      configurable: true,
-    });
-    renderHook(() => useStandalonePwaViewportHeal());
-    expect(document.documentElement.style.getPropertyValue("--paseo-viewport-compensation")).toBe(
-      "0px",
-    );
-  });
-
-  it("clamps compensation to zero when the shortfall exceeds the safe-area range", () => {
-    Object.defineProperty(window, "visualViewport", {
-      value: {
-        height: 1144, // 300px over innerHeight — keyboard-sized, not an inset
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      },
-      configurable: true,
-    });
-    renderHook(() => useStandalonePwaViewportHeal());
-    expect(document.documentElement.style.getPropertyValue("--paseo-viewport-compensation")).toBe(
-      "0px",
-    );
-  });
-
-  it("runs the display-flip re-measure at mount when the viewport is stuck at launch", () => {
-    // screen.height taller than innerHeight means the reported viewport is
-    // already short before any keyboard interaction.
-    Object.defineProperty(window.screen, "height", { value: 896, configurable: true });
-    renderHook(() => useStandalonePwaViewportHeal());
-    expect(displayAtReflow).toBe("none");
+    expect(heightStyle()).toBe("500px");
+    expect(topStyle()).toBe("80px");
     expect(root.style.display).toBe("");
   });
 
-  it("does not flip at mount when the reported viewport fills the screen", () => {
+  it("restores full height on keyboard dismissal even when the textarea stays focused", () => {
     renderHook(() => useStandalonePwaViewportHeal());
-    expect(displayAtReflow).toBeNull();
+    input.focus();
+    resize(500, 80);
+    expect(heightStyle()).toBe("500px");
+    resize(785);
+    expect(heightStyle()).toBe("");
+    expect(topStyle()).toBe("0px");
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("Keep this draft");
+  });
+
+  it("restores full height on blur even if visualViewport is still keyboard-sized", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    input.blur();
+    flush();
+    expect(heightStyle()).toBe("");
+  });
+
+  it("does not detach the root or reset a nested scroller during recovery", () => {
+    const scroller = document.createElement("div");
+    scroller.scrollTop = 320;
+    root.appendChild(scroller);
+    const displaySetter = vi.spyOn(root.style, "display", "set");
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    resize(785);
+    expect(displaySetter).not.toHaveBeenCalled();
+    expect(scroller.scrollTop).toBe(320);
+  });
+
+  it("keeps keyboard sizing when focus moves between editors", () => {
+    const second = document.createElement("textarea");
+    root.appendChild(second);
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    second.focus();
+    flush();
+    expect(heightStyle()).toBe("500px");
+    expect(document.activeElement).toBe(second);
+  });
+
+  it("reconciles on pageshow without requiring a resize event", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500, 80);
+    viewport.height = 785;
+    viewport.pageTop = 0;
+    window.dispatchEvent(new Event("pageshow"));
+    flush();
+    expect(heightStyle()).toBe("");
+    expect(topStyle()).toBe("0px");
+  });
+
+  it("reconciles after foregrounding when metrics changed while hidden", () => {
+    let visibility = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(
+      () => visibility as DocumentVisibilityState,
+    );
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    visibility = "hidden";
+    resize(785);
+    expect(heightStyle()).toBe("500px");
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    expect(heightStyle()).toBe("");
+  });
+
+  it("samples late metrics after a lifecycle event", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    window.dispatchEvent(new Event("pageshow"));
+    flush();
+    viewport.height = 785; // No final resize event from WebKit.
+    act(() => vi.advanceTimersByTime(450));
+    expect(heightStyle()).toBe("");
+  });
+
+  it("uses the current CSS viewport after rotation or window resizing", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    layoutHeight = 390;
+    viewport.height = 390;
+    window.dispatchEvent(new Event("orientationchange"));
+    flush();
+    expect(heightStyle()).toBe("");
+    resize(210);
+    expect(heightStyle()).toBe("210px");
+  });
+
+  it("does not mistake pinch zoom for the keyboard", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    viewport.scale = 2;
+    resize(400, 100);
+    expect(heightStyle()).toBe("");
+    expect(topStyle()).toBe("0px");
+    viewport.scale = 1;
+    resize(785);
+    expect(heightStyle()).toBe("");
+  });
+
+  it("handles visual viewport pan without a resize", () => {
+    renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    resize(500);
+    viewport.pageTop = 40;
+    viewport.dispatchEvent(new Event("scroll"));
+    flush();
+    expect(topStyle()).toBe("40px");
+  });
+
+  it("does not treat a readonly input as a software keyboard", () => {
+    input.readOnly = true;
+    input.focus();
+    viewport.height = 500;
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(heightStyle()).toBe("");
+  });
+
+  it("is inert without the iOS-standalone gate", () => {
+    document.documentElement.classList.remove("ios-standalone");
+    input.focus();
+    viewport.height = 500;
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(heightStyle()).toBe("");
+    expect(topStyle()).toBe("");
+  });
+
+  it("falls back to innerHeight when visualViewport is unavailable", () => {
+    vi.stubGlobal("visualViewport", undefined);
+    vi.stubGlobal("innerHeight", 500);
+    input.focus();
+    renderHook(() => useStandalonePwaViewportHeal());
+    expect(heightStyle()).toBe("500px");
+  });
+
+  it("restores prior styles and cancels pending work on unmount", () => {
+    document.documentElement.style.setProperty(HEIGHT, "700px", "important");
+    const { unmount } = renderHook(() => useStandalonePwaViewportHeal());
+    input.focus();
+    viewport.height = 500;
+    window.dispatchEvent(new Event("pageshow"));
+    unmount();
+    act(() => vi.advanceTimersByTime(500));
+    expect(heightStyle()).toBe("700px");
+    expect(document.documentElement.style.getPropertyPriority(HEIGHT)).toBe("important");
+    resize(450);
+    expect(heightStyle()).toBe("700px");
   });
 });
