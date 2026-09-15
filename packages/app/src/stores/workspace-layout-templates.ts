@@ -17,6 +17,7 @@ import {
   EXPLORER_SIDEBAR_PANE_ID,
   asInternalNode,
   type SplitNodeInternal,
+  type SplitPaneInternal,
 } from "@/stores/workspace-layout-actions";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import { generateDraftId } from "@/stores/draft-keys";
@@ -37,6 +38,8 @@ const WorkspaceLayoutTemplateStorageSchema = z.strictObject({
   sidePaneId: z.string().nullable(),
   explorerSidebarWidth: z.number().nullable(),
   savedAt: z.number(),
+  agentPaneId: z.string().nullable().optional(),
+  terminalPaneId: z.string().nullable().optional(),
 });
 
 const WorkspaceLayoutTemplatesPersistedStateSchema = z.strictObject({
@@ -55,11 +58,17 @@ interface BuildLayoutTemplateInput {
   now: number;
 }
 
+interface TemplatePaneRoles {
+  agentPaneId: string | null;
+  terminalPaneId: string | null;
+}
+
 /**
  * Rebuilds a tab for the template. Deterministic targets (workspace plugin
  * panels, Explorer views) are kept as-is; a draft becomes a fresh draft so two
- * instantiated workspaces never alias one composer draft; a terminal becomes a
- * new-tab placeholder because terminal sessions cannot be cloned.
+ * instantiated workspaces never alias one composer draft. Live agents and
+ * terminals are represented by pane roles because their session ids cannot be
+ * cloned into a new workspace.
  */
 function buildTemplateTab(tab: WorkspaceTab, now: number): WorkspaceTab | null {
   const target = tab.target;
@@ -83,6 +92,8 @@ function buildTemplateNode(node: SplitNodeInternal, now: number): SplitNodeInter
   if (node.kind === "pane") {
     let focusedTabId: string | null = null;
     const rebuiltTabs: WorkspaceTab[] = [];
+    const hasDraft = node.pane.tabs.some((tab) => tab.target.kind === "draft");
+    const hasAgent = node.pane.tabs.some((tab) => tab.target.kind === "agent");
     for (const tab of node.pane.tabs) {
       const rebuilt = buildTemplateTab(tab, now);
       if (!rebuilt) continue;
@@ -90,6 +101,12 @@ function buildTemplateNode(node: SplitNodeInternal, now: number): SplitNodeInter
       if (tab.tabId === node.pane.focusedTabId) {
         focusedTabId = rebuilt.tabId;
       }
+    }
+    if (hasAgent && !hasDraft) {
+      const draftId = generateDraftId();
+      const draft = { tabId: draftId, target: { kind: "draft" as const, draftId }, createdAt: now };
+      rebuiltTabs.unshift(draft);
+      focusedTabId = draftId;
     }
     const tabs = rebuiltTabs.length > 0 ? rebuiltTabs : [createNewWorkspaceTab()];
     return {
@@ -114,13 +131,32 @@ function buildTemplateNode(node: SplitNodeInternal, now: number): SplitNodeInter
   };
 }
 
+function findTemplatePaneRoles(layout: WorkspaceLayout): TemplatePaneRoles {
+  let agentPaneId: string | null = null;
+  let terminalPaneId: string | null = null;
+  const panes = collectAllPanes(layout.root) as SplitPaneInternal[];
+  for (const pane of panes) {
+    if (
+      agentPaneId === null &&
+      pane.tabs.some((tab) => tab.target.kind === "agent" || tab.target.kind === "draft")
+    ) {
+      agentPaneId = pane.id;
+    }
+    if (terminalPaneId === null && pane.tabs.some((tab) => tab.target.kind === "terminal")) {
+      terminalPaneId = pane.id;
+    }
+  }
+  return { agentPaneId, terminalPaneId };
+}
+
 /**
- * Captures the workspace's current arrangement. Tabs bound to workspace-local
- * resources (agents, terminals, files, browsers) are dropped; panes left empty
- * by that fall back to a new-tab placeholder so the structure survives.
+ * Captures the workspace's current arrangement. Workspace-local session ids
+ * are dropped, while agent and terminal pane roles are retained so a new
+ * workspace can create fresh content in the same locations.
  */
 export function buildLayoutTemplate(input: BuildLayoutTemplateInput): WorkspaceLayoutTemplate {
   const normalized = normalizeLayout(input.layout);
+  const paneRoles = findTemplatePaneRoles(normalized);
   const layout = normalizeLayout({
     root: buildTemplateNode(asInternalNode(normalized.root), input.now),
     focusedPaneId: normalized.focusedPaneId,
@@ -133,6 +169,8 @@ export function buildLayoutTemplate(input: BuildLayoutTemplateInput): WorkspaceL
     sidePaneId: input.sidePaneId,
     explorerSidebarWidth: input.explorerSidebarWidth ?? null,
     savedAt: input.now,
+    agentPaneId: paneRoles.agentPaneId,
+    terminalPaneId: paneRoles.terminalPaneId,
   };
 }
 
@@ -224,10 +262,11 @@ export function instantiateLayoutTemplate(
   return { layout, splitSizesByGroup: { ...template.splitSizesByGroup } };
 }
 
-function appendTabsToPane(
+function placeTabsInPane(
   node: SplitNodeInternal,
   paneId: string,
   tabs: WorkspaceTab[],
+  replacePlaceholder = false,
 ): SplitNodeInternal {
   if (tabs.length === 0) {
     return node;
@@ -236,13 +275,19 @@ function appendTabsToPane(
     if (node.pane.id !== paneId) {
       return node;
     }
+    const existingTabs =
+      replacePlaceholder &&
+      node.pane.tabs.every((tab) => tab.target.kind === "new_tab" || tab.target.kind === "draft")
+        ? []
+        : node.pane.tabs;
+    const nextTabs = [...existingTabs, ...tabs];
     return {
       kind: "pane",
       pane: {
         id: node.pane.id,
-        tabIds: [...node.pane.tabIds, ...tabs.map((tab) => tab.tabId)],
-        focusedTabId: node.pane.focusedTabId,
-        tabs: [...node.pane.tabs, ...tabs],
+        tabIds: nextTabs.map((tab) => tab.tabId),
+        focusedTabId: replacePlaceholder ? (tabs[0]?.tabId ?? null) : node.pane.focusedTabId,
+        tabs: nextTabs,
         ...(node.pane.hidden === true ? { hidden: true } : {}),
       },
     };
@@ -252,7 +297,9 @@ function appendTabsToPane(
     group: {
       id: node.group.id,
       direction: node.group.direction,
-      children: node.group.children.map((child) => appendTabsToPane(child, paneId, tabs)),
+      children: node.group.children.map((child) =>
+        placeTabsInPane(child, paneId, tabs, replacePlaceholder),
+      ),
       sizes: [...node.group.sizes],
     },
   };
@@ -266,6 +313,9 @@ function selectTemplateTargetPaneId(layout: WorkspaceLayout): string {
   return collectAllPanes(layout.root)[0]?.id ?? EXPLORER_SIDEBAR_PANE_ID;
 }
 
+export interface ApplyWorkspaceLayoutTemplateResult {
+  terminalPaneId: string | null;
+}
 interface WorkspaceLayoutTemplateState {
   templateByProjectRoot: Record<string, WorkspaceLayoutTemplate>;
   appliedByWorkspaceKey: Record<string, string>;
@@ -280,7 +330,7 @@ interface WorkspaceLayoutTemplateState {
     workspaceKey: string;
     projectRootPath: string;
     now: number;
-  }) => boolean;
+  }) => ApplyWorkspaceLayoutTemplateResult | null;
 }
 
 export const useWorkspaceLayoutTemplateStore = create<WorkspaceLayoutTemplateState>()(
@@ -306,29 +356,40 @@ export const useWorkspaceLayoutTemplateStore = create<WorkspaceLayoutTemplateSta
       applyTemplateToWorkspace: ({ workspaceKey, projectRootPath, now }) => {
         const template = get().templateByProjectRoot[projectRootPath];
         if (!template) {
-          return false;
+          return null;
         }
         if (get().appliedByWorkspaceKey[workspaceKey]) {
-          return false;
+          return null;
         }
         const layoutStore = useWorkspaceLayoutStore.getState();
         const existingLayout = layoutStore.layoutByWorkspace[workspaceKey] ?? null;
         if (!isUnshapedWorkspaceLayout(existingLayout)) {
-          return false;
+          return null;
         }
         const instantiated = instantiateLayoutTemplate(template, now);
         const carriedTabs = existingLayout
           ? collectAllTabs(normalizeLayout(existingLayout).root).filter(isCarriedTab)
           : [];
-        const layout = appendTabsToPane(
-          asInternalNode(instantiated.layout.root),
+        const carriedAgentTabs = carriedTabs.filter((tab) => tab.target.kind === "agent");
+        const otherCarriedTabs = carriedTabs.filter((tab) => tab.target.kind !== "agent");
+        const templatePanes = collectAllPanes(instantiated.layout.root) as SplitPaneInternal[];
+        const agentPaneId =
+          template.agentPaneId ??
+          templatePanes.find((pane) => pane.tabs.some((tab) => tab.target.kind === "draft"))?.id ??
+          null;
+        let layout = asInternalNode(instantiated.layout.root);
+        if (agentPaneId && carriedAgentTabs.length > 0) {
+          layout = placeTabsInPane(layout, agentPaneId, carriedAgentTabs, true);
+        }
+        layout = placeTabsInPane(
+          layout,
           selectTemplateTargetPaneId(instantiated.layout),
-          carriedTabs,
+          otherCarriedTabs,
         );
         layoutStore.seedWorkspaceLayout(workspaceKey, {
           layout: normalizeLayout({
             root: layout,
-            focusedPaneId: instantiated.layout.focusedPaneId,
+            focusedPaneId: agentPaneId ?? instantiated.layout.focusedPaneId,
           }),
           splitSizesByGroup: instantiated.splitSizesByGroup,
           explorerSidebarPaneId: template.explorerSidebarPaneId,
@@ -341,7 +402,7 @@ export const useWorkspaceLayoutTemplateStore = create<WorkspaceLayoutTemplateSta
             [workspaceKey]: projectRootPath,
           },
         }));
-        return true;
+        return { terminalPaneId: template.terminalPaneId ?? null };
       },
     }),
     {
@@ -381,6 +442,7 @@ interface ApplyWorkspaceLayoutTemplateInput {
   workspaceKey: string | null;
   projectRootPath: string | null;
   enabled: boolean;
+  onTerminalPaneRequested?: (paneId: string) => void;
 }
 
 /** Seeds a newly opened workspace with its project's saved layout template. */
@@ -390,28 +452,33 @@ export function useApplyWorkspaceLayoutTemplate(input: ApplyWorkspaceLayoutTempl
   const applyTemplateToWorkspace = useWorkspaceLayoutTemplateStore(
     (state) => state.applyTemplateToWorkspace,
   );
+  const { enabled, onTerminalPaneRequested, projectRootPath, workspaceKey } = input;
 
   useEffect(() => {
     if (
-      !input.enabled ||
-      input.workspaceKey === null ||
-      input.projectRootPath === null ||
+      !enabled ||
+      workspaceKey === null ||
+      projectRootPath === null ||
       !layoutHydrated ||
       !templatesHydrated
     ) {
       return;
     }
-    applyTemplateToWorkspace({
-      workspaceKey: input.workspaceKey,
-      projectRootPath: input.projectRootPath,
+    const result = applyTemplateToWorkspace({
+      workspaceKey,
+      projectRootPath,
       now: Date.now(),
     });
+    if (result?.terminalPaneId) {
+      onTerminalPaneRequested?.(result.terminalPaneId);
+    }
   }, [
     applyTemplateToWorkspace,
-    input.enabled,
-    input.projectRootPath,
-    input.workspaceKey,
+    enabled,
     layoutHydrated,
+    onTerminalPaneRequested,
+    projectRootPath,
     templatesHydrated,
+    workspaceKey,
   ]);
 }

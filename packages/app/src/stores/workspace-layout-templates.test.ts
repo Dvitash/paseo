@@ -178,10 +178,12 @@ describe("buildLayoutTemplate", () => {
     expect(main.group.sizes).toEqual([0.55, 0.45]);
   });
 
-  it("rebuilds tabs into fresh drafts and placeholders while dropping agent tabs", () => {
+  it("rebuilds drafts, records pane roles, and leaves terminal creation for apply", () => {
     const template = templateFor(capturedWorktreeLayout());
     const panes = collectTemplatePanes(template.layout.root);
 
+    expect(template.agentPaneId).toBe("pane-chat");
+    expect(template.terminalPaneId).toBe("pane-terminal");
     const chat = panes.find((p) => p.id === "pane-chat");
     expect(chat?.tabs).toHaveLength(1);
     expect(chat?.tabs[0]?.target).toMatchObject({ kind: "draft" });
@@ -198,6 +200,22 @@ describe("buildLayoutTemplate", () => {
 
     const terminal = panes.find((p) => p.id === "pane-terminal");
     expect(terminal?.tabs[0]?.target).toMatchObject({ kind: "new_tab" });
+  });
+
+  it("turns an agent-only pane into a fresh default agent draft", () => {
+    const layout = capturedWorktreeLayout();
+    const root = layout.root;
+    if (root.kind !== "group") return;
+    const main = root.group.children[0];
+    if (!main || main.kind !== "group") return;
+    main.group.children[0] = paneNode("pane-chat", [
+      createTab("tab_agent", { kind: "agent", agentId: "agent-1" }),
+    ]);
+
+    const template = templateFor(layout);
+    const chat = collectTemplatePanes(template.layout.root).find((pane) => pane.id === "pane-chat");
+    expect(chat?.tabs).toHaveLength(1);
+    expect(chat?.tabs[0]?.target.kind).toBe("draft");
   });
 
   it("remaps focus to the rebuilt draft when the focused tab was a draft", () => {
@@ -302,7 +320,7 @@ describe("applyTemplateToWorkspace", () => {
         projectRootPath: PROJECT_ROOT,
         now: 400,
       }),
-    ).toBe(true);
+    ).toEqual({ terminalPaneId: "pane-terminal" });
 
     const layoutStore = useWorkspaceLayoutStore.getState();
     const seeded = layoutStore.layoutByWorkspace[WORKSPACE_KEY];
@@ -325,7 +343,7 @@ describe("applyTemplateToWorkspace", () => {
         projectRootPath: PROJECT_ROOT,
         now: 500,
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   it("refuses to replace a workspace the user already arranged", () => {
@@ -342,13 +360,15 @@ describe("applyTemplateToWorkspace", () => {
         projectRootPath: PROJECT_ROOT,
         now: 400,
       }),
-    ).toBe(false);
+    ).toBeNull();
     expect(useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY]).toBeDefined();
   });
 
-  it("carries live agent tabs into the template's focused pane", () => {
+  it("carries a live agent into the saved agent pane instead of the focused pane", () => {
+    const template = templateFor(capturedWorktreeLayout());
+    template.layout.focusedPaneId = "pane-desktop";
     useWorkspaceLayoutTemplateStore.setState({
-      templateByProjectRoot: { [PROJECT_ROOT]: templateFor(capturedWorktreeLayout()) },
+      templateByProjectRoot: { [PROJECT_ROOT]: template },
     });
     const opened = createWorkspaceLayoutWithExplorerSidebar();
     const agentTab = createTab("agent_new", { kind: "agent", agentId: "agent_new" });
@@ -365,13 +385,14 @@ describe("applyTemplateToWorkspace", () => {
         projectRootPath: PROJECT_ROOT,
         now: 400,
       }),
-    ).toBe(true);
+    ).toEqual({ terminalPaneId: "pane-terminal" });
 
     const seeded = useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY];
-    const carried = collectTemplatePanes(seeded?.root ?? paneNode("empty", []))
-      .flatMap((pane) => pane.tabs)
-      .filter((tab) => tab.tabId === "agent_new");
-    expect(carried).toHaveLength(1);
+    const panes = collectTemplatePanes(seeded?.root ?? paneNode("empty", []));
+    const chat = panes.find((pane) => pane.id === "pane-chat");
+    expect(chat?.tabs.map((tab) => tab.tabId)).toEqual(["agent_new"]);
+    expect(chat?.focusedTabId).toBe("agent_new");
+    expect(panes.find((pane) => pane.id === "pane-desktop")?.tabs).not.toContainEqual(agentTab);
   });
 
   it("does nothing without a template for the project", () => {
@@ -381,7 +402,7 @@ describe("applyTemplateToWorkspace", () => {
         projectRootPath: PROJECT_ROOT,
         now: 400,
       }),
-    ).toBe(false);
+    ).toBeNull();
     expect(useWorkspaceLayoutStore.getState().layoutByWorkspace[WORKSPACE_KEY]).toBeUndefined();
   });
 });

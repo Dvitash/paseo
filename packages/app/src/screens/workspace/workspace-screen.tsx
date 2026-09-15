@@ -861,18 +861,6 @@ export const WorkspaceScreen = memo(function WorkspaceScreen({
   recoveryAgentId,
 }: WorkspaceScreenProps) {
   const navigationFocused = useIsFocused();
-  const normalizedServerId = trimNonEmpty(decodeSegment(serverId)) ?? "";
-  const normalizedWorkspaceId = resolveWorkspaceRouteId({ routeWorkspaceId: workspaceId }) ?? "";
-  const persistenceKey = buildWorkspaceTabPersistenceKey({
-    serverId: normalizedServerId,
-    workspaceId: normalizedWorkspaceId,
-  });
-  const workspaceDescriptor = useWorkspace(normalizedServerId, normalizedWorkspaceId);
-  useApplyWorkspaceLayoutTemplate({
-    workspaceKey: persistenceKey,
-    projectRootPath: workspaceDescriptor?.projectRootPath ?? null,
-    enabled: persistenceKey !== null && workspaceDescriptor !== null,
-  });
   useEffect(() => {
     traceInstant("paseo.workspace.mount", { serverId, workspaceId });
     return () => {
@@ -1502,6 +1490,25 @@ function useWorkspaceTerminalTabActions({
     handleTerminalCreateFailed,
   };
 }
+interface WorkspaceLayoutTemplateApplicationInput {
+  persistenceKey: string | null;
+  workspace: WorkspaceDescriptor | null | undefined;
+  createTerminal: (input: { destination: TerminalTabDestination }) => void;
+}
+
+function useWorkspaceLayoutTemplateApplication(
+  input: WorkspaceLayoutTemplateApplicationInput,
+): void {
+  const handleTerminalPaneRequested = useStableEvent((paneId: string) => {
+    input.createTerminal({ destination: { kind: "open", paneId } });
+  });
+  useApplyWorkspaceLayoutTemplate({
+    workspaceKey: input.persistenceKey,
+    projectRootPath: input.workspace?.projectRootPath ?? null,
+    enabled: Boolean(input.persistenceKey && input.workspace),
+    onTerminalPaneRequested: handleTerminalPaneRequested,
+  });
+}
 
 function resolveCommandCenterPanelTarget(target: WorkspacePanelTarget): WorkspaceTabTarget {
   switch (target) {
@@ -1735,6 +1742,11 @@ function WorkspaceScreenContent({
     onWorkspacePathUnavailable: handleWorkspacePathUnavailable,
     onTerminalCreateQueued: handleTerminalCreateQueued,
     onTerminalCreateFailed: handleTerminalCreateFailed,
+  });
+  useWorkspaceLayoutTemplateApplication({
+    persistenceKey,
+    workspace: workspaceDescriptor,
+    createTerminal,
   });
 
   // A terminal stream exit only reaches a stream this client still has attached,
