@@ -200,6 +200,27 @@ describe("buildLayoutTemplate", () => {
     expect(terminal?.tabs[0]?.target).toMatchObject({ kind: "new_tab" });
   });
 
+  it("remaps focus to the rebuilt draft when the focused tab was a draft", () => {
+    const layout = capturedWorktreeLayout();
+    const root = layout.root;
+    if (root.kind !== "group") return;
+    const main = root.group.children[0];
+    if (!main || main.kind !== "group") return;
+    const chat = main.group.children[0];
+    if (!chat || chat.kind !== "pane") return;
+    (chat.pane as SplitPaneInternal).focusedTabId = "draft_source";
+
+    const template = templateFor(layout);
+    const rebuiltChat = collectTemplatePanes(template.layout.root).find(
+      (p) => p.id === "pane-chat",
+    );
+    const rebuiltDraft = rebuiltChat?.tabs[0];
+    expect(rebuiltDraft?.target.kind).toBe("draft");
+    expect(rebuiltChat?.focusedTabId).toBe(
+      rebuiltDraft?.target.kind === "draft" ? rebuiltDraft.target.draftId : null,
+    );
+  });
+
   it("keeps the explorer sidebar pane hidden with its default tabs", () => {
     const template = templateFor(capturedWorktreeLayout());
     const explorer = collectTemplatePanes(template.layout.root).find(
