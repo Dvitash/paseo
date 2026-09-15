@@ -41,16 +41,16 @@
           background-color: #181b1a;
         }
       }
-      /* iOS standalone PWAs can report 100dvh/innerHeight short of the
-      painted area, leaving a dead band at the bottom. The shortfall is
-      measured at runtime against visualViewport.height (the actually-visible
-      region, so it can never overshoot) and injected through
-      --paseo-viewport-compensation by use-standalone-pwa-viewport-heal.ts.
-      Gated on the `ios-standalone` class so Android/desktop standalone,
-      which report correct heights, are untouched. */
+      /* Standalone iOS has no browser toolbar. Size the shell against the
+         large viewport, not WebKit's sometimes-short dynamic viewport.
+         Safe-area padding belongs to the app, not the shell height. */
       .ios-standalone,
       .ios-standalone body {
-        height: calc(100dvh + var(--paseo-viewport-compensation, 0px));
+        height: 100vh;
+        height: 100lvh;
+      }
+      .ios-standalone body {
+        position: relative;
       }
       /* These styles make the root element full-height */
       #root {
@@ -62,12 +62,19 @@
         min-height: 0;
         overflow: hidden;
       }
+      /* Only the root follows the keyboard; the body remains a stable size.
+         Avoid transforms (which change fixed descendants' containing block)
+         and display:none (which loses focus and scroll state). */
+      .ios-standalone #root {
+        position: absolute;
+        left: 0;
+        top: var(--paseo-viewport-top, 0px);
+        height: var(--paseo-viewport-height, 100%);
+      }
     </style>
     <script>
-      // iOS standalone PWAs need the viewport compensation above. This must
-      // run before first paint, so it lives inline rather than in the bundle.
-      // Detection mirrors isAppleHandheldPlatform + the standalone checks in
-      // use-standalone-pwa-viewport-heal.ts.
+      // Select the standalone shell before first paint. Runtime keyboard
+      // sizing in standalone-pwa-viewport.ts uses this same platform gate.
       (function () {
         var nav = window.navigator;
         var isIos =
