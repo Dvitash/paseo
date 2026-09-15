@@ -710,10 +710,16 @@ export const fr: TranslationResources = {
         copyPath: "Copier le chemin de l'espace de travail",
         copyBranchName: "Copier le nom de la branche",
         showSetup: "Afficher la configuration",
+        saveLayoutTemplate:
+          "Enregistrer la disposition comme modèle pour les nouveaux espaces de travail",
+        clearLayoutTemplate: "Effacer le modèle de disposition enregistré",
       },
       toasts: {
         workspacePathUnavailable: "Le cheminWorkspacen'est pas encore disponible",
         branchNameUnavailable: "Nom de la succursale non disponible",
+        layoutTemplateSaved:
+          "Disposition enregistrée — les nouveaux espaces de travail de ce projet s'ouvriront avec",
+        layoutTemplateCleared: "Modèle de disposition enregistré effacé",
         terminalQueued:
           "Préparation de l'espace de travail, ouverture du terminal lorsque vous êtes prêt...",
         workspacePathCopiedLabel: "CheminWorkspace",

@@ -705,10 +705,15 @@ export const ko: TranslationResources = {
         copyPath: "워크스페이스 경로 복사",
         copyBranchName: "브랜치 이름 복사",
         showSetup: "설정 표시",
+        saveLayoutTemplate: "새 워크스페이스를 위한 레이아웃 템플릿으로 저장",
+        clearLayoutTemplate: "저장된 레이아웃 템플릿 지우기",
       },
       toasts: {
         workspacePathUnavailable: "워크스페이스 경로를 아직 사용할 수 없습니다",
         branchNameUnavailable: "브랜치 이름을 사용할 수 없습니다",
+        layoutTemplateSaved:
+          "레이아웃이 저장되었습니다 — 이 프로젝트의 새 워크스페이스가 이 레이아웃으로 열립니다",
+        layoutTemplateCleared: "저장된 레이아웃 템플릿이 삭제되었습니다",
         terminalQueued: "워크스페이스 준비 중, 준비되면 터미널을 엽니다...",
         workspacePathCopiedLabel: "워크스페이스 경로",
         branchNameCopiedLabel: "브랜치 이름",

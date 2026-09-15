@@ -74,6 +74,7 @@ import {
   useWorkspaceLayoutStore,
   useWorkspaceLayoutStoreHydrated,
 } from "@/stores/workspace-layout-store";
+import { useApplyWorkspaceLayoutTemplate } from "@/stores/workspace-layout-templates";
 import {
   buildWorkspaceTabPersistenceKey,
   type WorkspaceTab,
@@ -860,6 +861,18 @@ export const WorkspaceScreen = memo(function WorkspaceScreen({
   recoveryAgentId,
 }: WorkspaceScreenProps) {
   const navigationFocused = useIsFocused();
+  const normalizedServerId = trimNonEmpty(decodeSegment(serverId)) ?? "";
+  const normalizedWorkspaceId = resolveWorkspaceRouteId({ routeWorkspaceId: workspaceId }) ?? "";
+  const persistenceKey = buildWorkspaceTabPersistenceKey({
+    serverId: normalizedServerId,
+    workspaceId: normalizedWorkspaceId,
+  });
+  const workspaceDescriptor = useWorkspace(normalizedServerId, normalizedWorkspaceId);
+  useApplyWorkspaceLayoutTemplate({
+    workspaceKey: persistenceKey,
+    projectRootPath: workspaceDescriptor?.projectRootPath ?? null,
+    enabled: persistenceKey !== null && workspaceDescriptor !== null,
+  });
   useEffect(() => {
     traceInstant("paseo.workspace.mount", { serverId, workspaceId });
     return () => {

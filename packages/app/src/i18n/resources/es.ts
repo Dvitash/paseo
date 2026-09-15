@@ -710,10 +710,16 @@ export const es: TranslationResources = {
         copyPath: "Copiar ruta del espacio de trabajo",
         copyBranchName: "Copiar nombre de sucursal",
         showSetup: "Mostrar configuración",
+        saveLayoutTemplate:
+          "Guardar la distribución como plantilla para nuevos espacios de trabajo",
+        clearLayoutTemplate: "Borrar la plantilla de distribución guardada",
       },
       toasts: {
         workspacePathUnavailable: "La rutaWorkspaceaún no está disponible",
         branchNameUnavailable: "Nombre de la sucursal no disponible",
+        layoutTemplateSaved:
+          "Distribución guardada: los nuevos espacios de trabajo de este proyecto se abrirán con ella",
+        layoutTemplateCleared: "Plantilla de distribución guardada eliminada",
         terminalQueued:
           "Preparando el espacio de trabajo, abriendo la terminal cuando esté listo...",
         workspacePathCopiedLabel: "RutaWorkspace",

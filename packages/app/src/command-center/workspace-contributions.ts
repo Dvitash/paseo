@@ -56,6 +56,8 @@ export interface WorkspaceCommandCenterLabels {
   pin: string;
   unpin: string;
   showSetup: string;
+  saveLayoutTemplate: string;
+  clearLayoutTemplate: string;
   labelsGroup: string;
 }
 
@@ -85,6 +87,7 @@ export interface WorkspaceCommandCenterIcons {
   unpin?: CommandCenterIcon;
   showSetup?: CommandCenterIcon;
   toggleFocusMode?: CommandCenterIcon;
+  layoutTemplate?: CommandCenterIcon;
   label?: CommandCenterIcon;
   git?(action: GitAction): CommandCenterIcon | undefined;
 }
@@ -102,6 +105,13 @@ export interface WorkspaceCommandCenterShortcuts {
   toggleFocusMode?: ShortcutKey[][];
   toggleExplorerSidebar?: ShortcutKey[][];
   pinWorkspace?: ShortcutKey[][];
+}
+
+export interface WorkspaceCommandCenterLayoutTemplate {
+  /** Whether the workspace's project already has a saved layout template. */
+  hasTemplate: boolean;
+  save(): void;
+  clear(): void;
 }
 
 export interface WorkspaceCommandCenterSource {
@@ -134,6 +144,7 @@ export interface WorkspaceCommandCenterSource {
   copyPath(): void;
   copyBranchName(): void;
   toggleLabel(name: string, assigned: boolean): void | Promise<void>;
+  layoutTemplate: WorkspaceCommandCenterLayoutTemplate;
 }
 
 function buildGitContribution(
@@ -690,6 +701,33 @@ export function buildWorkspaceCommandCenterContributions(
         icon: source.icons.toggleFocusMode,
         shortcutKeys: source.shortcuts.toggleFocusMode,
         action: { id: "workspace.focus.toggle", scope: "workspace" },
+        visibility: "query",
+      }),
+    );
+  }
+
+  contributions.push(
+    buildWorkspaceCallback({
+      source,
+      id: "workspace:save-layout-template",
+      rank: 27,
+      title: source.labels.saveLayoutTemplate,
+      keywords: ["layout", "template", "save", "default", "arrangement", "panes", "split"],
+      icon: source.icons.layoutTemplate,
+      run: source.layoutTemplate.save,
+      visibility: "query",
+    }),
+  );
+  if (source.layoutTemplate.hasTemplate) {
+    contributions.push(
+      buildWorkspaceCallback({
+        source,
+        id: "workspace:clear-layout-template",
+        rank: 28,
+        title: source.labels.clearLayoutTemplate,
+        keywords: ["layout", "template", "clear", "remove", "reset", "delete"],
+        icon: source.icons.layoutTemplate,
+        run: source.layoutTemplate.clear,
         visibility: "query",
       }),
     );

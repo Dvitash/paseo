@@ -710,10 +710,15 @@ export const ru: TranslationResources = {
         copyPath: "Скопировать путь к рабочему пространству",
         copyBranchName: "Скопировать название ветки",
         showSetup: "Показать настройку рабочего пространства",
+        saveLayoutTemplate: "Сохранить компоновку как шаблон для новых рабочих пространств",
+        clearLayoutTemplate: "Очистить сохранённый шаблон компоновки",
       },
       toasts: {
         workspacePathUnavailable: "Путь к рабочему пространству пока недоступен.",
         branchNameUnavailable: "Имя ветки недоступно",
+        layoutTemplateSaved:
+          "Компоновка сохранена — новые рабочие пространства этого проекта будут открываться с ней",
+        layoutTemplateCleared: "Сохранённый шаблон компоновки удалён",
         terminalQueued:
           "Рабочее пространство подготавливается. Терминал откроется, когда оно будет готово...",
         workspacePathCopiedLabel: "Путь к рабочему пространству",

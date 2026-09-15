@@ -707,10 +707,15 @@ export const ja: TranslationResources = {
         copyPath: "ワークスペースパスをコピー",
         copyBranchName: "ブランチ名をコピー",
         showSetup: "セットアップを表示",
+        saveLayoutTemplate: "新しいワークスペース用にレイアウトをテンプレートとして保存",
+        clearLayoutTemplate: "保存したレイアウトテンプレートを削除",
       },
       toasts: {
         workspacePathUnavailable: "ワークスペースパスはまだ利用できません",
         branchNameUnavailable: "ブランチ名が利用できません",
+        layoutTemplateSaved:
+          "レイアウトを保存しました — このプロジェクトの新しいワークスペースはこのレイアウトで開きます",
+        layoutTemplateCleared: "保存したレイアウトテンプレートを削除しました",
         terminalQueued: "ワークスペースを準備中、準備ができたらターミナルを開きます...",
         workspacePathCopiedLabel: "ワークスペースパス",
         branchNameCopiedLabel: "ブランチ名",

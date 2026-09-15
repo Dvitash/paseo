@@ -74,6 +74,8 @@ function source(gitActions: GitActions): {
         pin: "Pin to top",
         unpin: "Unpin",
         showSetup: "Show setup",
+        saveLayoutTemplate: "Save layout as template",
+        clearLayoutTemplate: "Clear saved layout template",
         labelsGroup: "Labels",
       },
       icons: {},
@@ -101,6 +103,11 @@ function source(gitActions: GitActions): {
       },
       toggleLabel: (name, assigned) => {
         toggledLabels.push({ name, assigned });
+      },
+      layoutTemplate: {
+        hasTemplate: false,
+        save: () => undefined,
+        clear: () => undefined,
       },
     },
     runGitActions,

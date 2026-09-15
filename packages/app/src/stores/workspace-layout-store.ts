@@ -79,6 +79,7 @@ export {
   removePaneFromTree,
   removeTabFromTree,
   stripEphemeralTabsFromLayout,
+  WorkspaceLayoutStorageSchema,
 };
 export type {
   SplitGroup,
@@ -165,11 +166,21 @@ interface WorkspaceLayoutStore {
   hideAgent: (workspaceKey: string, agentId: string) => void;
   unhideAgent: (workspaceKey: string, agentId: string) => void;
   purgeWorkspace: (workspaceKey: string) => void;
+  /** Commits a fully-built layout for a workspace that has none yet (layout templates). */
+  seedWorkspaceLayout: (workspaceKey: string, seed: WorkspaceLayoutSeed) => void;
 }
 
 interface WorkspaceFocusRestorationState {
   restorePaneId: string | null;
   tokens: string[];
+}
+
+interface WorkspaceLayoutSeed {
+  layout: WorkspaceLayout;
+  splitSizesByGroup: Record<string, number[]>;
+  explorerSidebarPaneId: string | null;
+  sidePaneId: string | null;
+  explorerSidebarWidth: number | null;
 }
 
 // The persisted tree includes the Explorer shell; the renderer docks it outside workspace splits.
@@ -1838,6 +1849,36 @@ export function createWorkspaceLayoutStore(
               sidePaneIdByWorkspace,
             };
           });
+        },
+        seedWorkspaceLayout: (workspaceKey, seed) => {
+          const normalizedWorkspaceKey = trimNonEmpty(workspaceKey);
+          if (!normalizedWorkspaceKey) {
+            return;
+          }
+          set((state) => ({
+            layoutByWorkspace: {
+              ...state.layoutByWorkspace,
+              [normalizedWorkspaceKey]: seed.layout,
+            },
+            splitSizesByWorkspace: seed.splitSizesByGroup
+              ? { ...state.splitSizesByWorkspace, [normalizedWorkspaceKey]: seed.splitSizesByGroup }
+              : state.splitSizesByWorkspace,
+            explorerSidebarPaneIdByWorkspace: {
+              ...state.explorerSidebarPaneIdByWorkspace,
+              [normalizedWorkspaceKey]: seed.explorerSidebarPaneId,
+            },
+            sidePaneIdByWorkspace: {
+              ...state.sidePaneIdByWorkspace,
+              [normalizedWorkspaceKey]: seed.sidePaneId,
+            },
+            explorerSidebarWidthByWorkspace:
+              seed.explorerSidebarWidth !== null
+                ? {
+                    ...state.explorerSidebarWidthByWorkspace,
+                    [normalizedWorkspaceKey]: seed.explorerSidebarWidth,
+                  }
+                : state.explorerSidebarWidthByWorkspace,
+          }));
         },
       }),
       {

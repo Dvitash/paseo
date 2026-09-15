@@ -12,6 +12,7 @@ import {
   GitCompareArrows,
   GitPullRequest,
   Globe,
+  LayoutTemplate,
   ListChecks,
   Move,
   PanelRight,
@@ -40,7 +41,12 @@ import {
   collectAllTabs,
   findPaneById,
   useWorkspaceLayoutStore,
+  type WorkspaceLayout,
 } from "@/stores/workspace-layout-store";
+import {
+  buildLayoutTemplate,
+  useWorkspaceLayoutTemplateStore,
+} from "@/stores/workspace-layout-templates";
 import { shouldShowWorkspaceSetup, useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { clearCommandCenterFocusRestoreElement } from "@/utils/command-center-focus-restore";
 import { getShortcutOs } from "@/utils/shortcut-platform";
@@ -51,7 +57,7 @@ import {
   workspaceLabels,
 } from "@/workspace-labels";
 import { getLabelCommandCenterIcon } from "@/workspace-labels/command-center-icon";
-import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
+import { buildWorkspaceTabPersistenceKey, type WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { getCommandCenterIcon } from "./icon";
 import type { CommandCenterIcon } from "./contributions";
 import { useCommandCenterActions } from "./provider";
@@ -59,6 +65,7 @@ import {
   buildWorkspaceCommandCenterContributions,
   type WorkspaceCommandCenterLabelChoice,
   type WorkspaceCommandCenterShortcuts,
+  type WorkspaceCommandCenterSource,
 } from "./workspace-contributions";
 import { resolveWorkspaceCommandCenterShortcuts } from "./workspace-shortcuts";
 
@@ -87,6 +94,7 @@ const WORKSPACE_COMMAND_CENTER_ICONS = {
   pin: getCommandCenterIcon(Pin),
   unpin: getCommandCenterIcon(PinOff),
   showSetup: getCommandCenterIcon(ListChecks),
+  layoutTemplate: getCommandCenterIcon(LayoutTemplate),
   toggleFocusMode: getCommandCenterIcon(Focus),
 };
 
@@ -161,6 +169,62 @@ function useWorkspaceLabelCatalog(
   return { labelCatalog, toggleLabel };
 }
 
+interface WorkspaceLayoutTemplateActionsInput {
+  persistenceKey: string | null;
+  projectRootPath: string | null;
+}
+
+function useWorkspaceLayoutTemplateActions(
+  input: WorkspaceLayoutTemplateActionsInput,
+): WorkspaceCommandCenterSource["layoutTemplate"] {
+  const { persistenceKey, projectRootPath } = input;
+  const hasTemplate = useWorkspaceLayoutTemplateStore((state) =>
+    projectRootPath ? state.templateByProjectRoot[projectRootPath] !== undefined : false,
+  );
+  const toast = useToast();
+  const { t } = useTranslation();
+  const save = useCallback(() => {
+    if (!persistenceKey || !projectRootPath) return;
+    const layoutStore = useWorkspaceLayoutStore.getState();
+    const currentLayout = layoutStore.layoutByWorkspace[persistenceKey];
+    if (!currentLayout) return;
+    const template = buildLayoutTemplate({
+      layout: currentLayout,
+      splitSizesByGroup: layoutStore.splitSizesByWorkspace[persistenceKey],
+      explorerSidebarPaneId: layoutStore.explorerSidebarPaneIdByWorkspace[persistenceKey] ?? null,
+      sidePaneId: layoutStore.sidePaneIdByWorkspace[persistenceKey] ?? null,
+      explorerSidebarWidth: layoutStore.explorerSidebarWidthByWorkspace[persistenceKey],
+      now: Date.now(),
+    });
+    useWorkspaceLayoutTemplateStore.getState().saveTemplate({ projectRootPath, template });
+    toast.show(t("workspace.header.toasts.layoutTemplateSaved"));
+  }, [persistenceKey, projectRootPath, t, toast]);
+  const clear = useCallback(() => {
+    if (!projectRootPath) return;
+    useWorkspaceLayoutTemplateStore.getState().clearTemplate(projectRootPath);
+    toast.show(t("workspace.header.toasts.layoutTemplateCleared"));
+  }, [projectRootPath, t, toast]);
+  return { hasTemplate, save, clear };
+}
+
+function resolveActiveTabInfo(layout: WorkspaceLayout | null): {
+  activeTabKind: WorkspaceTabTarget["kind"] | null;
+  activeTabIndex: number;
+  activeTabCount: number;
+} {
+  if (!layout) {
+    return { activeTabKind: null, activeTabIndex: -1, activeTabCount: 0 };
+  }
+  const focusedPane = findPaneById(layout.root, layout.focusedPaneId);
+  const focusedTabs = collectAllTabs(layout.root).filter((tab) =>
+    focusedPane?.tabIds.includes(tab.tabId),
+  );
+  const activeTabIndex = focusedTabs.findIndex((tab) => tab.tabId === focusedPane?.focusedTabId);
+  const activeTabKind =
+    activeTabIndex >= 0 ? (focusedTabs[activeTabIndex]?.target.kind ?? null) : null;
+  return { activeTabKind, activeTabIndex, activeTabCount: focusedTabs.length };
+}
+
 export function useWorkspaceCommandCenterActions(): void {
   const keyboardActionDispatcher = useKeyboardActionDispatcher();
   const { t } = useTranslation();
@@ -172,13 +236,7 @@ export function useWorkspaceCommandCenterActions(): void {
   const layout = useWorkspaceLayoutStore((state) =>
     workspaceKey ? (state.layoutByWorkspace[workspaceKey] ?? null) : null,
   );
-  const focusedPane = layout ? findPaneById(layout.root, layout.focusedPaneId) : null;
-  const focusedTabs = layout
-    ? collectAllTabs(layout.root).filter((tab) => focusedPane?.tabIds.includes(tab.tabId))
-    : [];
-  const activeTabIndex = focusedTabs.findIndex((tab) => tab.tabId === focusedPane?.focusedTabId);
-  const activeTabKind =
-    activeTabIndex >= 0 ? (focusedTabs[activeTabIndex]?.target.kind ?? null) : null;
+  const { activeTabKind, activeTabIndex, activeTabCount } = resolveActiveTabInfo(layout);
   // One narrow projection for the workspace management contribution fields. The registry's snapshot
   // dedup is unreachable (registry.ts spreads a fresh object per contribution, then compares by
   // reference), so the array-identity guard in registry.replace() is the only thing stopping a
@@ -189,6 +247,7 @@ export function useWorkspaceCommandCenterActions(): void {
     currentBranch: workspace.gitRuntime?.currentBranch ?? null,
     pinnedAt: workspace.pinnedAt ?? null,
     labels: workspace.labels ?? [],
+    projectRootPath: workspace.projectRootPath,
   }));
   const cwd = useWorkspaceDirectory(serverId, workspaceId);
   const currentBranch = fields?.currentBranch ?? null;
@@ -228,6 +287,11 @@ export function useWorkspaceCommandCenterActions(): void {
       currentBranch: fields.currentBranch,
     });
   }, [clipboard, fields]);
+
+  const layoutTemplate = useWorkspaceLayoutTemplateActions({
+    persistenceKey,
+    projectRootPath: fields?.projectRootPath ?? null,
+  });
 
   const { labelCatalog, toggleLabel } = useWorkspaceLabelCatalog(serverId, fields);
 
@@ -276,6 +340,8 @@ export function useWorkspaceCommandCenterActions(): void {
           pin: t("sidebar.workspace.actions.pin"),
           unpin: t("sidebar.workspace.actions.unpin"),
           showSetup: t("workspace.header.actions.showSetup"),
+          saveLayoutTemplate: t("workspace.header.actions.saveLayoutTemplate"),
+          clearLayoutTemplate: t("workspace.header.actions.clearLayoutTemplate"),
           labelsGroup: t("workspaceLabels.title"),
         },
         icons: {
@@ -292,7 +358,7 @@ export function useWorkspaceCommandCenterActions(): void {
         },
         activeTabKind,
         activeTabIndex,
-        activeTabCount: focusedTabs.length,
+        activeTabCount,
         currentBranch,
         isPinned,
         labelCatalog,
@@ -304,6 +370,7 @@ export function useWorkspaceCommandCenterActions(): void {
         copyPath,
         copyBranchName,
         toggleLabel,
+        layoutTemplate,
       }),
     [
       activeTabIndex,
@@ -313,17 +380,18 @@ export function useWorkspaceCommandCenterActions(): void {
       copyBranchName,
       copyPath,
       currentBranch,
-      focusedTabs.length,
+      activeTabCount,
       gitActions,
       isCompact,
       isGit,
       isPinned,
       keyboardActionDispatcher,
-      labelCatalog,
       overrides,
       runGitAction,
       t,
       toggleLabel,
+      labelCatalog,
+      layoutTemplate,
     ],
   );
 

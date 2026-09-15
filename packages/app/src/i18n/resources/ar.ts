@@ -705,10 +705,15 @@ export const ar: TranslationResources = {
         copyPath: "نسخ مسار مساحة العمل",
         copyBranchName: "انسخ اسم الفرع",
         showSetup: "إظهار الإعداد",
+        saveLayoutTemplate: "حفظ التخطيط كقالب لمساحات العمل الجديدة",
+        clearLayoutTemplate: "مسح قالب التخطيط المحفوظ",
       },
       toasts: {
         workspacePathUnavailable: "مسار Workspace غير متاح بعد",
         branchNameUnavailable: "اسم الفرع غير متوفر",
+        layoutTemplateSaved:
+          "تم حفظ التخطيط — ستفتح مساحات العمل الجديدة في هذا المشروع بهذا التخطيط",
+        layoutTemplateCleared: "تم مسح قالب التخطيط المحفوظ",
         terminalQueued: "تحضير مساحة العمل، وفتح الوحدة الطرفية عندما تكون جاهزة...",
         workspacePathCopiedLabel: "مسار Workspace",
         branchNameCopiedLabel: "اسم الفرع",

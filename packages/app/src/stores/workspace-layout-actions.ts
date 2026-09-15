@@ -35,17 +35,21 @@ export interface WorkspaceLayout {
   parentTabIdByTabId?: Record<string, string>;
 }
 
-interface SplitPaneInternal extends SplitPane {
+export interface SplitPaneInternal extends SplitPane {
   tabs: WorkspaceTab[];
 }
 
-interface SplitGroupInternal extends Omit<SplitGroup, "children"> {
+export interface SplitGroupInternal extends Omit<SplitGroup, "children"> {
   children: SplitNodeInternal[];
 }
 
-type SplitNodeInternal =
+export type SplitNodeInternal =
   | { kind: "pane"; pane: SplitPaneInternal }
   | { kind: "group"; group: SplitGroupInternal };
+
+export function asInternalNode(node: SplitNode): SplitNodeInternal {
+  return node as SplitNodeInternal;
+}
 
 interface NormalizeSizesInput {
   sizes: number[];
@@ -474,10 +478,6 @@ export function clampNormalizedSizes(sizes: number[]): number[] {
   }
 
   return normalizeSizes({ sizes: nextSizes, count: nextSizes.length });
-}
-
-function asInternalNode(node: SplitNode): SplitNodeInternal {
-  return node as SplitNodeInternal;
 }
 
 function asInternalLayout(layout: WorkspaceLayout): {
