@@ -3,8 +3,8 @@ name: Side chat validation
 on:
   pull_request:
     paths:
-      - 'packages/**'
-      - '.github/workflows/side-chat-validation.yml'
+      - "packages/**"
+      - ".github/workflows/side-chat-validation.yml"
   workflow_dispatch:
 
 permissions:
@@ -28,8 +28,8 @@ jobs:
           cache: npm
       - run: npm ci
         env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-          LEFTHOOK: '0'
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+          LEFTHOOK: "0"
       - run: npm run build:server-deps && npm run build:app-deps
       - name: Typecheck
         run: npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/app
@@ -59,10 +59,13 @@ jobs:
       - name: Browser workflow regressions
         if: success() || failure()
         working-directory: packages/app
-        run: npx vitest run src/panels/side/workflow.browser.test.tsx src/hooks/standalone-pwa-viewport.browser.test.ts --project=browser --bail=1 --maxWorkers=1
+        run: |
+          npx vitest run src/panels/side/workflow.browser.test.tsx src/hooks/standalone-pwa-viewport.browser.test.ts --project=browser --bail=1 --maxWorkers=1 2>&1 | tee side-browser.log
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: side-browser-failures
-          path: packages/app/.vitest-screenshots
+          path: |
+            packages/app/.vitest-screenshots
+            packages/app/side-browser.log
           retention-days: 7
