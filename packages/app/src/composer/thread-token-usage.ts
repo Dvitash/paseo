@@ -115,9 +115,7 @@ export function updateThreadTokenUsage(
   };
 }
 
-export function getThreadTokenUsage(
-  accumulator: ThreadTokenUsageAccumulator,
-): TokenUsageValues {
+export function getThreadTokenUsage(accumulator: ThreadTokenUsageAccumulator): TokenUsageValues {
   return addUsage(accumulator.completed, accumulator.current);
 }
 
