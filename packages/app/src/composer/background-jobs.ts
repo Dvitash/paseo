@@ -1,22 +1,18 @@
 import type { StreamItem, ToolCallItem } from "@/types/stream";
 
-export interface BackgroundJobWaitCall {
+export interface BackgroundJobSnapshot {
   id: string;
-  label: string;
-  status: string;
-  timestamp: Date;
+  startedAt: Date;
+  lastSeenAt: Date;
+  label: string | null;
 }
 
-const BACKGROUND_JOB_ID_PATTERN = "bg_[A-Za-z0-9_-]+";
+const BACKGROUND_JOB_ID_SOURCE = "bg_[A-Za-z0-9_-]+";
+const BACKGROUND_JOB_ID_PATTERN = new RegExp(`\\b${BACKGROUND_JOB_ID_SOURCE}\\b`, "gi");
 const EXACT_WAIT_PATTERN = new RegExp(
-  `^(?:waiting\\s+for|wait(?:ing)?\\s+on)\\s+(${BACKGROUND_JOB_ID_PATTERN})(?:\\s*(?:\\.{1,3}|…))?$`,
+  `^(?:waiting\\s+for|wait(?:ing)?\\s+on)\\s+(${BACKGROUND_JOB_ID_SOURCE})(?:\\s*(?:\\.{1,3}|…))?$`,
   "i",
 );
-const WAIT_TOOL_NAME_PATTERN = /(?:^|[_\s-])(wait|await)(?:$|[_\s-])|background[_\s-]?output|task[_\s-]?(?:output|wait)/i;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function safeSerialize(value: unknown): string {
   try {
@@ -26,58 +22,51 @@ function safeSerialize(value: unknown): string {
   }
 }
 
-function textWaitCall(item: StreamItem, jobId: string): BackgroundJobWaitCall | null {
-  if (item.kind !== "assistant_message" && item.kind !== "thought" && item.kind !== "notification") {
-    return null;
-  }
-  const text = (item.kind === "notification" ? item.message : item.text).trim();
-  const jobPattern = new RegExp(
-    `\\b(?:waiting\\s+for|wait(?:ing)?\\s+on)\\s+${escapeRegExp(jobId)}\\b`,
-    "i",
-  );
-  if (!jobPattern.test(text)) return null;
-  return {
-    id: item.id,
-    label: text,
-    status: item.kind === "thought" && item.status === "loading" ? "running" : "completed",
-    timestamp: item.timestamp,
-  };
+function itemText(item: StreamItem): string {
+  if (item.kind === "assistant_message" || item.kind === "thought") return item.text;
+  if (item.kind === "notification") return item.message;
+  if (item.kind === "tool_call") return safeSerialize(item.payload.data);
+  return "";
 }
 
-function toolCallWaitCall(item: ToolCallItem, jobId: string): BackgroundJobWaitCall | null {
+function toolCallLabel(item: ToolCallItem): string | null {
   const data = item.payload.data;
   const name = item.payload.source === "agent" ? data.name : data.toolName;
-  if (!WAIT_TOOL_NAME_PATTERN.test(name)) return null;
-
-  const searchable = safeSerialize(data);
-  if (!searchable.toLowerCase().includes(jobId.toLowerCase())) return null;
-
-  return {
-    id: item.id,
-    label: name,
-    status: data.status,
-    timestamp: item.startedAt ?? item.timestamp,
-  };
+  return name?.trim() || null;
 }
 
 /**
- * Finds explicit waits for one provider-owned background job. Tool calls are preferred because
- * providers often also emit a human-readable "Waiting for bg_X" row for the same wait.
+ * Provider background jobs are identified by their stable bg_* ids in the transcript/tool data.
+ * They are intentionally independent from provider subagents, which have their own UI surface.
  */
-export function collectBackgroundJobWaitCalls(
-  items: readonly StreamItem[] | undefined,
-  jobId: string,
-): BackgroundJobWaitCall[] {
-  if (!items?.length || !jobId) return [];
+export function collectBackgroundJobs(items: readonly StreamItem[] | undefined): BackgroundJobSnapshot[] {
+  if (!items?.length) return [];
 
-  const toolCalls = items
-    .map((item) => (item.kind === "tool_call" ? toolCallWaitCall(item, jobId) : null))
-    .filter((item): item is BackgroundJobWaitCall => item !== null);
-  if (toolCalls.length > 0) return toolCalls;
+  const jobs = new Map<string, BackgroundJobSnapshot>();
+  for (const item of items) {
+    const text = itemText(item);
+    if (!text) continue;
+    const ids = text.match(BACKGROUND_JOB_ID_PATTERN) ?? [];
+    for (const rawId of ids) {
+      const id = rawId.toLowerCase();
+      const timestamp = item.startedAt ?? item.timestamp;
+      const existing = jobs.get(id);
+      const label = item.kind === "tool_call" ? toolCallLabel(item) : null;
+      if (!existing) {
+        jobs.set(id, { id, startedAt: timestamp, lastSeenAt: item.timestamp, label });
+        continue;
+      }
+      jobs.set(id, {
+        ...existing,
+        startedAt: existing.startedAt.getTime() <= timestamp.getTime() ? existing.startedAt : timestamp,
+        lastSeenAt:
+          existing.lastSeenAt.getTime() >= item.timestamp.getTime() ? existing.lastSeenAt : item.timestamp,
+        label: existing.label ?? label,
+      });
+    }
+  }
 
-  return items
-    .map((item) => textWaitCall(item, jobId))
-    .filter((item): item is BackgroundJobWaitCall => item !== null);
+  return [...jobs.values()].sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
 }
 
 /** Exact provider chatter that is redundant once background jobs have their own status pills. */
@@ -103,8 +92,6 @@ export function shouldCollapseBackgroundJobs(input: {
   if (input.count >= 4 || input.compact) return true;
   if (input.availableWidth === null) return false;
 
-  // Individual pills average ~200px once id, wait count and elapsed time are present. Keep a
-  // small reserve so the neighboring composer pills do not get forced off-screen.
-  const requiredWidth = input.count * 200 + (input.count - 1) * 4 + 32;
+  const requiredWidth = input.count * 150 + (input.count - 1) * 4 + 32;
   return input.availableWidth < requiredWidth;
 }
