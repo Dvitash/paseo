@@ -1,9 +1,4 @@
-export type BrowserResumeReason =
-  | "visibilitychange"
-  | "pageshow"
-  | "focus"
-  | "online"
-  | "resume";
+export type BrowserResumeReason = "visibilitychange" | "pageshow" | "focus" | "online" | "resume";
 
 export type BrowserLifecycleEvent =
   | { type: "hidden"; generation: number }

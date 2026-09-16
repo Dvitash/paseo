@@ -10,7 +10,7 @@ import {
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { SideChatMessage, SideChatReference, SideChatSnapshot } from "@getpaseo/protocol/side";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
-import { TurnCopyButton } from "@/components/message";
+import { TurnCopyButton } from "@/components/turn-copy-button";
 import { Button } from "@/components/ui/button";
 import { SteeringProposalCard } from "./proposal";
 import { isNearSideBottom, type SideSubmission } from "./state";

@@ -122,8 +122,7 @@ export class ModelTurnTracker {
     this.observedOutputDeltas += 1;
     const firstDeltaTime = this.firstDeltaTime ?? now;
     const decodeMs = Math.max(0, now - firstDeltaTime);
-    const liveTokensPerSecond =
-      decodeMs > 0 ? (this.observedOutputDeltas * 1000) / decodeMs : null;
+    const liveTokensPerSecond = decodeMs > 0 ? (this.observedOutputDeltas * 1000) / decodeMs : null;
 
     this.currentTurn = {
       status: "running",
