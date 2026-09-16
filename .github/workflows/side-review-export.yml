@@ -12,7 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 100
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -23,15 +22,15 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           LEFTHOOK: '0'
       - run: npm run build:server-deps && npm run build:app-deps
-      - name: Bundle tracked source and installed test dependencies
+      - name: Archive tracked source and installed test dependencies
         run: |
-          git bundle create /tmp/side-source.bundle HEAD refs/remotes/origin/main
-          tar -czf /tmp/side-dependencies.tar.gz node_modules packages/*/node_modules packages/*/dist packages/expo-two-way-audio/build
+          git archive -o /tmp/side-source.tar HEAD
+          find node_modules packages -type d \( -name node_modules -o -name dist -o -name build \) -prune -print0 | tar --null -czf /tmp/side-dependencies.tar.gz -T -
       - uses: actions/upload-artifact@v4
         with:
           name: side-review-workspace
           path: |
-            /tmp/side-source.bundle
+            /tmp/side-source.tar
             /tmp/side-dependencies.tar.gz
           retention-days: 1
           compression-level: 0
