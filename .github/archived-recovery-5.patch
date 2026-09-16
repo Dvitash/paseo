@@ -1,0 +1,303 @@
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index a3b7a3a..11ddf23 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -94,2 +94,3 @@ import type {
+   AgentTimelineFetchDirection,
++  AgentTimelineFetchOptions,
+   AgentTimelineFetchResult,
+@@ -7529,2 +7530,21 @@ export class Session {
+ 
++  private async readAgentTimelineSource(agentId: string, savedOnly: boolean): Promise<{
++    agent: AgentSnapshotPayload;
++    fetch: (options: AgentTimelineFetchOptions) => AgentTimelineFetchResult;
++  }> {
++    if (savedOnly) {
++      const record = await this.agentStorage.get(agentId);
++      if (!record) throw new Error(`Agent not found: ${agentId}`);
++      if (record.internal || !this.isProviderVisibleToClient(record.provider)) {
++        throw new Error(`Agent not found: ${agentId}`);
++      }
++      const store = await this.agentManager.loadSavedAgentTimeline(agentId);
++      return { agent: this.buildStoredAgentPayload(record), fetch: (options) => store.fetch(agentId, options) };
++    }
++    const snapshot = await ensureAgentLoaded(agentId, {
++      agentManager: this.agentManager, agentStorage: this.agentStorage, logger: this.sessionLogger,
++    });
++    return { agent: await this.buildAgentPayload(snapshot), fetch: (options) => this.agentManager.fetchTimeline(agentId, options) };
++  }
++
+   private async handleFetchAgentTimelineRequest(
+@@ -7545,10 +7565,6 @@ export class Session {
+     try {
+-      const snapshot = await ensureAgentLoaded(msg.agentId, {
+-        agentManager: this.agentManager,
+-        agentStorage: this.agentStorage,
+-        logger: this.sessionLogger,
+-      });
+-      const agentPayload = await this.buildAgentPayload(snapshot);
++      const history = await this.readAgentTimelineSource(msg.agentId, msg.savedOnly === true);
++      const agentPayload = history.agent;
+ 
+-      const fetchedControlTimeline = this.agentManager.fetchTimeline(msg.agentId, {
++      const fetchedControlTimeline = history.fetch({
+         direction,
+@@ -7561,2 +7577,4 @@ export class Session {
+         controlTimeline: fetchedControlTimeline,
++        fullTimeline: this.shouldUseFullTimelineForProjectedPage({ timeline: fetchedControlTimeline, pageLimit })
++          ? history.fetch({ direction: "tail", limit: 0 }) : undefined,
+         direction,
+@@ -7598,3 +7616,3 @@ export class Session {
+               const payloadEntry = {
+-                provider: snapshot.provider,
++                provider: agentPayload.provider,
+                 item: entry.item,
+@@ -7831,9 +7849,5 @@ export class Session {
+     try {
+-      const snapshot = await ensureAgentLoaded(msg.agentId, {
+-        agentManager: this.agentManager,
+-        agentStorage: this.agentStorage,
+-        logger: this.sessionLogger,
+-      });
+-      const agentPayload = await this.buildAgentPayload(snapshot);
+-      const timeline = this.agentManager.fetchTimeline(msg.agentId, {
++      const history = await this.readAgentTimelineSource(msg.agentId, msg.savedOnly === true);
++      const agentPayload = history.agent;
++      const timeline = history.fetch({
+         direction: "tail",
+@@ -7848,3 +7862,3 @@ export class Session {
+         agentTitle: agentPayload.title,
+-        cwd: snapshot.cwd,
++        cwd: agentPayload.cwd,
+       });
+diff --git a/packages/server/src/server/session/workspace-recovery/archived-worktree-commit.test.ts b/packages/server/src/server/session/workspace-recovery/archived-worktree-commit.test.ts
+new file mode 100644
+index 0000000..b109c05
+--- /dev/null
++++ b/packages/server/src/server/session/workspace-recovery/archived-worktree-commit.test.ts
+@@ -0,0 +1,71 @@
++import { execFileSync } from "node:child_process";
++import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterEach, expect, test } from "vitest";
++import { createTestLogger } from "../../../../test-utils/test-logger.js";
++import { archivedWorktreeRef, preserveArchivedWorkspaceCommit, restoreArchivedWorkspaceBranch } from "./archived-worktree-commit.js";
++import { createWorkspaceRecoveryService } from "./workspace-recovery-service.js";
++import { createWorktree } from "../../../utils/worktree.js";
++import { archivePersistedWorkspaceRecord } from "../../workspace-archive-service.js";
++import { createPersistedWorkspaceRecord, createPersistedProjectRecord, FileBackedWorkspaceRegistry } from "../../workspace-registry.js";
++
++const roots: string[] = [];
++afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
++function fixture() {
++  const root = mkdtempSync(join(tmpdir(), "archive-commit-")); roots.push(root);
++  const repo = join(root, "repo"); mkdirSync(repo);
++  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: "pipe" }).trim();
++  git("init", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.com");
++  writeFileSync(join(repo, "README.md"), "main"); git("add", "."); git("commit", "-m", "main");
++  const main = git("rev-parse", "HEAD");
++  return { root, repo, git, main };
++}
++
++test("archive pins an exact worktree commit and restores the original branch/path after deletion and GC", async () => {
++  const { root, repo, git, main } = fixture();
++  const paseoHome = join(root, "paseo"); const worktreesRoot = join(root, "worktrees");
++  const created = await createWorktree({ cwd: repo, worktreeSlug: "performance", source: { kind: "branch-off", baseBranch: "main", branchName: "performance" }, runSetup: false, paseoHome, worktreesRoot });
++  writeFileSync(join(created.worktreePath, "saved.txt"), "saved work");
++  git("-C", created.worktreePath, "add", "."); git("-C", created.worktreePath, "commit", "-m", "saved work");
++  const head = git("rev-parse", "performance");
++  const time = "2026-09-16T12:00:00Z";
++  const registry = new FileBackedWorkspaceRegistry(join(root, "workspaces.json"), createTestLogger());
++  const workspace = createPersistedWorkspaceRecord({ workspaceId: "saved-workspace", projectId: "project", cwd: created.worktreePath, worktreeRoot: created.worktreePath, mainRepoRoot: repo, isPaseoOwnedWorktree: true, branch: "performance", kind: "worktree", displayName: "performance", createdAt: time, updatedAt: time });
++  await registry.upsert(workspace);
++  await archivePersistedWorkspaceRecord({ workspaceRegistry: registry, workspaceId: workspace.workspaceId });
++  expect(git("rev-parse", archivedWorktreeRef(workspace.workspaceId))).toBe(head);
++  git("worktree", "remove", created.worktreePath); git("branch", "-D", "performance");
++  git("reflog", "expire", "--expire=now", "--all"); git("gc", "--prune=now");
++  const unarchived: string[] = [];
++  const project = createPersistedProjectRecord({ projectId: "project", kind: "git", rootPath: repo, displayName: "repo", createdAt: time, updatedAt: time });
++  const service = createWorkspaceRecoveryService({ paseoHome, worktreesRoot, getWorkspace: (id) => registry.get(id), getProject: async () => project, isDirectory: async (path) => existsSync(path), unarchiveWorkspace: async (record) => { unarchived.push(record.workspaceId); } });
++  await service.restore(workspace.workspaceId);
++  expect(git("rev-parse", "performance")).toBe(head);
++  expect(git("rev-parse", "main")).toBe(main);
++  expect(existsSync(join(created.worktreePath, "saved.txt"))).toBe(true);
++  expect(unarchived).toEqual([workspace.workspaceId]);
++});
++
++test("retains existing branches and recovers legacy origin tracking refs without network", async () => {
++  const { repo, git, main } = fixture();
++  git("branch", "performance");
++  await preserveArchivedWorkspaceCommit({ workspaceId: "w", kind: "worktree", cwd: repo, worktreeRoot: repo });
++  writeFileSync(join(repo, "new.txt"), "new"); git("add", "."); git("commit", "-m", "new");
++  git("branch", "-f", "performance", "HEAD"); const newer = git("rev-parse", "performance");
++  await restoreArchivedWorkspaceBranch({ cwd: repo, workspaceId: "w", branchName: "performance" });
++  expect(git("rev-parse", "performance")).toBe(newer);
++  git("update-ref", "refs/remotes/origin/legacy", main);
++  await restoreArchivedWorkspaceBranch({ cwd: repo, workspaceId: "old", branchName: "legacy" });
++  expect(git("rev-parse", "legacy")).toBe(main);
++});
++
++test("distinguishes a missing branch from transport failure and rejects Git shorthand", async () => {
++  const { root, repo, git } = fixture();
++  const remote = join(root, "remote.git"); git("init", "--bare", remote); git("remote", "add", "origin", remote);
++  await expect(restoreArchivedWorkspaceBranch({ cwd: repo, workspaceId: "w", branchName: "missing" })).rejects.toThrow("missing locally and on origin");
++  git("remote", "set-url", "origin", join(root, "nonexistent.git"));
++  await expect(restoreArchivedWorkspaceBranch({ cwd: repo, workspaceId: "w", branchName: "missing" })).rejects.toThrow(/does not appear to be a git repository|Could not read from remote repository/);
++  await expect(restoreArchivedWorkspaceBranch({ cwd: repo, workspaceId: "w", branchName: "@{-1}" })).rejects.toThrow();
++  expect(() => git("rev-parse", "--verify", "refs/heads/missing")).toThrow();
++});
+diff --git a/packages/server/src/server/session/workspace-recovery/archived-worktree-commit.ts b/packages/server/src/server/session/workspace-recovery/archived-worktree-commit.ts
+new file mode 100644
+index 0000000..bd2673f
+--- /dev/null
++++ b/packages/server/src/server/session/workspace-recovery/archived-worktree-commit.ts
+@@ -0,0 +1,97 @@
++import { createHash } from "node:crypto";
++import { stat } from "node:fs/promises";
++
++import { runGitCommand } from "../../../utils/run-git-command.js";
++import type { PersistedWorkspaceRecord } from "../../workspace-registry.js";
++
++// A ref, rather than only a SHA in JSON, keeps an archived commit reachable
++// after its branch is deleted and Git runs garbage collection. Hash the opaque
++// workspace ID so it cannot introduce ref/path syntax.
++export function archivedWorktreeRef(workspaceId: string): string {
++  const key = createHash("sha256").update(workspaceId).digest("hex");
++  return `refs/paseo/archived-workspaces/${key}`;
++}
++
++export async function preserveArchivedWorkspaceCommit(
++  workspace: Pick<PersistedWorkspaceRecord, "workspaceId" | "kind" | "cwd" | "worktreeRoot">,
++): Promise<void> {
++  if (workspace.kind !== "worktree") return;
++  const cwd = workspace.worktreeRoot ?? workspace.cwd;
++  try {
++    if (!(await stat(cwd)).isDirectory()) return;
++  } catch (error) {
++    // Already-missing worktrees can still be archived. Other filesystem errors
++    // must not be treated as proof that there is nothing left to preserve.
++    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
++    throw error;
++  }
++  const { stdout } = await runGitCommand(["rev-parse", "--verify", "HEAD^{commit}"], { cwd });
++  await runGitCommand(["update-ref", archivedWorktreeRef(workspace.workspaceId), stdout.trim()], {
++    cwd,
++  });
++}
++
++async function resolveCommit(cwd: string, ref: string): Promise<string | null> {
++  const result = await runGitCommand(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
++    cwd,
++    acceptExitCodes: [0, 1],
++  });
++  return result.exitCode === 0 ? result.stdout.trim() : null;
++}
++
++export async function restoreArchivedWorkspaceBranch(input: {
++  cwd: string;
++  workspaceId: string;
++  branchName: string;
++}): Promise<void> {
++  const { cwd, branchName } = input;
++  if (branchName.startsWith("-")) throw new Error("Invalid archived branch name");
++  await runGitCommand(["check-ref-format", `refs/heads/${branchName}`], { cwd });
++  const localRef = `refs/heads/${branchName}`;
++  if (await resolveCommit(cwd, localRef)) return;
++
++  const savedCommit = await resolveCommit(cwd, archivedWorktreeRef(input.workspaceId));
++  if (savedCommit) {
++    // Never reset an existing branch. A concurrent recreation is a conflict,
++    // not permission to force-update it to the archived commit.
++    await runGitCommand(["branch", "--no-track", branchName, savedCommit], { cwd });
++    return;
++  }
++
++  // Legacy archives have no recovery ref. A locally retained remote-tracking
++  // ref is still useful when the remote has deleted the branch or is offline.
++  const remoteCommit = await resolveCommit(cwd, `refs/remotes/origin/${branchName}`);
++  if (remoteCommit) {
++    await runGitCommand(["branch", "--no-track", branchName, remoteCommit], { cwd });
++    return;
++  }
++
++  const remotes = await runGitCommand(["remote"], { cwd });
++  if (!remotes.stdout.split(/\r?\n/).includes("origin")) {
++    throw new Error(
++      `Cannot restore branch "${branchName}": no local branch, saved archive commit, or origin remote is available. Restore the branch manually or continue the saved conversation in another workspace.`,
++    );
++  }
++
++  try {
++    // Exit 2 means the remote answered successfully but has no matching head.
++    // Authentication, transport and repository failures must retain Git's
++    // diagnostics instead of being rewritten to "Unknown branch".
++    const remote = await runGitCommand(
++      ["ls-remote", "--exit-code", "--heads", "origin", localRef],
++      { cwd, timeout: 30_000, acceptExitCodes: [0, 2] },
++    );
++    if (remote.exitCode === 2) {
++      throw new Error(
++        `Branch "${branchName}" is missing locally and on origin, and this archive has no saved commit. Restore the branch manually or continue the saved conversation in another workspace.`,
++      );
++    }
++    await runGitCommand(["fetch", "--no-tags", "origin", `${localRef}:${localRef}`], {
++      cwd,
++      timeout: 90_000,
++    });
++  } catch (error) {
++    const detail = error instanceof Error ? error.message : String(error);
++    throw new Error(`Could not restore "${branchName}" from origin: ${detail}`, { cause: error });
++  }
++}
+diff --git a/packages/server/src/server/session/workspace-recovery/workspace-recovery-service.ts b/packages/server/src/server/session/workspace-recovery/workspace-recovery-service.ts
+index 1d98a91..dad8bfd 100644
+--- a/packages/server/src/server/session/workspace-recovery/workspace-recovery-service.ts
++++ b/packages/server/src/server/session/workspace-recovery/workspace-recovery-service.ts
+@@ -1,2 +1,3 @@
+ import { basename } from "node:path";
++import { restoreArchivedWorkspaceBranch } from "./archived-worktree-commit.js";
+ 
+@@ -186,3 +187,12 @@ export function createWorkspaceRecoveryService(deps: {
+ 
++    await restoreArchivedWorkspaceBranch({
++      cwd: sourceRepoRoot, workspaceId: workspace.workspaceId, branchName: branch,
++    });
++
++    const worktrees = await runGitCommand(["worktree", "list", "--porcelain"], { cwd: sourceRepoRoot });
++    if (worktrees.stdout.split(/\r?\n/).includes(`branch refs/heads/${branch}`)) {
++      throw new Error(`Branch "${branch}" is already checked out elsewhere. Close that checkout before restoring this workspace.`);
++    }
+     let recreatedWorktreePath: string;
++    let recreatedBranch: string;
+     try {
+@@ -197,2 +207,3 @@ export function createWorkspaceRecoveryService(deps: {
+       recreatedWorktreePath = result.worktreePath;
++      recreatedBranch = result.branchName;
+     } catch (error) {
+@@ -202,2 +213,5 @@ export function createWorkspaceRecoveryService(deps: {
+     try {
++      if (recreatedBranch !== branch) {
++        throw new Error(`Branch "${branch}" is already checked out elsewhere. Close that checkout before restoring this workspace.`);
++      }
+       const recreatedWorkspacePath = mapWorkspaceCwdToWorktree({
+diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
+index 7b9c4c9..67cbe79 100644
+--- a/packages/server/src/server/websocket-server.ts
++++ b/packages/server/src/server/websocket-server.ts
+@@ -1793,2 +1793,3 @@ export class VoiceAssistantWebSocketServer {
+         agentForkContext: true,
++        savedAgentHistory: true,
+         // COMPAT(agentForkContextCursor): added in v0.1.108, remove gate after 2027-01-14.
+diff --git a/packages/server/src/server/workspace-archive-service.ts b/packages/server/src/server/workspace-archive-service.ts
+index a02c97e..1e558aa 100644
+--- a/packages/server/src/server/workspace-archive-service.ts
++++ b/packages/server/src/server/workspace-archive-service.ts
+@@ -1,2 +1,3 @@
+ import { resolve } from "node:path";
++import { preserveArchivedWorkspaceCommit } from "./session/workspace-recovery/archived-worktree-commit.js";
+ 
+@@ -604,2 +605,3 @@ export async function archivePersistedWorkspaceRecord(input: {
+   const archivedAt = input.archivedAt ?? new Date().toISOString();
++  await preserveArchivedWorkspaceCommit(existingWorkspace);
+   await input.workspaceRegistry.archive(input.workspaceId, archivedAt, input.context);
