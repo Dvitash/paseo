@@ -1,42 +1,68 @@
-name: Apply Side implementation
+name: Side chat validation
 
 on:
-  push:
-    branches: [feat/side-chat-workflow]
-    paths: ['.github/side-patch/READY', '.github/workflows/side-chat-validation.yml']
+  pull_request:
+    paths:
+      - 'packages/**'
+      - '.github/workflows/side-chat-validation.yml'
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: side-chat-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  apply:
-    if: github.repository == 'Dvitash/paseo' && github.ref == 'refs/heads/feat/side-chat-workflow'
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Verify and apply reviewed patch
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import base64, hashlib, lzma, subprocess
-          root = Path('.github/side-patch')
-          encoded = ''.join((root / f'{i}.b64').read_text() for i in range(1, 5))
-          patch = lzma.decompress(base64.b64decode(encoded))
-          expected = (root / 'READY').read_text().strip()
-          if hashlib.sha256(patch).hexdigest() != expected:
-              raise SystemExit('Patch integrity check failed')
-          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
-          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
-          PY
-          rm -rf .github/side-patch
-      - name: Commit implementation on feature branch
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add packages docs
-          git add -u .github/side-patch
-          git commit -m 'feat: make Side chat reliable, contextual, and actionable'
-          git push origin HEAD:feat/side-chat-workflow
-          git rev-parse HEAD
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          LEFTHOOK: '0'
+      - run: npm run build:server-deps && npm run build:app-deps
+      - name: Typecheck
+        run: npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/app
+      - name: Lint
+        if: success() || failure()
+        run: npm run lint
+      - name: Protocol regressions
+        if: success() || failure()
+        working-directory: packages/protocol
+        run: npx vitest run src/side.test.ts --bail=1 --maxWorkers=2
+      - name: Server Side regressions
+        if: success() || failure()
+        working-directory: packages/server
+        run: npx vitest run src/server/side --bail=1 --maxWorkers=2
+      - name: Client subscription regressions
+        if: success() || failure()
+        working-directory: packages/client
+        run: npx vitest run src/side-chat-subscriptions.test.ts --bail=1 --maxWorkers=2
+      - name: App unit regressions
+        if: success() || failure()
+        working-directory: packages/app
+        run: npx vitest run src/panels/side-panel.test.ts src/panels/side/state.test.ts --project=unit --bail=1 --maxWorkers=2
+      - name: Install Chromium
+        if: success() || failure()
+        working-directory: packages/app
+        run: npx playwright install --with-deps chromium
+      - name: Browser workflow regressions
+        if: success() || failure()
+        working-directory: packages/app
+        run: npx vitest run src/panels/side/workflow.browser.test.tsx src/hooks/standalone-pwa-viewport.browser.test.ts --project=browser --bail=1 --maxWorkers=1
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: side-browser-failures
+          path: packages/app/.vitest-screenshots
+          retention-days: 7
