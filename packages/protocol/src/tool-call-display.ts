@@ -52,16 +52,49 @@ function humanizeToolName(name: string): string {
     .replace(/^./, (character) => character.toUpperCase());
 }
 
+function readTextErrorEnvelope(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+
+  // Only unwrap text-only transport envelopes. Keep diagnostic fields and
+  // unfamiliar content blocks in the fallback instead of silently losing them.
+  const hasExtraFields = Object.keys(error).some(
+    (key) => key !== "content" && key !== "details" && key !== "isError",
+  );
+  if (hasExtraFields) return undefined;
+  if (error.isError !== undefined && typeof error.isError !== "boolean") return undefined;
+  if (error.details !== undefined && error.details !== null) {
+    if (!isRecord(error.details) || Object.keys(error.details).length > 0) return undefined;
+  }
+  if (typeof error.content === "string") return readString(error.content);
+  if (!Array.isArray(error.content) || error.content.length === 0) return undefined;
+
+  const texts: string[] = [];
+  for (const block of error.content) {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
+      return undefined;
+    }
+    if (Object.keys(block).some((key) => key !== "type" && key !== "text")) return undefined;
+    texts.push(block.text);
+  }
+  const text = texts.join("\n");
+  return text.trim() ? text : undefined;
+}
+
 function formatErrorText(error: unknown): string | undefined {
   if (error === null || error === undefined) {
     return undefined;
   }
   if (typeof error === "string") {
-    return error;
+    if (!error.trimStart().startsWith("{")) return error;
+    try {
+      const parsed: unknown = JSON.parse(error);
+      return readTextErrorEnvelope(parsed) ?? error;
+    } catch {
+      return error;
+    }
   }
-  if (isRecord(error) && typeof error.content === "string") {
-    return error.content;
-  }
+  const text = readTextErrorEnvelope(error);
+  if (text !== undefined) return text;
   try {
     return JSON.stringify(error, null, 2);
   } catch {

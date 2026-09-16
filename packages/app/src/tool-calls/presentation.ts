@@ -65,6 +65,20 @@ function hasFilePreview(detail: ToolCallDetail | undefined): boolean {
   return false;
 }
 
+function getAdditionalErrorText({
+  hub,
+  errorText,
+}: Pick<ToolCallPresentation, "hub" | "errorText">): string | undefined {
+  // Hub owns this error in both the preview and details. Only suppress an exact
+  // duplicate of its dedicated error block; distinct diagnostics remain visible.
+  const hubError = hub?.blocks.length === 1 ? hub.blocks[0] : undefined;
+  const errorIsRenderedByHub =
+    hubError?.id === "hub-error" &&
+    Boolean(errorText?.trim()) &&
+    hubError.text.trim() === errorText?.trim();
+  return errorIsRenderedByHub ? undefined : errorText;
+}
+
 export function buildToolCallPresentation(
   input: BuildToolCallPresentationInput,
 ): ToolCallPresentation {
@@ -85,6 +99,7 @@ export function buildToolCallPresentation(
   const hasDetails = Boolean(input.error) || hasMeaningfulToolCallDetail(input.detail);
   const evaluation = getEvalPresentation(input.toolName, input.detail, input.error);
   const hub = getHubPresentation(input.toolName, input.detail, input.status);
+  const errorText = getAdditionalErrorText({ hub, errorText: displayModel.errorText });
   // The thinking badge counts streamed reasoning as a live progress signal.
   // The count itself is the caller's ~4 chars-per-token estimate; the daemon
   // sends no per-delta token counts.
@@ -96,7 +111,7 @@ export function buildToolCallPresentation(
   return {
     displayName: displayModel.displayName,
     summary: evaluation?.title ?? hub?.summary ?? displayModel.summary ?? thinkingTokenSummary,
-    errorText: displayModel.errorText,
+    errorText,
     icon: input.resolveIcon(input.toolName, input.detail),
     isLoadingDetails,
     hasDetails,
