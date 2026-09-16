@@ -75,20 +75,22 @@ jobs:
         run: |
           npm run format:files -- .github/workflows/side-chat-validation.yml packages/app/src/components/message.tsx packages/app/src/components/turn-copy-button.tsx packages/app/src/components/toast-host.tsx packages/app/src/components/native-android-toast.ts packages/app/src/components/native-android-toast.web.ts packages/app/src/panels/side/transcript.tsx packages/app/src/utils/browser-lifecycle.ts packages/server/src/server/agent/providers/model-turn-tracker.ts
           npm run format:check
-      - run: npm run build:server-deps && npm run build:app-deps
+      - run: npm run build:server-deps && npm run build:app-deps && npm run build --workspace=@getpaseo/server
       - run: npm run typecheck --workspace=@getpaseo/app && npm run lint
-      - name: Stage reviewed commit without changing the PR branch
+      - name: Stage reviewed source commit without changing the PR branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add packages
           git commit -m 'fix: isolate Side copy control and native toast imports for web'
           git push origin HEAD:refs/heads/repair/side-browser-9983ef0
           git rev-parse HEAD > /tmp/side-repaired-sha.txt
-      - name: Capture previous app test diagnostics
+      - name: Capture previous and baseline app test diagnostics
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/Dvitash/paseo/actions/jobs/104651933623/logs > /tmp/side-previous-app.log
+        run: |
+          gh api repos/Dvitash/paseo/actions/jobs/104651933623/logs > /tmp/side-previous-app.log
+          gh api repos/Dvitash/paseo/actions/jobs/104537766057/logs > /tmp/side-baseline-app.log
       - run: npx playwright install --with-deps chromium
         working-directory: packages/app
       - name: Real Chromium Side regressions
@@ -103,6 +105,7 @@ jobs:
           path: |
             /tmp/side-repaired-sha.txt
             /tmp/side-previous-app.log
+            /tmp/side-baseline-app.log
             /tmp/side-browser-repair.log
             packages/app/.vitest-screenshots
           retention-days: 1
