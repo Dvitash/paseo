@@ -1,0 +1,26 @@
+name: Archived recovery workspace
+
+on:
+  push:
+    branches: [fix/archived-chat-recovery]
+    paths: [.github/workflows/archived-recovery-work.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    if: github.repository == 'Dvitash/paseo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Export branch source for isolated regression development
+        run: git archive --format=tar.gz HEAD > /tmp/paseo-recovery-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paseo-recovery-source
+          path: /tmp/paseo-recovery-source.tar.gz
+          retention-days: 1
