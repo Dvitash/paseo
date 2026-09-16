@@ -31,7 +31,9 @@ export const AgentModelTurnMetricsPill = memo(function AgentModelTurnMetricsPill
   serverId: string;
   agentId: string;
 }) {
-  const usage = useSessionStore((state) => state.sessions[serverId]?.agents.get(agentId)?.lastUsage);
+  const usage = useSessionStore(
+    (state) => state.sessions[serverId]?.agents.get(agentId)?.lastUsage,
+  );
   const turnKey = useSessionStore((state) => {
     const lastUserMessageAt = state.sessions[serverId]?.agents.get(agentId)?.lastUserMessageAt;
     return lastUserMessageAt?.getTime() ?? null;
@@ -119,7 +121,9 @@ export function ThreadTokenUsagePill({ usage }: { usage: TokenUsageValues }) {
       <TooltipTrigger
         testID="composer-thread-token-usage-pill"
         style={composerPillStyles.body}
-        accessibilityLabel={`Current thread token usage. Input ${input}. Cached ${cached}. Output ${output}.`}
+        accessibilityLabel={
+          `Current thread token usage. Input ${input}. Cached ${cached}. Output ${output}.`
+        }
       >
         <Text style={composerPillStyles.label}>{label}</Text>
       </TooltipTrigger>
