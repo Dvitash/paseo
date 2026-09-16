@@ -421,6 +421,18 @@ export const ja: TranslationResources = {
       needsHostUpgrade: "このワークスペースを復元するにはホストを更新してください",
       manageHost: "ホストを管理",
       recovery: {
+        viewSavedChat: "保存済みチャットを表示",
+        continueElsewhere: "別のワークスペースで続行",
+        savedChatTitle: "保存済みチャット",
+        savedChatNotice:
+          "読み取り専用の履歴です。続行すると、保存されたコンテキストを使って新しいチャットを作成します。元のチャットはアーカイブされたままで、未コミットのファイルは復元されません。",
+        destinationWorkspace: "続行先のワークスペース",
+        selectWorkspace: "アクティブなワークスペースを選択",
+        noWorkspaces: "アクティブなワークスペースがありません。先に開いてください。",
+        continueAction: "続行用の下書きを作成",
+        emptyHistory: "保存されたメッセージはありません。",
+        loadOlder: "以前のメッセージを読み込む",
+        historyChanged: "保存された履歴が変更されました。再試行して読み込んでください。",
         archivedTitle: "ワークスペースはアーカイブ済みです",
         restoreDescription:
           "{{workspaceName}} はアーカイブされ、worktree が削除されました。ブランチ {{branch}} を復元して再度開きます。",

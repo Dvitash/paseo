@@ -422,6 +422,18 @@ export const fr: TranslationResources = {
       needsHostUpgrade: "Mettez à jour votre hôte pour restaurer cet espace de travail",
       manageHost: "Gérer l'hôte",
       recovery: {
+        viewSavedChat: "Voir la conversation enregistrée",
+        continueElsewhere: "Continuer dans un autre espace de travail",
+        savedChatTitle: "Conversation enregistrée",
+        savedChatNotice:
+          "Historique en lecture seule. Continuer crée une conversation avec le contexte enregistré. L’original reste archivé ; les fichiers non validés ne sont pas récupérés.",
+        destinationWorkspace: "Espace de travail de destination",
+        selectWorkspace: "Choisissez un espace de travail actif",
+        noWorkspaces: "Aucun espace actif. Ouvrez-en un d’abord.",
+        continueAction: "Créer un brouillon de continuation",
+        emptyHistory: "Aucun message enregistré.",
+        loadOlder: "Charger les messages précédents",
+        historyChanged: "L’historique enregistré a changé. Réessayez pour le recharger.",
         archivedTitle: "Espace de travail archivé",
         restoreDescription:
           "{{workspaceName}} a été archivé et son worktree supprimé. Restaurez la branche {{branch}} pour le rouvrir.",

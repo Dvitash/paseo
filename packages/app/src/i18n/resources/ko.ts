@@ -419,6 +419,18 @@ export const ko: TranslationResources = {
       needsHostUpgrade: "이 워크스페이스를 복원하려면 호스트를 업데이트하세요.",
       manageHost: "호스트 관리",
       recovery: {
+        viewSavedChat: "저장된 채팅 보기",
+        continueElsewhere: "다른 워크스페이스에서 계속",
+        savedChatTitle: "저장된 채팅",
+        savedChatNotice:
+          "읽기 전용 기록입니다. 계속하면 저장된 컨텍스트로 새 채팅이 생성됩니다. 원래 채팅은 보관되며 커밋하지 않은 파일은 복구되지 않습니다.",
+        destinationWorkspace: "대상 워크스페이스",
+        selectWorkspace: "활성 워크스페이스 선택",
+        noWorkspaces: "활성 워크스페이스가 없습니다. 먼저 하나를 여세요.",
+        continueAction: "계속할 초안 만들기",
+        emptyHistory: "저장된 메시지가 없습니다.",
+        loadOlder: "이전 메시지 불러오기",
+        historyChanged: "저장된 기록이 변경되었습니다. 다시 시도하여 불러오세요.",
         archivedTitle: "워크스페이스가 보관되었습니다",
         restoreDescription:
           "{{workspaceName}}가 보관되고 워크트리가 제거되었습니다. 다시 열려면 {{branch}} 브랜치를 복원하세요.",

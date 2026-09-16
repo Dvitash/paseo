@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { preserveArchivedWorkspaceCommit } from "./session/workspace-recovery/archived-worktree-commit.js";
 
 import type { Logger } from "pino";
 
@@ -602,6 +603,7 @@ export async function archivePersistedWorkspaceRecord(input: {
   }
 
   const archivedAt = input.archivedAt ?? new Date().toISOString();
+  await preserveArchivedWorkspaceCommit(existingWorkspace);
   await input.workspaceRegistry.archive(input.workspaceId, archivedAt, input.context);
 
   return existingWorkspace;

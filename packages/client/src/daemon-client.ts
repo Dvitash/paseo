@@ -574,6 +574,8 @@ export interface FetchAgentOptions {
 }
 type LegacyFetchAgentOptions = Omit<FetchAgentOptions, "agentId">;
 export interface FetchAgentTimelineOptions {
+  /** Requires savedAgentHistory; never resumes a provider or restores a workspace. */
+  savedOnly?: boolean;
   direction?: FetchAgentTimelineDirection;
   cursor?: FetchAgentTimelineCursor;
   limit?: number;
@@ -632,6 +634,7 @@ function normalizeListCommandsOptions(
   return { agentId: input, ...legacyOptions };
 }
 export interface AgentForkContextOptions {
+  savedOnly?: boolean;
   boundaryCursor?: FetchAgentTimelineCursor;
   boundaryMessageId?: string;
   requestId?: string;
@@ -3094,11 +3097,15 @@ export class DaemonClient {
     agentId: string,
     options: FetchAgentTimelineOptions = {},
   ): Promise<FetchAgentTimelinePayload> {
+    if (options.savedOnly && this.lastServerInfoMessage?.features?.savedAgentHistory !== true) {
+      throw new Error("Update the host to read saved chat history without starting an agent.");
+    }
     const resolvedRequestId = this.createRequestId(options.requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "fetch_agent_timeline_request",
       agentId,
       requestId: resolvedRequestId,
+      ...(options.savedOnly ? { savedOnly: true } : {}),
       ...(options.direction ? { direction: options.direction } : {}),
       ...(options.cursor ? { cursor: options.cursor } : {}),
       ...(typeof options.limit === "number" ? { limit: options.limit } : {}),
@@ -3325,11 +3332,15 @@ export class DaemonClient {
     agentId: string,
     options: AgentForkContextOptions = {},
   ): Promise<AgentForkContextPayload> {
+    if (options.savedOnly && this.lastServerInfoMessage?.features?.savedAgentHistory !== true) {
+      throw new Error("Update the host to read saved chat history without starting an agent.");
+    }
     const resolvedRequestId = this.createRequestId(options.requestId);
     const message = SessionInboundMessageSchema.parse({
       type: "agent.fork_context.request",
       agentId,
       requestId: resolvedRequestId,
+      ...(options.savedOnly ? { savedOnly: true } : {}),
       ...(options.boundaryCursor ? { boundaryCursor: options.boundaryCursor } : {}),
       ...(options.boundaryMessageId ? { boundaryMessageId: options.boundaryMessageId } : {}),
     });

@@ -92,6 +92,7 @@ import type {
   AgentManagerEvent,
   AgentTimelineCursor,
   AgentTimelineFetchDirection,
+  AgentTimelineFetchOptions,
   AgentTimelineFetchResult,
   ManagedAgent,
 } from "./agent/agent-manager.js";
@@ -7527,6 +7528,36 @@ export class Session {
     return this.selectProjectedTimelineProjection(input);
   }
 
+  private async readAgentTimelineSource(
+    agentId: string,
+    savedOnly: boolean,
+  ): Promise<{
+    agent: AgentSnapshotPayload;
+    fetch: (options: AgentTimelineFetchOptions) => AgentTimelineFetchResult;
+  }> {
+    if (savedOnly) {
+      const record = await this.agentStorage.get(agentId);
+      if (!record) throw new Error(`Agent not found: ${agentId}`);
+      if (record.internal || !this.isProviderVisibleToClient(record.provider)) {
+        throw new Error(`Agent not found: ${agentId}`);
+      }
+      const store = await this.agentManager.loadSavedAgentTimeline(agentId);
+      return {
+        agent: this.buildStoredAgentPayload(record),
+        fetch: (options) => store.fetch(agentId, options),
+      };
+    }
+    const snapshot = await ensureAgentLoaded(agentId, {
+      agentManager: this.agentManager,
+      agentStorage: this.agentStorage,
+      logger: this.sessionLogger,
+    });
+    return {
+      agent: await this.buildAgentPayload(snapshot),
+      fetch: (options) => this.agentManager.fetchTimeline(agentId, options),
+    };
+  }
+
   private async handleFetchAgentTimelineRequest(
     msg: Extract<SessionInboundMessage, { type: "fetch_agent_timeline_request" }>,
     source?: object,
@@ -7543,14 +7574,10 @@ export class Session {
       : undefined;
 
     try {
-      const snapshot = await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const agentPayload = await this.buildAgentPayload(snapshot);
+      const history = await this.readAgentTimelineSource(msg.agentId, msg.savedOnly === true);
+      const agentPayload = history.agent;
 
-      const fetchedControlTimeline = this.agentManager.fetchTimeline(msg.agentId, {
+      const fetchedControlTimeline = history.fetch({
         direction,
         cursor,
         limit: pageLimit,
@@ -7559,6 +7586,12 @@ export class Session {
         agentId: msg.agentId,
         projection,
         controlTimeline: fetchedControlTimeline,
+        fullTimeline: this.shouldUseFullTimelineForProjectedPage({
+          timeline: fetchedControlTimeline,
+          pageLimit,
+        })
+          ? history.fetch({ direction: "tail", limit: 0 })
+          : undefined,
         direction,
         ...(cursor ? { cursor } : {}),
         pageLimit,
@@ -7596,7 +7629,7 @@ export class Session {
             ...(msg.mergeWindow === true ? { mergeWindow: true } : {}),
             entries: entries.map((entry) => {
               const payloadEntry = {
-                provider: snapshot.provider,
+                provider: agentPayload.provider,
                 item: entry.item,
                 timestamp: entry.timestamp,
                 seqStart: entry.seqStart,
@@ -7829,13 +7862,9 @@ export class Session {
     msg: Extract<SessionInboundMessage, { type: "agent.fork_context.request" }>,
   ): Promise<void> {
     try {
-      const snapshot = await ensureAgentLoaded(msg.agentId, {
-        agentManager: this.agentManager,
-        agentStorage: this.agentStorage,
-        logger: this.sessionLogger,
-      });
-      const agentPayload = await this.buildAgentPayload(snapshot);
-      const timeline = this.agentManager.fetchTimeline(msg.agentId, {
+      const history = await this.readAgentTimelineSource(msg.agentId, msg.savedOnly === true);
+      const agentPayload = history.agent;
+      const timeline = history.fetch({
         direction: "tail",
         limit: 0,
       });
@@ -7846,7 +7875,7 @@ export class Session {
           : null,
         boundaryMessageId: msg.boundaryMessageId,
         agentTitle: agentPayload.title,
-        cwd: snapshot.cwd,
+        cwd: agentPayload.cwd,
       });
 
       this.emit({

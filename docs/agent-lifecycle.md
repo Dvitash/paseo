@@ -128,6 +128,27 @@ the only transition back to an interactive runtime: it runs the provider's nativ
 provider session can be archived outside Paseo while its Paseo agent remains active. Interactive
 resume repairs that drift through the provider's native unarchive hook; history resume does not.
 
+When a workspace cannot be restored, **View saved chat** reads a transcript without opening a
+provider runtime or changing archive state. The optional `savedOnly` timeline/context requests are
+gated by `savedAgentHistory` on both the UI and client: older daemons must not silently treat them
+as normal runtime-backed history requests. New archives copy retained canonical history before it
+is discarded. Legacy OMP sessions can be read from their native JSONL logs. Other legacy providers
+without a snapshot report that saved-only history is unavailable; ordinary history loading after
+workspace restoration is unchanged. Missing or unreadable logs are not represented as a successful
+recovery of the conversation.
+
+**Continue in another workspace** requires an explicit active destination on the same host. It
+opens a new, unsent draft with a chat-history attachment and that destination's cwd. It does not
+move or unarchive the original chat, resume its native session, or silently select `main`.
+
+Worktree archive pins HEAD under `refs/paseo/archived-workspaces/<hashed-workspace-id>` before
+removing the checkout. This keeps committed work reachable after branch deletion and garbage
+collection. Restore never resets an existing local branch; a missing branch can be recreated from
+that ref, then a cached origin ref, then origin itself. Git authentication and transport diagnostics
+remain visible. These pins do not preserve uncommitted or untracked files, and cannot retroactively
+recover a deleted branch whose commit is no longer available. Recovery refs remain until explicitly
+removed by repository maintenance.
+
 Provider session connection owns every process it spawns until the session is registered with
 `AgentManager`. If initialization, persisted-session resume, or initial history hydration fails,
 `connect()` must dispose that process before rethrowing; the manager cannot clean up a session it never

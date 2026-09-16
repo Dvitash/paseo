@@ -521,6 +521,16 @@ function wrapClientProvider(
           options,
         ),
       ),
+    readSessionHistory: inner.readSessionHistory
+      ? async function* (handle) {
+          for await (const event of inner.readSessionHistory!({
+            ...handle,
+            provider: inner.provider,
+          })) {
+            yield { ...event, provider };
+          }
+        }
+      : undefined,
     fetchCatalog: async (options, context) => {
       const catalog = await inner.fetchCatalog(options, context);
       return {

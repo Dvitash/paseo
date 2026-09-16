@@ -1957,6 +1957,7 @@ export const AgentTimelineCursorSchema = z.object({
 export const FetchAgentTimelineRequestMessageSchema = z.object({
   type: z.literal("fetch_agent_timeline_request"),
   agentId: z.string(),
+  savedOnly: z.boolean().optional(),
   requestId: z.string(),
   direction: z.enum(["tail", "before", "after"]).optional(),
   cursor: AgentTimelineCursorSchema.optional(),
@@ -1999,6 +2000,7 @@ export const SetAgentTimelineSubscriptionRequestMessageSchema = z.object({
 export const AgentForkContextRequestMessageSchema = z.object({
   type: z.literal("agent.fork_context.request"),
   agentId: z.string(),
+  savedOnly: z.boolean().optional(),
   boundaryCursor: AgentTimelineCursorSchema.optional(),
   boundaryMessageId: z.string().optional(),
   requestId: z.string(),
@@ -3750,6 +3752,8 @@ export const ServerInfoStatusPayloadSchema = z
         daemonSelfUpdate: z.boolean().optional(),
         // COMPAT(agentForkContext): added in v0.1.102, remove gate after 2026-12-28.
         agentForkContext: z.boolean().optional(),
+        // COMPAT(savedAgentHistory): added in v0.8.0; retain until the supported daemon floor includes savedOnly reads.
+        savedAgentHistory: z.boolean().optional(),
         // COMPAT(agentForkContextCursor): added in v0.1.108, remove gate after 2027-01-14.
         agentForkContextCursor: z.boolean().optional(),
         // COMPAT(providerSubagents): added in v0.1.107, remove gate after 2027-01-12.

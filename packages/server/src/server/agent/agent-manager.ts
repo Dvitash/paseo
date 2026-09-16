@@ -1,7 +1,7 @@
 import type { PluginLifecycle } from "../plugins/lifecycle/index.js";
 import { describeHookAgent, publishAgentStream } from "../plugins/lifecycle/index.js";
 import type { PluginSessionOpenRequest } from "@getpaseo/plugin/server";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import {
@@ -1165,6 +1165,64 @@ export class AgentManager {
     return this.timelineStore.fetch(id, options);
   }
 
+  private async saveArchivedTimeline(agentId: string, archivedAt: string): Promise<void> {
+    if (!this.timelineStore.has(agentId)) return;
+    const timeline = this.timelineStore.fetch(agentId, { limit: 0 });
+    await this.requireRegistry().archivedHistory.write(agentId, {
+      archivedAt,
+      epoch: timeline.epoch,
+      nextSeq: timeline.window.nextSeq,
+      rows: timeline.rows,
+    });
+  }
+
+  /** Never validates the old cwd or creates/resumes a provider runtime. */
+  async loadSavedAgentTimeline(
+    agentId: string,
+  ): Promise<Pick<InMemoryAgentTimelineStore, "fetch">> {
+    await this.waitForAgentClose(agentId);
+    const registry = this.requireRegistry();
+    const record = await registry.get(agentId);
+    if (!record || record.internal) throw new Error(`Agent not found: ${agentId}`);
+    const saved = record.archivedAt
+      ? await registry.archivedHistory.read(agentId, record.archivedAt)
+      : null;
+    const store = new InMemoryAgentTimelineStore();
+    if (saved) {
+      store.initialize(agentId, saved);
+      return store;
+    }
+    if (this.timelineStore.has(agentId)) {
+      const retained = this.timelineStore.fetch(agentId, { limit: 0 });
+      store.initialize(agentId, {
+        rows: retained.rows,
+        epoch: retained.epoch,
+        nextSeq: retained.window.nextSeq,
+      });
+      return store;
+    }
+    const client = this.clients.get(record.provider);
+    if (!client?.readSessionHistory || !record.persistence) {
+      throw new Error(
+        "No saved transcript is available without restoring this workspace. The original provider session has not been changed.",
+      );
+    }
+    const rows: AgentTimelineRow[] = [];
+    for await (const event of client.readSessionHistory(record.persistence)) {
+      if (event.type !== "timeline") continue;
+      rows.push({
+        seq: rows.length + 1,
+        timestamp: event.timestamp ?? record.createdAt,
+        item: event.item,
+        ...(event.turnId ? { turnId: event.turnId } : {}),
+      });
+    }
+    // Repeat reads of an unchanged native log need the same cursor epoch.
+    const epoch = createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+    store.initialize(agentId, { rows, epoch });
+    return store;
+  }
+
   listProviderSubagents(parentAgentId: string): ProviderSubagentDescriptor[] {
     this.requirePublicAgent(parentAgentId);
     return this.providerSubagents.list(parentAgentId);
@@ -1738,6 +1796,7 @@ export class AgentManager {
     const { archivedAt } = await this.markRecordArchived(stored);
     agent.updatedAt = new Date(archivedAt);
     await this.closeAgentRuntime(agentId);
+    await this.saveArchivedTimeline(agentId, archivedAt);
     this.discardRetainedAgentState(agentId);
 
     await this.cascadeArchiveChildren(agentId);
@@ -2099,6 +2158,7 @@ export class AgentManager {
       throw new Error(`Agent not found: ${agentId}`);
     }
 
+    await this.saveArchivedTimeline(agentId, archivedAt);
     const nextRecord = await this.persistArchivedRecord(record, { archivedAt });
 
     await this.syncNativeArchiveState(record.provider, record.persistence, "archive");

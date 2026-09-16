@@ -66,7 +66,7 @@ export interface UseForkAgentInput {
   readOnly?: boolean;
 }
 
-function buildChatHistoryAttachment(input: {
+export function buildChatHistoryAttachment(input: {
   draftId: string;
   serverId: string;
   agentId: string;
@@ -90,7 +90,7 @@ function buildChatHistoryAttachment(input: {
   };
 }
 
-function buildForkDraftSetup(agent: ForkAgentSource): WorkspaceDraftTabSetup | undefined {
+export function buildForkDraftSetup(agent: ForkAgentSource): WorkspaceDraftTabSetup | undefined {
   if (!agent.provider) {
     return undefined;
   }

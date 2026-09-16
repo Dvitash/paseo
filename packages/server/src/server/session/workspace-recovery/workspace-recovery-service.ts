@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { restoreArchivedWorkspaceBranch } from "./archived-worktree-commit.js";
 
 import { createRealpathAwarePathMatcher } from "../../../utils/path.js";
 import { runGitCommand } from "../../../utils/run-git-command.js";
@@ -184,7 +185,22 @@ export function createWorkspaceRecoveryService(deps: {
         : workspace.cwd;
     }
 
+    await restoreArchivedWorkspaceBranch({
+      cwd: sourceRepoRoot,
+      workspaceId: workspace.workspaceId,
+      branchName: branch,
+    });
+
+    const worktrees = await runGitCommand(["worktree", "list", "--porcelain"], {
+      cwd: sourceRepoRoot,
+    });
+    if (worktrees.stdout.split(/\r?\n/).includes(`branch refs/heads/${branch}`)) {
+      throw new Error(
+        `Branch "${branch}" is already checked out elsewhere. Close that checkout before restoring this workspace.`,
+      );
+    }
     let recreatedWorktreePath: string;
+    let recreatedBranch: string;
     try {
       const result = await createWorktree({
         cwd: sourceRepoRoot,
@@ -195,11 +211,17 @@ export function createWorkspaceRecoveryService(deps: {
         worktreesRoot: deps.worktreesRoot,
       });
       recreatedWorktreePath = result.worktreePath;
+      recreatedBranch = result.branchName;
     } catch (error) {
       throw toWorktreeRequestError(error);
     }
 
     try {
+      if (recreatedBranch !== branch) {
+        throw new Error(
+          `Branch "${branch}" is already checked out elsewhere. Close that checkout before restoring this workspace.`,
+        );
+      }
       const recreatedWorkspacePath = mapWorkspaceCwdToWorktree({
         sourceWorktreePath: previousWorktreePath,
         workspaceCwd: workspace.cwd,

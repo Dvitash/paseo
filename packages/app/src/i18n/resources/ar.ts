@@ -418,6 +418,18 @@ export const ar: TranslationResources = {
       needsHostUpgrade: "قم بتحديث مضيفك لاستعادة مساحة العمل هذه",
       manageHost: "إدارة المضيف",
       recovery: {
+        viewSavedChat: "عرض المحادثة المحفوظة",
+        continueElsewhere: "المتابعة في مساحة عمل أخرى",
+        savedChatTitle: "المحادثة المحفوظة",
+        savedChatNotice:
+          "سجل للقراءة فقط. تنشئ المتابعة محادثة جديدة بالسياق المحفوظ. تبقى المحادثة الأصلية مؤرشفة؛ ولا تُستعاد الملفات التي لم تُحفظ في التزام Git.",
+        destinationWorkspace: "مساحة العمل الوجهة",
+        selectWorkspace: "اختر مساحة عمل نشطة",
+        noWorkspaces: "لا توجد مساحات عمل نشطة. افتح واحدة أولاً.",
+        continueAction: "إنشاء مسودة للمتابعة",
+        emptyHistory: "لا توجد رسائل محفوظة.",
+        loadOlder: "تحميل الرسائل الأقدم",
+        historyChanged: "تغيّر السجل المحفوظ. أعد المحاولة لتحميله.",
         archivedTitle: "مساحة العمل مؤرشفة",
         restoreDescription:
           "تمت أرشفة {{workspaceName}} وإزالة شجرة العمل الخاصة بها. استعد الفرع {{branch}} لفتحها مجددًا.",

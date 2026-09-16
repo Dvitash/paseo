@@ -3766,6 +3766,13 @@ function WorkspaceScreenContent({
 
   const workspaceScreenGate = renderWorkspaceRouteGate({
     state: workspaceRouteState,
+    recoverySelection: recoveryAgentId
+      ? {
+          serverId: normalizedServerId,
+          workspaceId: normalizedWorkspaceId,
+          agentId: recoveryAgentId,
+        }
+      : undefined,
     actions: {
       onRetryHost: handleRetryHost,
       onManageHost: handleManageHost,
