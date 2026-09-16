@@ -34,12 +34,28 @@ jobs:
       - run: npm run build:server-deps && npm run build:app-deps
       - name: Validation dependencies
         if: github.event_name == 'push'
-        run: find . -type d -name node_modules -prune -print0 | tar --exclude='*/.cache/*' -I 'gzip -1' -cf "$RUNNER_TEMP/side-dependencies.tar.gz" --null -T -
+        run: |
+          find . -type d -name node_modules -prune -print0 | tar --exclude='*/.cache/*' -I 'gzip -1' -cf "$RUNNER_TEMP/side-dependencies.tar.gz" --null -T -
+          split -b 400M "$RUNNER_TEMP/side-dependencies.tar.gz" "$RUNNER_TEMP/side-deps-"
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push'
         with:
-          name: side-dependencies
-          path: ${{ runner.temp }}/side-dependencies.tar.gz
+          name: side-deps-1
+          path: ${{ runner.temp }}/side-deps-aa
+          compression-level: 0
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: side-deps-2
+          path: ${{ runner.temp }}/side-deps-ab
+          compression-level: 0
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: side-deps-3
+          path: ${{ runner.temp }}/side-deps-ac
           compression-level: 0
           retention-days: 1
       - name: Typecheck
