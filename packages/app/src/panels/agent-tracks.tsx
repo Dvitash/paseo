@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, type ReactElement } from "react";
 import { View } from "react-native";
+import { useShallow } from "zustand/shallow";
 import { StyleSheet } from "react-native-unistyles";
 import { collectBackgroundJobs } from "@/composer/background-jobs";
 import { BackgroundJobsPills } from "@/composer/background-jobs-pill";
@@ -19,11 +20,18 @@ import { useSessionStore } from "@/stores/session-store";
 import { useArchiveSubagent, useDetachSubagent, type SubagentRow } from "@/subagents";
 import { SubagentsTrack } from "@/subagents/track";
 import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
-import type { TodoEntry } from "@/types/stream";
+import type { StreamItem, TodoEntry } from "@/types/stream";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
 import { openComposerChanges } from "@/workspace-tabs/open-supporting-view";
+
+/**
+ * A shared empty list keeps the stream snapshot shallow-stable while an agent has
+ * no timeline yet. A fresh `[]` per selector call would defeat `useShallow` and
+ * spin the store subscription into an unbounded update loop.
+ */
+const EMPTY_STREAM_ITEMS: StreamItem[] = [];
 
 /** The pane's ambient context as compact tracks immediately above the composer. */
 export const AgentTracks = memo(function AgentTracks({
@@ -53,12 +61,17 @@ export const AgentTracks = memo(function AgentTracks({
   const canDetachSubagents = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.agentDetach === true,
   );
-  const streamState = useSessionStore((state) => ({
-    tail: state.sessions[serverId]?.agentStreamTail?.get(agentId) ?? [],
-    head: state.sessions[serverId]?.agentStreamHead?.get(agentId) ?? [],
-    turnOpen: state.sessions[serverId]?.agents.get(agentId)?.turn.phase === "open",
-  }));
-  const streamItems = useMemo(() => [...streamState.tail, ...streamState.head], [streamState.head, streamState.tail]);
+  const streamState = useSessionStore(
+    useShallow((state) => ({
+      tail: state.sessions[serverId]?.agentStreamTail?.get(agentId) ?? EMPTY_STREAM_ITEMS,
+      head: state.sessions[serverId]?.agentStreamHead?.get(agentId) ?? EMPTY_STREAM_ITEMS,
+      turnOpen: state.sessions[serverId]?.agents.get(agentId)?.turn.phase === "open",
+    })),
+  );
+  const streamItems = useMemo(
+    () => [...streamState.tail, ...streamState.head],
+    [streamState.head, streamState.tail],
+  );
   const hasBackgroundJobs = collectBackgroundJobs(streamItems).length > 0;
   const archiveSubagent = useArchiveSubagent({ serverId });
   const detachSubagent = useDetachSubagent({ serverId });
