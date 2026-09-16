@@ -1,6 +1,7 @@
 import { memo, useCallback, type ReactElement } from "react";
 import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { BackgroundJobsPills } from "@/composer/background-jobs-pill";
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import { AgentModelTurnMetricsPill, useHasModelTurnMetrics } from "@/composer/model-turn-metrics";
@@ -15,6 +16,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { PluginComposerPills } from "@/plugins";
 import { useSessionStore } from "@/stores/session-store";
 import { useArchiveSubagent, useDetachSubagent, type SubagentRow } from "@/subagents";
+import type { ProviderSubagentRow } from "@/subagents/select";
 import { SubagentsTrack } from "@/subagents/track";
 import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
 import type { TodoEntry } from "@/types/stream";
@@ -24,8 +26,8 @@ import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
 import { openComposerChanges } from "@/workspace-tabs/open-supporting-view";
 
 /**
- * The pane's ambient context — workspace changes, subagents, and tasks — as a row of pills above
- * the composer.
+ * The pane's ambient context — workspace changes, subagents, background jobs, and tasks — as a row
+ * of pills above the composer.
  *
  * The row shares the composer's keyboard transform and owns the space between itself and the
  * transcript. Each pill owns its action while tab placement stays behind the workspace boundary.
@@ -56,6 +58,9 @@ export const AgentTracks = memo(function AgentTracks({
   const workspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
   const canDetachSubagents = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.agentDetach === true,
+  );
+  const parentStreamItems = useSessionStore((state) =>
+    state.sessions[serverId]?.agentStreamTail?.get(agentId),
   );
   const archiveSubagent = useArchiveSubagent({ serverId });
   const detachSubagent = useDetachSubagent({ serverId });
@@ -111,9 +116,17 @@ export const AgentTracks = memo(function AgentTracks({
     });
   }, [cwd, isCompact, openInSidePane, serverId, workspaceKey]);
 
+  const managedSubagentRows = subagentRows.filter((row) => row.kind === "paseo");
+  const backgroundJobRows = subagentRows.filter(
+    (row): row is ProviderSubagentRow => row.kind === "provider",
+  );
   const hasPills =
-    Boolean(tasks?.length) || hasPluginComposerPills || hasWorkspaceDiffStat || hasModelTurnMetrics;
-  const hasSubagents = subagentRows.some(isSubagentActiveOrAttention);
+    Boolean(tasks?.length) ||
+    hasPluginComposerPills ||
+    hasWorkspaceDiffStat ||
+    hasModelTurnMetrics ||
+    backgroundJobRows.length > 0;
+  const hasSubagents = managedSubagentRows.some(isSubagentActiveOrAttention);
 
   if (!hasPills && !hasSubagents) {
     return null;
@@ -124,7 +137,7 @@ export const AgentTracks = memo(function AgentTracks({
       {hasSubagents ? (
         <SubagentsTrack
           serverId={serverId}
-          rows={subagentRows}
+          rows={managedSubagentRows}
           onOpenSubagent={handleOpenSubagent}
           onOpenProviderSubagent={handleOpenProviderSubagent}
           onArchiveSubagent={archiveSubagent}
@@ -140,6 +153,14 @@ export const AgentTracks = memo(function AgentTracks({
             agentId={agentId}
             compact={isCompact}
           />
+          {backgroundJobRows.length > 0 ? (
+            <BackgroundJobsPills
+              serverId={serverId}
+              rows={backgroundJobRows}
+              parentStreamItems={parentStreamItems}
+              onOpenJob={handleOpenProviderSubagent}
+            />
+          ) : null}
           <WorkspaceDiffStatPill
             serverId={serverId}
             workspaceId={workspaceId}
@@ -166,7 +187,7 @@ export function hasAgentTracks({
   hasModelTurnMetrics?: boolean;
 }): boolean {
   return (
-    subagentRows.some(isSubagentActiveOrAttention) ||
+    subagentRows.some((row) => row.kind === "provider" || isSubagentActiveOrAttention(row)) ||
     Boolean(tasks?.length) ||
     hasPluginComposerPills ||
     hasModelTurnMetrics

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { omitBackgroundJobWaitChatter } from "@/composer/background-jobs";
 import { deriveStreamTurnTiming, type StreamTurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
 import { findMountedWindowStart, getMountedRecentStreamItems } from "./history-window";
@@ -202,8 +203,10 @@ export function buildAgentStreamRenderModel(
     isMobileBreakpoint: input.isMobileBreakpoint,
   });
   const orderingCacheKey = `${input.platform}:${input.isMobileBreakpoint}`;
-  const renderedTail = omitOmpMountedNotifications(getRenderedTail(input.tail, input.historyStart));
-  const renderedHead = omitOmpMountedNotifications(input.head);
+  const renderedTail = omitBackgroundJobWaitChatter(
+    omitOmpMountedNotifications(getRenderedTail(input.tail, input.historyStart)),
+  );
+  const renderedHead = omitBackgroundJobWaitChatter(omitOmpMountedNotifications(input.head));
   const orderedTail = getOrderedItems({
     cache: orderedTailCache,
     source: renderedTail,
