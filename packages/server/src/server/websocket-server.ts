@@ -1692,6 +1692,7 @@ export class VoiceAssistantWebSocketServer {
       ...(this.serverCapabilities ? { capabilities: this.serverCapabilities } : {}),
       features: {
         sideChat: true,
+        sideChatV2: true,
         hostPerformance: true,
         // COMPAT(hostTokenUsage): added in v0.8.0-beta.1, remove gate after 2027-03-13.
         hostTokenUsage: true,

@@ -1,3 +1,4 @@
+import { useSideSourceJump } from "@/panels/side/navigation";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, {
   forwardRef,
@@ -625,6 +626,18 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         ),
       [baseRenderModel.history, baseRenderModel.segments.liveHead],
     );
+    useSideSourceJump({
+      serverId,
+      agentId,
+      epoch: timelineEpoch,
+      items: effectiveStreamItems,
+      head: effectiveStreamHead,
+      visibleItemIds: visibleHistoryItemIds,
+      reveal: revealLoadedHistory,
+      viewportRef,
+      active: isActive,
+      onError: handleTimelineHistoryLoadError,
+    });
     const chatOutline = useChatOutline({
       agentId,
       serverId: resolvedServerId,

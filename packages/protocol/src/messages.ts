@@ -93,9 +93,16 @@ import {
   SideChatGetRequestSchema,
   SideChatSendRequestSchema,
   SideChatStopRequestSchema,
+  SideChatSubscribeRequestSchema,
+  SideChatResetRequestSchema,
+  SideChatSteerRequestSchema,
   SideChatGetResponseSchema,
   SideChatSendResponseSchema,
   SideChatStopResponseSchema,
+  SideChatSubscribeResponseSchema,
+  SideChatResetResponseSchema,
+  SideChatSteerResponseSchema,
+  SideChatChangedEventSchema,
 } from "./side.js";
 import {
   ChatCreateRequestSchema,
@@ -3360,6 +3367,9 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   SideChatGetRequestSchema,
   SideChatSendRequestSchema,
   SideChatStopRequestSchema,
+  SideChatSubscribeRequestSchema,
+  SideChatResetRequestSchema,
+  SideChatSteerRequestSchema,
   SetAgentModeRequestMessageSchema,
   SetAgentModelRequestMessageSchema,
   SetAgentThinkingRequestMessageSchema,
@@ -3640,6 +3650,7 @@ export const ServerInfoStatusPayloadSchema = z
       .object({
         // COMPAT(sideChat): added in v0.8.0; remove gate after 2027-03-08.
         sideChat: z.boolean().optional(),
+        sideChatV2: z.boolean().optional(),
         // COMPAT(modelTurnMetrics): added in v0.8.0; remove gate after 2027-03-09.
         modelTurnMetrics: z.boolean().optional(),
         // COMPAT(agentRequestReceipts): added in v0.8.0; remove gate after 2027-03-05.
@@ -6760,6 +6771,10 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   SideChatGetResponseSchema,
   SideChatSendResponseSchema,
   SideChatStopResponseSchema,
+  SideChatSubscribeResponseSchema,
+  SideChatResetResponseSchema,
+  SideChatSteerResponseSchema,
+  SideChatChangedEventSchema,
   CancelAgentResponseMessageSchema,
   ClearAgentAttentionResponseMessageSchema,
   WorkspaceCreateResponseSchema,

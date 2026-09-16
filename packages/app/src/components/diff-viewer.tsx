@@ -1,3 +1,4 @@
+import { AskSideButton } from "@/panels/side/references";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { View, Text, ScrollView as RNScrollView } from "react-native";
@@ -164,6 +165,11 @@ export function DiffViewer({
     [fillAvailableHeight],
   );
 
+  const getSideContent = React.useCallback(
+    () => diffLines.map((line) => `${diffLinePrefix(line)}${line.content}`).join("\n"),
+    [diffLines],
+  );
+
   if (!diffLines.length) {
     return (
       <View style={styles.emptyState}>
@@ -199,6 +205,7 @@ export function DiffViewer({
       nestedScrollEnabled
       showsVerticalScrollIndicator
     >
+      <AskSideButton kind="diff" label="Tool diff" getContent={getSideContent} />
       {wrap ? lines : horizontalScroll}
     </ScrollView>
   );

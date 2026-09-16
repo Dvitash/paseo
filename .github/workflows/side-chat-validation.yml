@@ -1,0 +1,71 @@
+name: Side chat validation
+
+on:
+  pull_request:
+    paths:
+      - "packages/**"
+      - ".github/workflows/side-chat-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: side-chat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+          LEFTHOOK: "0"
+      - run: npm run build:server-deps && npm run build:app-deps
+      - name: Typecheck
+        run: npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/app
+      - name: Lint
+        if: success() || failure()
+        run: npm run lint
+      - name: Protocol regressions
+        if: success() || failure()
+        working-directory: packages/protocol
+        run: npx vitest run src/side.test.ts --bail=1 --maxWorkers=2
+      - name: Server Side regressions
+        if: success() || failure()
+        working-directory: packages/server
+        run: npx vitest run src/server/side --bail=1 --maxWorkers=2
+      - name: Client subscription regressions
+        if: success() || failure()
+        working-directory: packages/client
+        run: npx vitest run src/side-chat-subscriptions.test.ts --bail=1 --maxWorkers=2
+      - name: App unit regressions
+        if: success() || failure()
+        working-directory: packages/app
+        run: npx vitest run src/panels/side-panel.test.ts src/panels/side/state.test.ts --project=unit --bail=1 --maxWorkers=2
+      - name: Install Chromium
+        if: success() || failure()
+        working-directory: packages/app
+        run: npx playwright install --with-deps chromium
+      - name: Browser workflow regressions
+        if: success() || failure()
+        working-directory: packages/app
+        run: |
+          npx vitest run src/panels/side/workflow.browser.test.tsx src/hooks/standalone-pwa-viewport.browser.test.ts --project=browser --bail=1 --maxWorkers=1 2>&1 | tee side-browser.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: side-browser-failures
+          path: |
+            packages/app/.vitest-screenshots
+            packages/app/side-browser.log
+          retention-days: 7

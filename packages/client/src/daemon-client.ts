@@ -1,3 +1,4 @@
+import { SideChatSubscriptions } from "./side-chat-subscriptions.js";
 import { ProviderSnapshotUpdates } from "./provider-snapshots/index.js";
 import type { SessionEventSubscription } from "@getpaseo/protocol/messages";
 import type { SideChatSendOptions, SideChatSnapshot } from "@getpaseo/protocol/side";
@@ -1095,6 +1096,16 @@ interface PingProbe {
 }
 
 export class DaemonClient {
+  private readonly sideChats = new SideChatSubscriptions({
+    connected: () => this.connectionState.status === "connected",
+    request: async (mainAgentId, subscribed) => {
+      const payload =
+        await this.sendNamespacedCorrelatedSessionRequest<"agent.side.subscribe.response">({
+          message: { type: "agent.side.subscribe.request", mainAgentId, subscribed },
+        });
+      return unwrapSideChatResponse(payload);
+    },
+  });
   private readonly providerSnapshotUpdates = new ProviderSnapshotUpdates({
     fetch: (cwd) => this.requestProvidersSnapshot({ cwd }),
     emit: (message) => this.deliverSessionMessage(message),
@@ -1429,6 +1440,7 @@ export class DaemonClient {
     this.resetConnectTimeout();
     this.disposeTransport(1000, "Client closed");
     this.providerSnapshotUpdates.clear();
+    this.sideChats.clear();
     this.clearWaiters(new Error("Daemon client closed"));
     this.rejectPendingSendQueue(new Error("Daemon client closed"));
     this.rejectPingProbe(new Error("Daemon client closed"));
@@ -3256,6 +3268,7 @@ export class DaemonClient {
     ];
     if (this.eventListeners.size === 0 && !this.messageHandlers.has("providers_snapshot_update")) {
       this.providerSnapshotUpdates.clear();
+      this.sideChats.clear();
     }
     this.subscriptions.setEvents(
       events.filter(
@@ -3347,6 +3360,36 @@ export class DaemonClient {
   async getSideChat(mainAgentId: string): Promise<SideChatSnapshot> {
     const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.side.get.response">({
       message: { type: "agent.side.get.request", mainAgentId },
+    });
+    return unwrapSideChatResponse(payload);
+  }
+
+  subscribeSideChat(
+    mainAgentId: string,
+    onSnapshot: (snapshot: SideChatSnapshot) => void,
+    onError: (error: Error) => void,
+  ): () => void {
+    return this.sideChats.subscribe(mainAgentId, onSnapshot, onError);
+  }
+
+  refreshSideChat(mainAgentId: string): Promise<void> {
+    return this.sideChats.refresh(mainAgentId);
+  }
+
+  async resetSideChat(mainAgentId: string, conversationId: string): Promise<SideChatSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.side.reset.response">({
+      message: { type: "agent.side.reset.request", mainAgentId, conversationId },
+    });
+    return unwrapSideChatResponse(payload);
+  }
+
+  async steerSideChat(
+    mainAgentId: string,
+    proposalId: string,
+    text: string,
+  ): Promise<SideChatSnapshot> {
+    const payload = await this.sendNamespacedCorrelatedSessionRequest<"agent.side.steer.response">({
+      message: { type: "agent.side.steer.request", mainAgentId, proposalId, text },
     });
     return unwrapSideChatResponse(payload);
   }
@@ -6022,6 +6065,7 @@ export class DaemonClient {
 
   private disposeTransport(code = 1001, reason = "Reconnecting"): void {
     this.providerSnapshotUpdates.pause();
+    this.sideChats.pause();
     this.stopLivenessHeartbeat();
     this.cleanupTransport();
     if (this.transport) {
@@ -6334,6 +6378,7 @@ export class DaemonClient {
     }
 
     this.providerSnapshotUpdates.pause();
+    this.sideChats.pause();
 
     // Clear all pending waiters and queued sends since the connection was lost
     // and responses from the previous connection will never arrive.
@@ -6464,6 +6509,7 @@ export class DaemonClient {
           this.startLivenessHeartbeat();
           this.subscriptions.restore();
           this.providerSnapshotUpdates.resume();
+          this.sideChats.restore();
           this.resubscribeCheckoutDiffSubscriptions();
           this.resubscribeTerminalDirectorySubscriptions();
           this.resubscribeFileSubscriptions();
@@ -6472,6 +6518,9 @@ export class DaemonClient {
         }
       }
     }
+
+    if (consumerMessage.type === "agent.side.changed")
+      this.sideChats.receive(consumerMessage.payload);
 
     if (consumerMessage.type === "terminal_stream_exit") {
       this.terminalStreams.removeTerminal(consumerMessage.payload.terminalId);

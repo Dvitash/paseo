@@ -1,3 +1,4 @@
+import { AskSideButton } from "@/panels/side/references";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ViewStyle } from "react-native";
@@ -87,6 +88,11 @@ export function DiffSurface(props: DiffSurfaceProps) {
   const scrollTopRef = useRef(0);
   const horizontalOffsetsRef = useRef(new Map<string, number>());
   const selectionRef = useRef<DiffSelection | null>(null);
+  const getSideSelection = useCallback(() => {
+    const currentModel = modelRef.current;
+    const selection = selectionRef.current;
+    return currentModel && selection ? selectedSourceText(currentModel, selection) : "";
+  }, []);
   const dragRef = useRef<{
     anchor: DiffSelection["anchor"];
     startX: number;
@@ -879,6 +885,9 @@ export function DiffSurface(props: DiffSurfaceProps) {
         {surface}
       </ContextMenuTrigger>
       <ContextMenuContent align="start" minWidth={180} testID="diff-source-context-menu">
+        {hasSelection ? (
+          <AskSideButton kind="diff" label="Diff selection" getContent={getSideSelection} />
+        ) : null}
         <ContextMenuItem
           disabled={!hasSelection}
           onSelect={copySelectedSource}

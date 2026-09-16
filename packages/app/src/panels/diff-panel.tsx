@@ -1,3 +1,4 @@
+import { SideReferenceProvider } from "./side/references";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
@@ -127,25 +128,27 @@ function ChangesPanel() {
   const profileId = isTree ? `ChangesTreePanel:${tabId}` : `WorkingDiffPanel:${tabId}`;
 
   return (
-    <View style={styles.container} testID={testID}>
-      <RenderProfile id={profileId}>
-        <ChangesSurface
-          serverId={serverId}
-          workspaceId={workspaceId}
-          cwd={cwd}
-          enabled={isActive}
-          presentation={presentation}
-          focusPath={target.kind === "working_diff" ? target.focusPath : undefined}
-          focusRequestId={target.kind === "working_diff" ? target.focusRequestId : undefined}
-          onSelectDiffFile={isTree ? handleSelectDiffFile : undefined}
-          onOpenFile={handleOpenFile}
-          onOpenToSide={isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
-          onAddToChat={canAddToChat ? addFile : undefined}
-          state={changesState}
-          onStateChange={setChangesState}
-        />
-      </RenderProfile>
-    </View>
+    <SideReferenceProvider serverId={serverId} workspaceId={workspaceId} cwd={cwd}>
+      <View style={styles.container} testID={testID}>
+        <RenderProfile id={profileId}>
+          <ChangesSurface
+            serverId={serverId}
+            workspaceId={workspaceId}
+            cwd={cwd}
+            enabled={isActive}
+            presentation={presentation}
+            focusPath={target.kind === "working_diff" ? target.focusPath : undefined}
+            focusRequestId={target.kind === "working_diff" ? target.focusRequestId : undefined}
+            onSelectDiffFile={isTree ? handleSelectDiffFile : undefined}
+            onOpenFile={handleOpenFile}
+            onOpenToSide={isTree && openTargetToSide ? handleOpenDiffToSide : undefined}
+            onAddToChat={canAddToChat ? addFile : undefined}
+            state={changesState}
+            onStateChange={setChangesState}
+          />
+        </RenderProfile>
+      </View>
+    </SideReferenceProvider>
   );
 }
 
