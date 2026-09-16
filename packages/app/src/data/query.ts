@@ -2,6 +2,10 @@ import {
   keepPreviousData,
   skipToken,
   useQueries,
+  useInfiniteQuery,
+  type InfiniteData,
+  type UseInfiniteQueryOptions,
+  type UseInfiniteQueryResult,
   useQuery,
   type QueryKey,
   type QueryClient,
@@ -116,6 +120,33 @@ function fetchQueryOptions<
         dataShape,
       },
     },
+    refetchOnMount: "always",
+    staleTime: staleTimeMs,
+  };
+}
+
+type FetchInfiniteQueryInput<TPage, TPageParam> = Omit<
+  UseInfiniteQueryOptions<TPage, Error, InfiniteData<TPage, TPageParam>, QueryKey, TPageParam>,
+  "initialData" | "placeholderData" | "refetchOnMount" | "staleTime"
+> & { staleTimeMs: number };
+
+/** Paginated fetches follow the same finite freshness policy, without cross-key placeholder data. */
+export function useFetchInfiniteQuery<TPage, TPageParam>(
+  input: FetchInfiniteQueryInput<TPage, TPageParam>,
+): UseInfiniteQueryResult<InfiniteData<TPage, TPageParam>, Error> {
+  return useInfiniteQuery(fetchInfiniteQueryOptions(input));
+}
+
+export function fetchInfiniteQueryOptions<TPage, TPageParam>(
+  input: FetchInfiniteQueryInput<TPage, TPageParam>,
+): UseInfiniteQueryOptions<TPage, Error, InfiniteData<TPage, TPageParam>, QueryKey, TPageParam> {
+  if (!Number.isFinite(input.staleTimeMs)) {
+    throw new Error("Fetch queries must declare a finite staleTimeMs.");
+  }
+  const { staleTimeMs, meta, ...options } = input;
+  return {
+    ...options,
+    meta: { ...meta, serverDataPolicy: { class: "fetch", dataShape: "list" } },
     refetchOnMount: "always",
     staleTime: staleTimeMs,
   };

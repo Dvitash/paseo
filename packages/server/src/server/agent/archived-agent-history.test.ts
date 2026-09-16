@@ -31,7 +31,9 @@ test("snapshots survive missing cwd and daemon restart without an available prov
     registry: storage,
     clients: createTestAgentClients(),
   });
-  const agent = await manager.createAgent({ provider: "codex", cwd });
+  const agent = await manager.createAgent({ provider: "codex", cwd }, undefined, {
+    workspaceId: "saved-workspace",
+  });
   await manager.appendTimelineItem(agent.id, {
     type: "user_message",
     text: "remember this",

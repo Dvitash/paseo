@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { createTestLogger } from "../../../../test-utils/test-logger.js";
+import { createTestLogger } from "../../../test-utils/test-logger.js";
 import {
   archivedWorktreeRef,
   preserveArchivedWorkspaceCommit,

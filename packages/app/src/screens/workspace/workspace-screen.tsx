@@ -156,7 +156,10 @@ import {
   resolveWorkspaceRouteState,
   type WorkspaceRouteState,
 } from "@/screens/workspace/workspace-route-state";
-import { renderWorkspaceRouteGate } from "@/screens/workspace/workspace-route-state-views";
+import {
+  buildArchivedChatSelection,
+  renderWorkspaceRouteGate,
+} from "@/screens/workspace/workspace-route-state-views";
 import { useWorkspaceRecovery } from "@/workspace-recovery/use-workspace-recovery";
 import type { WorkspaceRecoveryModel } from "@/workspace-recovery/model";
 import {
@@ -3766,13 +3769,11 @@ function WorkspaceScreenContent({
 
   const workspaceScreenGate = renderWorkspaceRouteGate({
     state: workspaceRouteState,
-    recoverySelection: recoveryAgentId
-      ? {
-          serverId: normalizedServerId,
-          workspaceId: normalizedWorkspaceId,
-          agentId: recoveryAgentId,
-        }
-      : undefined,
+    recoverySelection: buildArchivedChatSelection({
+      serverId: normalizedServerId,
+      workspaceId: normalizedWorkspaceId,
+      agentId: recoveryAgentId,
+    }),
     actions: {
       onRetryHost: handleRetryHost,
       onManageHost: handleManageHost,

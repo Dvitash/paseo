@@ -26,6 +26,14 @@ interface WorkspaceRouteStateActions {
   onRetryRecoveryInspection: () => void;
 }
 
+export function buildArchivedChatSelection(input: {
+  serverId: string;
+  workspaceId: string;
+  agentId: string | null | undefined;
+}): ArchivedChatSelection | undefined {
+  return input.agentId ? { ...input, agentId: input.agentId } : undefined;
+}
+
 export function renderWorkspaceRouteGate(input: {
   state: WorkspaceRouteState;
   actions: WorkspaceRouteStateActions;

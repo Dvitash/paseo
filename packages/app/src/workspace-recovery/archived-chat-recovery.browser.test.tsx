@@ -2,13 +2,14 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import "@/i18n/i18next";
+import { i18n } from "@/i18n/i18next";
 import { ArchivedChatRecovery } from "./archived-chat-recovery";
 
 const mocks = vi.hoisted(() => ({
   client: { fetchAgentTimeline: vi.fn(), buildAgentForkContext: vi.fn() },
   supported: true,
   navigate: vi.fn(),
+  setAttachments: vi.fn(),
   state: { sessions: { host: { workspaces: new Map() } } },
 }));
 vi.mock("@/runtime/host-runtime", () => ({
@@ -18,6 +19,12 @@ vi.mock("@/runtime/host-runtime", () => ({
 vi.mock("@/runtime/host-features", () => ({ useHostFeature: () => mocks.supported }));
 vi.mock("@/stores/navigation-active-workspace-store", () => ({
   navigateToWorkspace: mocks.navigate,
+}));
+vi.mock("@/attachments/workspace-attachments-store", () => ({
+  buildDraftWorkspaceAttachmentScopeKey: (id: string) => `draft:${id}`,
+  useWorkspaceAttachmentsStore: {
+    getState: () => ({ setWorkspaceAttachments: mocks.setAttachments }),
+  },
 }));
 vi.mock("@/stores/session-store", () => ({
   useSessionStore: Object.assign(
@@ -29,9 +36,20 @@ vi.mock("@/stores/session-store", () => ({
 let root: Root | null = null;
 let container: HTMLDivElement;
 let queries: QueryClient;
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage("en");
   vi.clearAllMocks();
   mocks.supported = true;
+  mocks.state.sessions.host.workspaces.clear();
+  mocks.client.buildAgentForkContext.mockResolvedValue({
+    requestId: "context",
+    agentId: "chat",
+    attachment: { type: "text", mimeType: "text/plain", text: "Saved task context" },
+    itemCount: 1,
+    boundaryCursor: null,
+    boundaryMessageId: null,
+    error: null,
+  });
   mocks.client.fetchAgentTimeline.mockResolvedValue({
     agent: { provider: "omp", cwd: "/gone", title: "Saved discussion" },
     entries: [
@@ -103,4 +121,62 @@ test("older hosts do not expose actions that could start an archived agent", () 
   render();
   expect(document.querySelector('[data-testid="view-saved-chat"]')).toBeNull();
   expect(mocks.client.fetchAgentTimeline).not.toHaveBeenCalled();
+});
+
+test("continuation requires an explicit destination and opens an unsent draft there", async () => {
+  mocks.state.sessions.host.workspaces.set("target", {
+    id: "target",
+    projectDisplayName: "Project",
+    name: "Chosen workspace",
+    workspaceDirectory: "/chosen",
+    archivingAt: null,
+  });
+  render();
+  click("continue-saved-chat");
+  await vi.waitFor(() =>
+    expect(
+      document
+        .querySelector('[data-testid="confirm-saved-chat-continuation"]')
+        ?.getAttribute("aria-disabled"),
+    ).toBe("true"),
+  );
+  expect(mocks.client.buildAgentForkContext).not.toHaveBeenCalled();
+  click("saved-chat-destination");
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-testid="saved-chat-workspace-target"]')).not.toBeNull(),
+  );
+  click("saved-chat-workspace-target");
+  await vi.waitFor(() =>
+    expect(
+      document
+        .querySelector('[data-testid="confirm-saved-chat-continuation"]')
+        ?.getAttribute("aria-disabled"),
+    ).not.toBe("true"),
+  );
+  click("confirm-saved-chat-continuation");
+  await vi.waitFor(() =>
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: "host",
+        workspaceId: "target",
+        target: expect.objectContaining({
+          kind: "draft",
+          setup: expect.objectContaining({ cwd: "/chosen" }),
+        }),
+      }),
+    ),
+  );
+  expect(mocks.client.buildAgentForkContext).toHaveBeenCalledExactlyOnceWith("chat", {
+    savedOnly: true,
+  });
+  expect(mocks.setAttachments).toHaveBeenCalledWith(
+    expect.objectContaining({
+      attachments: [
+        expect.objectContaining({
+          kind: "chat_history",
+          source: expect.objectContaining({ agentId: "chat" }),
+        }),
+      ],
+    }),
+  );
 });

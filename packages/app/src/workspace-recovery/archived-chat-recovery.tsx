@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
-import type { FetchAgentTimelineCursor } from "@getpaseo/client/internal/daemon-client";
+import type {
+  FetchAgentTimelineCursor,
+  FetchAgentTimelinePayload,
+} from "@getpaseo/client/internal/daemon-client";
 import { StyleSheet } from "react-native-unistyles";
 import { AdaptiveModalSheet } from "@/components/adaptive-modal-sheet";
+import { useFetchInfiniteQuery } from "@/data/query";
+import { useStableEvent } from "@/hooks/use-stable-event";
 import { Button } from "@/components/ui/button";
-import { SelectField } from "@/components/ui/select-field";
+import {
+  SelectField,
+  type SelectFieldOption,
+  type SelectFieldDisplay,
+} from "@/components/ui/select-field";
 import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useHostFeature } from "@/runtime/host-features";
 import { useSessionStore } from "@/stores/session-store";
@@ -49,6 +58,7 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
         .map((w) => ({
           id: w.id,
           value: w.id,
+          testID: `saved-chat-workspace-${w.id}`,
           label: `${w.projectDisplayName} / ${w.name}`,
           description: w.workspaceDirectory,
         })),
@@ -58,12 +68,13 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
   const selectedDisplay = destinations.find((w) => w.id === destinationId) ?? null;
   const queries = useQueryClient();
   const queryKey = ["savedAgentHistory", input.serverId, input.workspaceId, input.agentId];
-  const history = useInfiniteQuery({
+  const history = useFetchInfiniteQuery({
     queryKey,
     enabled: visible && supported && connected && Boolean(client),
     initialPageParam: undefined as FetchAgentTimelineCursor | undefined,
     retry: false,
-    staleTime: Infinity,
+    staleTimeMs: 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async ({ pageParam }) => {
       if (!client) throw new Error(t("common.errors.daemonClientUnavailable"));
       const page = await client.fetchAgentTimeline(input.agentId, {
@@ -80,7 +91,6 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
     },
     getNextPageParam: (page) => (page.hasOlder ? (page.startCursor ?? undefined) : undefined),
   });
-  const entries = history.data?.pages.toReversed().flatMap((page) => page.entries) ?? [];
   const agent = history.data?.pages[0]?.agent;
   const continuation = useMutation({
     mutationFn: async (generation: number) => {
@@ -124,19 +134,37 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
     },
   });
 
-  function close() {
+  const close = useStableEvent(() => {
     openGeneration.current += 1;
     setMode("closed");
-  }
+  });
   function open(next: "history" | "continue") {
     openGeneration.current += 1;
     continuation.reset();
     void queries.resetQueries({ queryKey, exact: true });
     setMode(next);
   }
-  function continueChat() {
+  const continueChat = useStableEvent(() => {
     continuation.mutate(openGeneration.current);
-  }
+  });
+  const openHistory = useStableEvent(() => open("history"));
+  const openContinuation = useStableEvent(() => open("continue"));
+  const retryHistory = useStableEvent(() => {
+    void queries.resetQueries({ queryKey, exact: true });
+  });
+  const loadOlder = useStableEvent(() => {
+    void history.fetchNextPage();
+  });
+  const header = useMemo(
+    () => ({
+      title: t(
+        mode === "continue"
+          ? "workspace.route.recovery.continueElsewhere"
+          : "workspace.route.recovery.savedChatTitle",
+      ),
+    }),
+    [mode, t],
+  );
 
   // Older daemons resume providers during history fetches, so don't expose this action there.
   if (!supported) return null;
@@ -148,7 +176,7 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
           size="sm"
           variant="outline"
           disabled={disabled}
-          onPress={() => open("history")}
+          onPress={openHistory}
           testID="view-saved-chat"
         >
           {t("workspace.route.recovery.viewSavedChat")}
@@ -158,7 +186,7 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
             size="sm"
             variant="outline"
             disabled={disabled}
-            onPress={() => open("continue")}
+            onPress={openContinuation}
             testID="continue-saved-chat"
           >
             {t("workspace.route.recovery.continueElsewhere")}
@@ -169,13 +197,7 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
         visible={visible}
         onClose={close}
         desktopMaxWidth={840}
-        header={{
-          title: t(
-            mode === "continue"
-              ? "workspace.route.recovery.continueElsewhere"
-              : "workspace.route.recovery.savedChatTitle",
-          ),
-        }}
+        header={header}
         testID="saved-chat-dialog"
       >
         <View style={styles.body}>
@@ -184,90 +206,147 @@ export function ArchivedChatRecovery(input: ArchivedChatSelection & { disabled?:
             <Text style={styles.error}>{t("common.errors.daemonClientDisconnected")}</Text>
           ) : null}
           {mode === "continue" ? (
-            <>
-              <SelectField
-                label={t("workspace.route.recovery.destinationWorkspace")}
-                value={destinationId}
-                selectedDisplay={selectedDisplay}
-                options={destinations}
-                onChange={setDestinationId}
-                placeholder={t("workspace.route.recovery.selectWorkspace")}
-                emptyText={t("workspace.route.recovery.noWorkspaces")}
-                disabled={continuation.isPending || !connected}
-                searchable
-                triggerTestID="saved-chat-destination"
-              />
-              {continuation.error ? (
-                <Text style={styles.error} testID="saved-chat-continuation-error">
-                  {toErrorMessage(continuation.error)}
-                </Text>
-              ) : null}
-              <Button
-                disabled={!agent || !selectedDisplay || continuation.isPending || !connected}
-                onPress={continueChat}
-                testID="confirm-saved-chat-continuation"
-              >
-                {t(
-                  continuation.isPending
-                    ? "common.loading"
-                    : "workspace.route.recovery.continueAction",
-                )}
-              </Button>
-            </>
+            <SavedChatContinuation
+              destinationId={destinationId}
+              selectedDisplay={selectedDisplay}
+              destinations={destinations}
+              onChange={setDestinationId}
+              onContinue={continueChat}
+              connected={connected}
+              ready={Boolean(agent)}
+              busy={continuation.isPending}
+              error={continuation.error}
+            />
           ) : null}
-          {history.isFetching ? <Text style={styles.muted}>{t("common.loading")}</Text> : null}
-          {history.error ? (
-            <>
-              <Text style={styles.error} testID="saved-chat-history-error">
-                {toErrorMessage(history.error)}
-              </Text>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!connected}
-                onPress={() => {
-                  void queries.resetQueries({ queryKey, exact: true });
-                }}
-              >
-                {t("common.actions.retry")}
-              </Button>
-            </>
-          ) : null}
-          {mode === "history" && history.hasNextPage ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={history.isFetching || !connected}
-              onPress={() => {
-                void history.fetchNextPage();
-              }}
-            >
-              {t("workspace.route.recovery.loadOlder")}
-            </Button>
-          ) : null}
-          {history.isSuccess && entries.length === 0 ? (
-            <Text style={styles.muted}>{t("workspace.route.recovery.emptyHistory")}</Text>
-          ) : null}
-          {mode === "history"
-            ? entries.map((entry) => (
-                <SavedHistoryEntry key={`${entry.seqStart}:${entry.seqEnd}`} item={entry.item} />
-              ))
-            : null}
+          <SavedChatHistory
+            history={history}
+            showEntries={mode === "history"}
+            connected={connected}
+            onRetry={retryHistory}
+            onLoadOlder={loadOlder}
+          />
         </View>
       </AdaptiveModalSheet>
     </>
   );
 }
 
+function SavedChatContinuation({
+  destinationId,
+  selectedDisplay,
+  destinations,
+  onChange,
+  onContinue,
+  connected,
+  ready,
+  busy,
+  error,
+}: {
+  destinationId: string | null;
+  selectedDisplay: SelectFieldDisplay | null;
+  destinations: SelectFieldOption<string>[];
+  onChange: (id: string) => void;
+  onContinue: () => void;
+  connected: boolean;
+  ready: boolean;
+  busy: boolean;
+  error: Error | null;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <SelectField
+        label={t("workspace.route.recovery.destinationWorkspace")}
+        value={destinationId}
+        selectedDisplay={selectedDisplay}
+        options={destinations}
+        onChange={onChange}
+        placeholder={t("workspace.route.recovery.selectWorkspace")}
+        emptyText={t("workspace.route.recovery.noWorkspaces")}
+        disabled={busy || !connected}
+        searchable
+        triggerTestID="saved-chat-destination"
+      />
+      {error ? (
+        <Text style={styles.error} testID="saved-chat-continuation-error">
+          {toErrorMessage(error)}
+        </Text>
+      ) : null}
+      <Button
+        disabled={!ready || !selectedDisplay || busy || !connected}
+        onPress={onContinue}
+        testID="confirm-saved-chat-continuation"
+      >
+        {t(busy ? "common.loading" : "workspace.route.recovery.continueAction")}
+      </Button>
+    </>
+  );
+}
+
+type SavedHistoryQuery = ReturnType<
+  typeof useFetchInfiniteQuery<FetchAgentTimelinePayload, FetchAgentTimelineCursor | undefined>
+>;
+
+function SavedChatHistory({
+  history,
+  connected,
+  showEntries,
+  onRetry,
+  onLoadOlder,
+}: {
+  history: SavedHistoryQuery;
+  connected: boolean;
+  showEntries: boolean;
+  onRetry: () => void;
+  onLoadOlder: () => void;
+}) {
+  const { t } = useTranslation();
+  const entries = history.data?.pages.toReversed().flatMap((page) => page.entries) ?? [];
+  return (
+    <>
+      {history.isFetching ? <Text style={styles.muted}>{t("common.loading")}</Text> : null}
+      {history.error ? (
+        <>
+          <Text style={styles.error} testID="saved-chat-history-error">
+            {toErrorMessage(history.error)}
+          </Text>
+          <Button size="sm" variant="outline" disabled={!connected} onPress={onRetry}>
+            {t("common.actions.retry")}
+          </Button>
+        </>
+      ) : null}
+      {showEntries && history.hasNextPage ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={history.isFetching || !connected}
+          onPress={onLoadOlder}
+        >
+          {t("workspace.route.recovery.loadOlder")}
+        </Button>
+      ) : null}
+      {history.isSuccess && entries.length === 0 ? (
+        <Text style={styles.muted}>{t("workspace.route.recovery.emptyHistory")}</Text>
+      ) : null}
+      {showEntries
+        ? entries.map((entry) => (
+            <SavedHistoryEntry key={`${entry.seqStart}:${entry.seqEnd}`} item={entry.item} />
+          ))
+        : null}
+    </>
+  );
+}
+
 function SavedHistoryEntry({ item }: { item: AgentTimelineItem }) {
   const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = useStableEvent(() => setExpanded((value) => !value));
   if (item.type === "tool_call") {
     return (
       <View style={styles.entry}>
         <Button
           size="sm"
           variant="ghost"
-          onPress={() => setExpanded(!expanded)}
+          onPress={toggleExpanded}
         >{`${item.name} · ${item.status}`}</Button>
         {expanded ? (
           <Text selectable style={styles.text}>
