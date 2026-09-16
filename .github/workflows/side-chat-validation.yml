@@ -5,8 +5,7 @@ on:
     branches: [feat/side-chat-workflow]
   pull_request:
     paths:
-      - 'packages/**/side*'
-      - 'packages/**/side/**'
+      - 'packages/**'
       - '.github/workflows/side-chat-validation.yml'
 
 permissions:
@@ -24,13 +23,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Source snapshot
-        run: git archive --format=tar.gz -o "$RUNNER_TEMP/side-source.tar.gz" HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: side-source
-          path: ${{ runner.temp }}/side-source.tar.gz
-          retention-days: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -39,12 +31,27 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           LEFTHOOK: '0'
+      - name: Validation dependencies
+        if: github.event_name == 'push'
+        run: find . -type d -name node_modules -prune -print0 | tar --null -T - --exclude='*/.cache/*' -czf "$RUNNER_TEMP/side-dependencies.tar.gz"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: side-dependencies
+          path: ${{ runner.temp }}/side-dependencies.tar.gz
+          retention-days: 1
       - run: npm run build:server-deps && npm run build:app-deps
-      - run: npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/app
-      - run: npm run lint
+      - name: Typecheck
+        if: success() || failure()
+        run: npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/app
       - name: Server Side regressions
+        if: success() || failure()
         working-directory: packages/server
         run: npx vitest run src/server/side --bail=1 --maxWorkers=2
       - name: App Side regressions
+        if: success() || failure()
         working-directory: packages/app
         run: npx vitest run src/panels/side-panel --bail=1 --maxWorkers=2
+      - name: Lint
+        if: success() || failure()
+        run: npm run lint -- --format=stylish
