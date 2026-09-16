@@ -775,6 +775,8 @@ export class Session {
   private readonly agentRequests: Pick<AgentRequests, "create" | "send">;
   private readonly createAgentLifecycleDispatch: CreateAgentLifecycleDispatch;
   private readonly sideChatService: SideChatService;
+  private readonly sideSubscriptions = new Map<string, () => void>();
+  private readonly sideSubscriptionGenerations = new Map<string, number>();
 
   // eslint-disable-next-line complexity
   constructor(options: SessionOptions) {
@@ -2089,7 +2091,13 @@ export class Session {
             });
           });
       case "agent.side.send.request": {
-        const sendOptions = { provider: msg.provider, model: msg.model };
+        const sendOptions = {
+          provider: msg.provider,
+          model: msg.model,
+          clientMessageId: msg.clientMessageId,
+          action: msg.action,
+          references: msg.references,
+        };
         return this.sideChatService
           .send(msg.mainAgentId, msg.text, sendOptions)
           .then((chat) => {
@@ -2128,8 +2136,124 @@ export class Session {
               },
             });
           });
+      case "agent.side.subscribe.request":
+        return this.handleSideSubscription(msg);
+      case "agent.side.reset.request":
+        return this.sideChatService
+          .reset(msg.mainAgentId, msg.conversationId)
+          .then((chat) => {
+            this.emit({
+              type: "agent.side.reset.response",
+              payload: { requestId: msg.requestId, chat, error: null },
+            });
+            return undefined;
+          })
+          .catch((error: unknown) => {
+            this.emit({
+              type: "agent.side.reset.response",
+              payload: {
+                requestId: msg.requestId,
+                chat: null,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          });
+      case "agent.side.steer.request":
+        return this.sideChatService
+          .steer(
+            msg.mainAgentId,
+            { proposalId: msg.proposalId, text: msg.text },
+            async ({ mainAgentId, messageId, text }) => {
+              const prompt = buildAgentPrompt(text);
+              await this.agentRequests.send({
+                agentId: mainAgentId,
+                messageId,
+                request: { prompt, activeTurnBehavior: "steer" },
+                prepare: async () => {
+                  await ensureAgentLoaded(mainAgentId, {
+                    agentManager: this.agentManager,
+                    agentStorage: this.agentStorage,
+                    logger: this.sessionLogger,
+                  });
+                },
+                send: async () => {
+                  const result = await sendPromptToAgent({
+                    agentManager: this.agentManager,
+                    agentStorage: this.agentStorage,
+                    agentId: mainAgentId,
+                    messageId,
+                    prompt,
+                    activeTurnBehavior: "steer",
+                    clearPendingPermissions: true,
+                    logger: this.sessionLogger,
+                  });
+                  if (result.disposition === "turn_started")
+                    await waitForAgentRunStartWithTimeout(this.agentManager, mainAgentId);
+                },
+              });
+            },
+          )
+          .then((chat) => {
+            this.emit({
+              type: "agent.side.steer.response",
+              payload: { requestId: msg.requestId, chat, error: null },
+            });
+            return undefined;
+          })
+          .catch((error: unknown) => {
+            this.emit({
+              type: "agent.side.steer.response",
+              payload: {
+                requestId: msg.requestId,
+                chat: null,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          });
       default:
         return undefined;
+    }
+  }
+
+  private async handleSideSubscription(
+    msg: Extract<SessionInboundMessage, { type: "agent.side.subscribe.request" }>,
+  ): Promise<void> {
+    const generation = (this.sideSubscriptionGenerations.get(msg.mainAgentId) ?? 0) + 1;
+    this.sideSubscriptionGenerations.set(msg.mainAgentId, generation);
+    try {
+      // Validate before registering demand; a client cannot subscribe to an arbitrary internal agent.
+      await this.sideChatService.get(msg.mainAgentId);
+      if (this.isCleanedUp) return;
+      if (this.sideSubscriptionGenerations.get(msg.mainAgentId) !== generation) {
+        const chat = await this.sideChatService.get(msg.mainAgentId);
+        this.emit({
+          type: "agent.side.subscribe.response",
+          payload: { requestId: msg.requestId, chat, error: null },
+        });
+        return;
+      }
+      this.sideSubscriptions.get(msg.mainAgentId)?.();
+      this.sideSubscriptions.delete(msg.mainAgentId);
+      if (msg.subscribed) {
+        const unsubscribe = this.sideChatService.subscribe(msg.mainAgentId, (update) => {
+          this.emit({ type: "agent.side.changed", payload: update });
+        });
+        this.sideSubscriptions.set(msg.mainAgentId, unsubscribe);
+      }
+      const chat = await this.sideChatService.get(msg.mainAgentId);
+      this.emit({
+        type: "agent.side.subscribe.response",
+        payload: { requestId: msg.requestId, chat, error: null },
+      });
+    } catch (error) {
+      this.emit({
+        type: "agent.side.subscribe.response",
+        payload: {
+          requestId: msg.requestId,
+          chat: null,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
     }
   }
 
@@ -8087,6 +8211,9 @@ export class Session {
   public async cleanup(): Promise<void> {
     this.sessionLogger.trace({}, "agent.session.lifecycle.cleanup");
     this.isCleanedUp = true;
+    for (const unsubscribe of this.sideSubscriptions.values()) unsubscribe();
+    this.sideSubscriptions.clear();
+    this.sideSubscriptionGenerations.clear();
 
     if (this.unsubscribeAgentEvents) {
       this.unsubscribeAgentEvents();

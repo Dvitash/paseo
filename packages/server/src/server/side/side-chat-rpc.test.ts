@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import pino from "pino";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../agent/agent-manager.js";
 import type {
   AgentCapabilityFlags,
@@ -866,5 +866,170 @@ describe("SideChatService lifecycle and behavioral integration", () => {
     } catch (err) {
       expect((err as SideChatError).code).toBe("invalid_parent");
     }
+  });
+  test("re-forking retains the Side discussion, not only the displayed messages", async () => {
+    const mainSession = manager.getAgent(mainAgentId)?.session as TestAgentSession;
+    mainSession.capabilities.supportsSessionFork = true;
+    await service.send(mainAgentId, "Keep the current interface; only simplify its defaults.", {
+      wait: true,
+    });
+    const fresh = new SideChatService(manager, store, logger, undefined, undefined, 0);
+    await fresh.send(mainAgentId, "What did we decide?", { wait: true });
+    expect(String(claudeClient.sessions.at(-1)?.startPrompts[0])).toContain(
+      "Keep the current interface; only simplify its defaults.",
+    );
+    expect(String(claudeClient.sessions.at(-1)?.startPrompts[0])).toContain(
+      "Earlier Side conversation for continuity",
+    );
+    expect(claudeClient.createdConfigs.at(-1)?.readOnly).toBe(true);
+  });
+
+  test("same client message ID is idempotent across retries and service reloads", async () => {
+    const id = "stable-question";
+    await service.send(mainAgentId, "Question", { clientMessageId: id, wait: true });
+    await service.send(mainAgentId, "Question", { clientMessageId: id, wait: true });
+    const reloaded = new SideChatService(manager, new SideChatStore(tmpDir), logger);
+    const result = await reloaded.send(mainAgentId, "Question", {
+      clientMessageId: id,
+      wait: true,
+    });
+    expect(result.messages.filter((message) => message.id === id)).toHaveLength(1);
+    expect(claudeClient.sessions.at(-1)?.startPrompts).toHaveLength(1);
+    await expect(
+      reloaded.send(mainAgentId, "Different question", { clientMessageId: id }),
+    ).rejects.toThrow("different");
+  });
+
+  test("persists proposal delivery and never sends it again after acknowledgement", async () => {
+    claudeClient.sessionFactory = (config) => {
+      const session = new TestAgentSession(config);
+      session.turnScript = (turnId, emit) => {
+        emit({
+          type: "timeline",
+          provider: session.provider,
+          turnId,
+          item: {
+            type: "assistant_message",
+            text: "<steer_proposal>Run the parser tests.</steer_proposal>",
+          },
+        });
+        emit({ type: "turn_completed", provider: session.provider, turnId });
+      };
+      return session;
+    };
+    const reply = await service.send(mainAgentId, "Draft a steer", { wait: true, action: "steer" });
+    const proposal = reply.messages.at(-1)?.proposal;
+    expect(proposal).toBeDefined();
+    expect(reply.messages.at(-1)?.text).toBe("");
+    const deliver = vi.fn(
+      async (_input: { mainAgentId: string; messageId: string; text: string }) => undefined,
+    );
+    const sent = await service.steer(
+      mainAgentId,
+      { proposalId: proposal!.id, text: "Run only the relevant parser tests." },
+      deliver,
+    );
+    expect(sent.messages.at(-1)?.proposal?.delivery?.status).toBe("delivered");
+    await service.send(mainAgentId, "Another question", { wait: true });
+    expect(
+      (await service.get(mainAgentId)).messages.find(
+        (message) => message.proposal?.id === proposal!.id,
+      )?.proposal?.delivery?.status,
+    ).toBe("delivered");
+    const reloaded = new SideChatService(manager, new SideChatStore(tmpDir), logger);
+    await reloaded.steer(
+      mainAgentId,
+      { proposalId: proposal!.id, text: "Run only the relevant parser tests." },
+      deliver,
+    );
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      mainAgentId,
+      text: "Run only the relevant parser tests.",
+    });
+  });
+
+  test("a failed steering retry reuses its durable message ID and locks edited payloads", async () => {
+    await service.send(mainAgentId, "Question", { wait: true });
+    const record = store.get(mainAgentId)!;
+    record.messages.at(-1)!.proposal = {
+      id: "proposal",
+      mainAgentId,
+      text: "Run tests",
+      createdAt: record.updatedAt,
+      delivery: null,
+    };
+    await store.save(record);
+    const isolated = new SideChatService(manager, store, logger);
+    const calls: string[] = [];
+    const failed = await isolated.steer(
+      mainAgentId,
+      { proposalId: "proposal", text: "Run tests" },
+      async ({ messageId }) => {
+        calls.push(messageId);
+        throw new Error("Delivery outcome unknown");
+      },
+    );
+    expect(failed.messages.at(-1)?.proposal?.delivery?.status).toBe("failed");
+    await expect(
+      isolated.steer(
+        mainAgentId,
+        { proposalId: "proposal", text: "Run different tests" },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("already attempted");
+    await isolated.steer(
+      mainAgentId,
+      { proposalId: "proposal", text: "Run tests" },
+      async ({ messageId }) => {
+        calls.push(messageId);
+      },
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe(calls[1]);
+    await expect(
+      isolated.steer(
+        "non-existent",
+        { proposalId: "proposal", text: "Run tests" },
+        async () => undefined,
+      ),
+    ).rejects.toThrow();
+  });
+
+  test("publishes incremental message upserts and stops updates after unsubscribe", async () => {
+    const updates: { revision?: number; messages: { id: string; text: string }[] }[] = [];
+    const unsubscribe = service.subscribe(mainAgentId, (update) => updates.push(update));
+    await service.send(mainAgentId, "First question", { wait: true });
+    const firstIds = new Set(
+      (await service.get(mainAgentId)).messages.map((message) => message.id),
+    );
+    updates.length = 0;
+    await service.send(mainAgentId, "Second question", { wait: true });
+    expect(updates.length).toBeGreaterThan(0);
+    for (const update of updates) {
+      expect(update.messages.some((message) => firstIds.has(message.id))).toBe(false);
+    }
+
+    for (let index = 1; index < updates.length; index++)
+      expect(updates[index].revision).toBeGreaterThan(updates[index - 1].revision!);
+    unsubscribe();
+    updates.length = 0;
+    await service.send(mainAgentId, "Third question", { wait: true });
+    expect(updates).toHaveLength(0);
+  });
+
+  test("new Side conversations archive history without changing the main agent", async () => {
+    const before = manager.getAgent(mainAgentId);
+    const first = await service.send(mainAgentId, "Old Side conversation", { wait: true });
+    const reset = await service.reset(mainAgentId, first.conversationId!);
+    expect(reset.messages).toHaveLength(0);
+    expect(reset.sideAgentId).toBeNull();
+    expect((await fs.readdir(path.join(tmpDir, "side-chats", "archive"))).length).toBe(1);
+    expect(manager.getAgent(mainAgentId)?.session).toBe(before?.session);
+    const next = await service.send(mainAgentId, "New Side conversation", { wait: true });
+    expect(next.conversationId).not.toBe(first.conversationId);
+    await expect(service.reset(mainAgentId, first.conversationId!)).rejects.toThrow(
+      "already started",
+    );
   });
 });

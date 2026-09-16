@@ -449,14 +449,18 @@ function ExplorerSidebarContent({
         ) : null}
         {mountedTabIds.has("side") ? (
           <RetainedPanel active={resolvedTab === "side"}>
-            <SidePane serverId={serverId} workspaceId={workspaceId} />
+            <SidePane serverId={serverId} workspaceId={workspaceId} onOpenFile={onOpenFile} />
           </RetainedPanel>
         ) : null}
       </View>
     </View>
   );
 }
-function SidePane({ serverId, workspaceId }: { serverId: string; workspaceId?: string | null }) {
+function SidePane({
+  serverId,
+  workspaceId,
+  onOpenFile,
+}: Pick<SidebarContentProps, "serverId" | "workspaceId" | "onOpenFile">) {
   const dummyPaneContext: PaneContextValue = useMemo(
     () => ({
       serverId,
@@ -469,10 +473,10 @@ function SidePane({ serverId, workspaceId }: { serverId: string; workspaceId?: s
       closeCurrentTab: () => {},
       retargetCurrentTab: () => {},
       setCurrentTabState: () => {},
-      openFileInWorkspace: () => {},
+      openFileInWorkspace: (request) => onOpenFile?.(request.location.path),
       openImportSheet: () => {},
     }),
-    [serverId, workspaceId],
+    [serverId, workspaceId, onOpenFile],
   );
 
   return (

@@ -20,7 +20,7 @@ async function mountShell({
   const frame = document.createElement("iframe");
   frame.style.cssText = "position:fixed;left:0;top:0;width:390px;height:844px;border:0";
   const loaded = new Promise<void>((resolve) => {
-    frame.onload = () => resolve();
+    frame.addEventListener("load", () => resolve(), { once: true });
   });
   frame.srcdoc = shellHtml
     .replace(/<link\b[^>]*>/g, "")
@@ -87,7 +87,19 @@ async function mountShell({
     // 34px home-indicator inset + 16px normal composer spacing, exactly once.
     expect(input.getBoundingClientRect().bottom).toBeCloseTo(bottom - 50, 1);
   };
-  return { frame, view, doc, root, input, history, viewport, settle, resize, expectBottom, initialBottom };
+  return {
+    frame,
+    view,
+    doc,
+    root,
+    input,
+    history,
+    viewport,
+    settle,
+    resize,
+    expectBottom,
+    initialBottom,
+  };
 }
 
 afterEach(() => {

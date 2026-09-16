@@ -13,6 +13,7 @@ export class SideChatStore {
   private readonly cache = new Map<string, StoredSideChatRecord>();
   private readonly storeDir: string;
   private loading: Promise<void> | null = null;
+  private readonly writes = new Map<string, Promise<void>>();
 
   constructor(storageDir: string, _logger?: Logger) {
     this.storeDir = path.join(storageDir, "side-chats");
@@ -52,11 +53,32 @@ export class SideChatStore {
 
   async save(record: StoredSideChatRecord): Promise<void> {
     const validated = StoredSideChatRecordSchema.parse(record);
-    await writeJsonFileAtomic(this.filePath(record.mainAgentId), validated);
-    this.cache.set(record.mainAgentId, validated);
+    const previous = this.writes.get(record.mainAgentId) ?? Promise.resolve();
+    const write = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await writeJsonFileAtomic(this.filePath(record.mainAgentId), validated);
+        this.cache.set(record.mainAgentId, validated);
+        return undefined;
+      });
+    this.writes.set(record.mainAgentId, write);
+    try {
+      await write;
+    } finally {
+      if (this.writes.get(record.mainAgentId) === write) this.writes.delete(record.mainAgentId);
+    }
+  }
+
+  async archive(record: StoredSideChatRecord): Promise<void> {
+    const validated = StoredSideChatRecordSchema.parse(record);
+    const filename = createHash("sha256")
+      .update(`${record.mainAgentId}:${record.conversationId}`)
+      .digest("hex");
+    await writeJsonFileAtomic(path.join(this.storeDir, "archive", `${filename}.json`), validated);
   }
 
   async delete(mainAgentId: string): Promise<boolean> {
+    await this.writes.get(mainAgentId);
     const existed = this.cache.has(mainAgentId);
     try {
       await fs.unlink(this.filePath(mainAgentId));

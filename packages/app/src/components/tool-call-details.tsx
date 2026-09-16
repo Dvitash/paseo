@@ -1,4 +1,5 @@
-import React, { useMemo, type ReactNode } from "react";
+import { AskSideButton } from "@/panels/side/references";
+import React, { useCallback, useMemo, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -761,6 +762,10 @@ export function ToolCallDetailsContent({
   endedAt,
 }: ToolCallDetailsContentProps) {
   const { t } = useTranslation();
+  const getSideContent = useCallback(
+    () => JSON.stringify({ toolName, detail, error: errorText }, null, 2),
+    [toolName, detail, errorText],
+  );
   const resolvedMaxHeight = fillAvailableHeight ? undefined : (maxHeight ?? 300);
   const ds = useDetailStyles(detail, resolvedMaxHeight, fillAvailableHeight);
   const diffLines = useDiffLines(detail);
@@ -794,7 +799,12 @@ export function ToolCallDetailsContent({
     return <Text style={styles.emptyStateText}>{t("toolCallDetails.empty")}</Text>;
   }
 
-  return <View style={ds.fullBleedContainerStyle}>{sections}</View>;
+  return (
+    <View style={ds.fullBleedContainerStyle}>
+      <AskSideButton kind="tool" label={toolName ?? "Tool result"} getContent={getSideContent} />
+      {sections}
+    </View>
+  );
 }
 
 // ---- Styles ----

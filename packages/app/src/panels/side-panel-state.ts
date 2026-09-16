@@ -37,11 +37,14 @@ export interface SelectedMainAgent {
 
 export function resolveEffectiveSideProvider(input: {
   activeSideProvider?: string | null;
+  selectedProvider?: string | null;
   mainAgentProvider?: string | null;
   supportedProviders?: string[];
 }): string | null {
   if (input.activeSideProvider) return input.activeSideProvider;
   const supported = input.supportedProviders ?? [];
+  if (input.selectedProvider)
+    return supported.includes(input.selectedProvider) ? input.selectedProvider : null;
   if (input.mainAgentProvider && supported.includes(input.mainAgentProvider)) {
     return input.mainAgentProvider;
   }

@@ -1,3 +1,4 @@
+import { AskSideButton } from "@/panels/side/references";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { TaskListRow } from "@/components/task-list-row";
 import {
@@ -567,6 +568,11 @@ export const UserMessage = memo(function UserMessage({
                 onRewind={handleRewind}
               />
             ) : null}
+            <AskSideButton
+              getContent={getMessageContent}
+              label="Main message"
+              messageId={messageId}
+            />
             <TurnCopyButton
               getContent={getMessageContent}
               containerStyle={userMessageStylesheet.copyButton}
@@ -686,6 +692,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
         getContent={getContent}
         containerStyle={assistantTurnFooterStylesheet.copyButton}
       />
+      <AskSideButton getContent={getContent} />
       {canFork ? <AssistantForkMenu onFork={handleFork} /> : null}
       {primaryLabel ? (
         <Pressable
