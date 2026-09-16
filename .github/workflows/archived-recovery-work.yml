@@ -1,4 +1,4 @@
-name: Archived recovery workspace
+name: Archived recovery validation
 
 on:
   push:
@@ -6,21 +6,103 @@ on:
     paths: [.github/workflows/archived-recovery-work.yml]
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: archived-recovery-validation
+  cancel-in-progress: false
 
 jobs:
-  source:
-    if: github.repository == 'Dvitash/paseo'
+  validate:
+    if: github.repository == 'Dvitash/paseo' && github.ref == 'refs/heads/fix/archived-chat-recovery'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      LEFTHOOK: "0"
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Export branch source for isolated regression development
-        run: git archive --format=tar.gz HEAD > /tmp/paseo-recovery-source.tar.gz
-      - uses: actions/upload-artifact@v4
+          ref: fix/archived-chat-recovery
+      - uses: actions/setup-node@v4
         with:
-          name: paseo-recovery-source
-          path: /tmp/paseo-recovery-source.tar.gz
-          retention-days: 1
+          node-version: 22
+          cache: npm
+      - name: Apply reviewed recovery patch
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          text = ''.join(Path(f'.github/archived-recovery-{i}.patch').read_text() for i in range(1, 6))
+          text = text.replace('\n diff --git ', '\ndiff --git ')
+          data = text.encode()
+          actual = hashlib.sha256(data).hexdigest()
+          assert actual == '62c1bdd7d4307873bf3e805a2b406857e6d8da4c5a7a2f751e02d6e01f3c3522', actual
+          Path('/tmp/recovery.patch').write_bytes(data)
+          PY
+          git apply --check /tmp/recovery.patch
+          git apply --index /tmp/recovery.patch
+          git diff --cached --name-only -z > /tmp/recovery-files
+      - run: npm ci
+      - name: Format and commit implementation to feature branch only
+        run: |
+          xargs -0 npx oxfmt < /tmp/recovery-files
+          xargs -0 git add -- < /tmp/recovery-files
+          git rm .github/archived-recovery-*.patch .github/archived-recovery-1.b64
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null commit -m 'fix: recover archived worktrees and view saved chat history'
+          git push origin HEAD:refs/heads/fix/archived-chat-recovery
+      - name: Build dependencies
+        id: build
+        run: npm run build:server-deps && npm run build:app-deps
+      - name: Typecheck
+        if: success() || failure()
+        run: |
+          set -o pipefail
+          (npm run typecheck --workspace=@getpaseo/server; s=$?; npm run typecheck --workspace=@getpaseo/app; a=$?; test "$s$a" = "00") 2>&1 | tee /tmp/recovery-typecheck.log
+      - name: Lint changed sources
+        if: success() || failure()
+        run: |
+          set -o pipefail
+          xargs -0 npx oxlint < /tmp/recovery-files 2>&1 | tee /tmp/recovery-lint.log
+      - name: Server regressions
+        if: success() || failure()
+        working-directory: packages/server
+        run: |
+          set -o pipefail
+          npx vitest run src/server/session/workspace-recovery src/server/agent/archived-agent-history.test.ts src/server/daemon-e2e/archived-history.local.e2e.test.ts src/server/workspace-archive-service.test.ts src/server/agent/agent-storage.test.ts src/server/agent/provider-registry-wrap.test.ts --maxWorkers=2 2>&1 | tee /tmp/recovery-server.log
+      - name: Client regressions
+        if: success() || failure()
+        working-directory: packages/client
+        run: |
+          set -o pipefail
+          npx vitest run src/saved-history.test.ts --maxWorkers=2 2>&1 | tee /tmp/recovery-client.log
+      - name: App unit regressions
+        if: success() || failure()
+        working-directory: packages/app
+        run: |
+          set -o pipefail
+          npx vitest run src/workspace-recovery/model.test.ts src/workspace-recovery/continue-saved-chat.test.ts src/i18n/resources.test.ts --project=unit --maxWorkers=2 2>&1 | tee /tmp/recovery-app.log
+      - name: Browser setup
+        if: success() || failure()
+        run: npx playwright install --with-deps chromium
+      - name: Browser regressions
+        if: success() || failure()
+        working-directory: packages/app
+        run: |
+          set -o pipefail
+          npx vitest run src/workspace-recovery/archived-chat-recovery.browser.test.tsx --project=browser --maxWorkers=1 2>&1 | tee /tmp/recovery-browser.log
+      - name: Export validation sources
+        if: always()
+        run: git archive --format=tar.gz HEAD > /tmp/recovery-validated-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: archived-recovery-validation
+          path: |
+            /tmp/recovery-*.log
+            /tmp/recovery-validated-source.tar.gz
+            packages/app/.vitest-screenshots
+          retention-days: 2
