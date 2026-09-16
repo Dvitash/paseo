@@ -10,6 +10,7 @@ export interface ThreadTokenUsageAccumulator {
   turnKey: number | null;
   completed: TokenUsageValues;
   current: TokenUsageValues;
+  awaitingNewTurnUsage: boolean;
 }
 
 export function createThreadTokenUsageAccumulator(): ThreadTokenUsageAccumulator {
@@ -17,6 +18,7 @@ export function createThreadTokenUsageAccumulator(): ThreadTokenUsageAccumulator
     turnKey: null,
     completed: {},
     current: {},
+    awaitingNewTurnUsage: false,
   };
 }
 
@@ -35,16 +37,13 @@ function mergeReportedUsage(
   current: TokenUsageValues,
   reported: TokenUsageValues,
 ): TokenUsageValues {
+  const inputTokens = reported.inputTokens ?? current.inputTokens;
+  const cachedInputTokens = reported.cachedInputTokens ?? current.cachedInputTokens;
+  const outputTokens = reported.outputTokens ?? current.outputTokens;
   return {
-    ...(current.inputTokens !== undefined || reported.inputTokens !== undefined
-      ? { inputTokens: reported.inputTokens ?? current.inputTokens }
-      : {}),
-    ...(current.cachedInputTokens !== undefined || reported.cachedInputTokens !== undefined
-      ? { cachedInputTokens: reported.cachedInputTokens ?? current.cachedInputTokens }
-      : {}),
-    ...(current.outputTokens !== undefined || reported.outputTokens !== undefined
-      ? { outputTokens: reported.outputTokens ?? current.outputTokens }
-      : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
   };
 }
 
@@ -54,16 +53,13 @@ function addOptional(a: number | undefined, b: number | undefined): number | und
 }
 
 function addUsage(a: TokenUsageValues, b: TokenUsageValues): TokenUsageValues {
+  const inputTokens = addOptional(a.inputTokens, b.inputTokens);
+  const cachedInputTokens = addOptional(a.cachedInputTokens, b.cachedInputTokens);
+  const outputTokens = addOptional(a.outputTokens, b.outputTokens);
   return {
-    ...(addOptional(a.inputTokens, b.inputTokens) !== undefined
-      ? { inputTokens: addOptional(a.inputTokens, b.inputTokens) }
-      : {}),
-    ...(addOptional(a.cachedInputTokens, b.cachedInputTokens) !== undefined
-      ? { cachedInputTokens: addOptional(a.cachedInputTokens, b.cachedInputTokens) }
-      : {}),
-    ...(addOptional(a.outputTokens, b.outputTokens) !== undefined
-      ? { outputTokens: addOptional(a.outputTokens, b.outputTokens) }
-      : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
   };
 }
 
@@ -72,9 +68,8 @@ function addUsage(a: TokenUsageValues, b: TokenUsageValues): TokenUsageValues {
  * the active turn live. `turnKey` is the agent's last user-message timestamp.
  *
  * A new turn can become visible before its first usage event. In that case the
- * store still contains the previous completed turn, so do not seed the new turn
- * from a completed model-turn snapshot. The next usage update for the same turn
- * will populate it normally.
+ * store still contains the previous completed turn, so ignore that stale snapshot
+ * until the model-turn tracker reports the new turn as running.
  */
 export function updateThreadTokenUsage(
   previous: ThreadTokenUsageAccumulator,
@@ -88,25 +83,35 @@ export function updateThreadTokenUsage(
       turnKey,
       completed: {},
       current: mergeReportedUsage({}, reported),
+      awaitingNewTurnUsage: false,
     };
   }
 
   const turnChanged =
     previous.turnKey !== null && turnKey !== null && turnKey !== previous.turnKey;
-  if (!turnChanged) {
+  if (turnChanged) {
+    const completed = addUsage(previous.completed, previous.current);
+    const hasNewTurnSnapshot = usage?.modelTurn?.status === "running";
     return {
-      turnKey: turnKey ?? previous.turnKey,
-      completed: previous.completed,
-      current: mergeReportedUsage(previous.current, reported),
+      turnKey,
+      completed,
+      current: hasNewTurnSnapshot ? mergeReportedUsage({}, reported) : {},
+      awaitingNewTurnUsage: !hasNewTurnSnapshot,
     };
   }
 
-  const completed = addUsage(previous.completed, previous.current);
-  const shouldSeedNewTurn = usage?.modelTurn?.status === "running";
+  if (previous.awaitingNewTurnUsage && usage?.modelTurn?.status !== "running") {
+    return {
+      ...previous,
+      turnKey: turnKey ?? previous.turnKey,
+    };
+  }
+
   return {
-    turnKey,
-    completed,
-    current: shouldSeedNewTurn ? mergeReportedUsage({}, reported) : {},
+    turnKey: turnKey ?? previous.turnKey,
+    completed: previous.completed,
+    current: mergeReportedUsage(previous.current, reported),
+    awaitingNewTurnUsage: false,
   };
 }
 
