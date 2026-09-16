@@ -46,6 +46,7 @@ const EMPTY_AUXILIARY: StreamRenderAuxiliary = {
   pendingPermissions: null,
   turnFooter: null,
 };
+const OMP_MOUNTED_NOTIFICATION_PREFIX = "xd://: mounted ";
 
 const orderedTailCache = new WeakMap<StreamItem[], Map<string, StreamItem[]>>();
 const orderedHeadCache = new WeakMap<StreamItem[], Map<string, StreamItem[]>>();
@@ -63,6 +64,21 @@ interface CachedTailSlice {
 }
 
 const tailSliceCache = new WeakMap<StreamItem[], CachedTailSlice>();
+
+export function isOmpMountedNotification(item: StreamItem): boolean {
+  return (
+    item.kind === "notification" &&
+    item.level === "info" &&
+    item.message.trimStart().startsWith(OMP_MOUNTED_NOTIFICATION_PREFIX)
+  );
+}
+
+function omitOmpMountedNotifications(items: StreamItem[]): StreamItem[] {
+  if (!items.some(isOmpMountedNotification)) {
+    return items;
+  }
+  return items.filter((item) => !isOmpMountedNotification(item));
+}
 
 function getRenderedTail(tail: StreamItem[], historyStart?: number): StreamItem[] {
   if (!historyStart) {
@@ -186,7 +202,8 @@ export function buildAgentStreamRenderModel(
     isMobileBreakpoint: input.isMobileBreakpoint,
   });
   const orderingCacheKey = `${input.platform}:${input.isMobileBreakpoint}`;
-  const renderedTail = getRenderedTail(input.tail, input.historyStart);
+  const renderedTail = omitOmpMountedNotifications(getRenderedTail(input.tail, input.historyStart));
+  const renderedHead = omitOmpMountedNotifications(input.head);
   const orderedTail = getOrderedItems({
     cache: orderedTailCache,
     source: renderedTail,
@@ -199,7 +216,7 @@ export function buildAgentStreamRenderModel(
   });
   const orderedHead = getOrderedItems({
     cache: orderedHeadCache,
-    source: input.head,
+    source: renderedHead,
     cacheKey: orderingCacheKey,
     order: (items) =>
       orderHeadForStreamRenderStrategy({
@@ -216,7 +233,7 @@ export function buildAgentStreamRenderModel(
     isTurnActive: input.isTurnActive,
     activeTurnStartedAt: input.activeTurnStartedAt,
     tail: renderedTail,
-    head: input.head,
+    head: renderedHead,
   });
 
   return {
