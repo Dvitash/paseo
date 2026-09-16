@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nextProvider } from "react-i18next";
 import { createInstance } from "i18next";
-import { ModelTurnMetricsPill } from "./model-turn-metrics";
+import { ModelTurnMetricsPill, ThreadTokenUsagePill } from "./model-turn-metrics";
 
 const i18n = createInstance();
 await i18n.init({
@@ -39,7 +39,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(metrics: React.ComponentProps<typeof ModelTurnMetricsPill>["metrics"]) {
+function renderMetrics(metrics: React.ComponentProps<typeof ModelTurnMetricsPill>["metrics"]) {
   act(() => {
     root.render(
       <I18nextProvider i18n={i18n}>
@@ -52,27 +52,60 @@ function render(metrics: React.ComponentProps<typeof ModelTurnMetricsPill>["metr
   return pill;
 }
 
+function renderThreadUsage(usage: React.ComponentProps<typeof ThreadTokenUsagePill>["usage"]) {
+  act(() => {
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <ThreadTokenUsagePill usage={usage} />
+      </I18nextProvider>,
+    );
+  });
+  const pill = container.querySelector('[data-testid="composer-thread-token-usage-pill"]');
+  if (!(pill instanceof HTMLElement)) throw new Error("Token usage pill did not render");
+  return pill;
+}
+
 describe("model turn metrics pill", () => {
   it("shows pending metrics, then current TTFT, and retains the completed turn", () => {
-    let pill = render({ status: "running", ttftMs: null, tokensPerSecond: null });
+    let pill = renderMetrics({ status: "running", ttftMs: null, tokensPerSecond: null });
     expect(pill.textContent).toBe("TTFT — · TPS —");
     expect(pill.getAttribute("aria-label")).toContain("Current model turn");
 
-    pill = render({ status: "running", ttftMs: 1234, tokensPerSecond: null });
+    pill = renderMetrics({ status: "running", ttftMs: 1234, tokensPerSecond: null });
     expect(pill.textContent).toBe("TTFT 1.23s · TPS —");
 
-    pill = render({ status: "completed", ttftMs: 1234, tokensPerSecond: 52.345 });
+    pill = renderMetrics({ status: "completed", ttftMs: 1234, tokensPerSecond: 52.345 });
     expect(pill.textContent).toBe("TTFT 1.23s · TPS 52.3");
     expect(pill.getAttribute("aria-label")).toContain("Previous model turn");
     expect(pill.getAttribute("aria-label")).toContain("Subagents are excluded");
 
-    pill = render({ status: "running", ttftMs: null, tokensPerSecond: null });
+    pill = renderMetrics({ status: "running", ttftMs: null, tokensPerSecond: null });
     expect(pill.textContent).toBe("TTFT — · TPS —");
     expect(pill.getAttribute("aria-label")).toContain("Current model turn");
   });
 
   it("renders real zero values without treating them as unavailable", () => {
-    const pill = render({ status: "completed", ttftMs: 0, tokensPerSecond: 0 });
+    const pill = renderMetrics({ status: "completed", ttftMs: 0, tokensPerSecond: 0 });
     expect(pill.textContent).toBe("TTFT 0.00s · TPS 0.0");
+  });
+});
+
+describe("thread token usage pill", () => {
+  it("renders compact live input, cache, and output totals", () => {
+    const pill = renderThreadUsage({
+      inputTokens: 12_345,
+      cachedInputTokens: 9_876,
+      outputTokens: 432,
+    });
+
+    expect(pill.textContent).toBe("In 12k · Cache 9.9k · Out 432");
+    expect(pill.getAttribute("aria-label")).toBe(
+      "Current thread token usage. Input 12k. Cached 9.9k. Output 432.",
+    );
+  });
+
+  it("keeps zero distinct from unavailable values", () => {
+    const pill = renderThreadUsage({ inputTokens: 0, outputTokens: 0 });
+    expect(pill.textContent).toBe("In 0 · Cache — · Out 0");
   });
 });
