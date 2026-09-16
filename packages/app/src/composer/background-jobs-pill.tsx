@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Text, View } from "react-native";
-import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { withUnistyles } from "react-native-unistyles";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import {
   DropdownMenu,
@@ -10,11 +10,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import type { ProviderSubagentRow } from "@/subagents/select";
 import type { Theme } from "@/styles/theme";
 import type { StreamItem } from "@/types/stream";
 import { formatDuration } from "@/utils/time";
 import { collectRunningBackgroundJobs, type BackgroundJobSnapshot } from "./background-jobs";
 import { composerPillStyles } from "./pill-styles";
+import { SubagentsPill } from "./subagents-pill";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const mutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -91,5 +93,31 @@ export const BackgroundJobsPill = memo(function BackgroundJobsPill({
   );
 });
 
-const styles = StyleSheet.create(() => ({}));
-void styles;
+/** Nested provider panes still pass their child rows here; render the same two independent pills. */
+export const BackgroundJobsPills = memo(function BackgroundJobsPills({
+  rows,
+  parentStreamItems,
+  onOpenJob,
+}: {
+  serverId: string;
+  rows: readonly ProviderSubagentRow[];
+  parentStreamItems?: readonly StreamItem[];
+  onOpenJob: (parentAgentId: string, subagentId: string) => void;
+}): ReactElement | null {
+  const hasSubagents = rows.some((row) => row.status === "running");
+  const hasJobs = collectRunningBackgroundJobs(parentStreamItems).length > 0;
+  if (!hasSubagents && !hasJobs) return null;
+
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+      {hasSubagents ? (
+        <SubagentsPill
+          rows={rows}
+          onOpenSubagent={() => undefined}
+          onOpenProviderSubagent={onOpenJob}
+        />
+      ) : null}
+      {hasJobs ? <BackgroundJobsPill streamItems={parentStreamItems} /> : null}
+    </View>
+  );
+});
