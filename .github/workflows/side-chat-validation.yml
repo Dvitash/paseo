@@ -1,0 +1,50 @@
+name: Side chat validation
+
+on:
+  push:
+    branches: [feat/side-chat-workflow]
+  pull_request:
+    paths:
+      - 'packages/**/side*'
+      - 'packages/**/side/**'
+      - '.github/workflows/side-chat-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: side-chat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Source snapshot
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/side-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: side-source
+          path: ${{ runner.temp }}/side-source.tar.gz
+          retention-days: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          LEFTHOOK: '0'
+      - run: npm run build:server-deps && npm run build:app-deps
+      - run: npm run typecheck --workspace=@getpaseo/server && npm run typecheck --workspace=@getpaseo/app
+      - run: npm run lint
+      - name: Server Side regressions
+        working-directory: packages/server
+        run: npx vitest run src/server/side --bail=1 --maxWorkers=2
+      - name: App Side regressions
+        working-directory: packages/app
+        run: npx vitest run src/panels/side-panel --bail=1 --maxWorkers=2
