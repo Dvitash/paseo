@@ -13,6 +13,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - run: git archive -o /tmp/side-source.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: side-review-source
+          path: /tmp/side-source.tar
+          retention-days: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,15 +28,25 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           LEFTHOOK: '0'
       - run: npm run build:server-deps && npm run build:app-deps
-      - name: Archive tracked source and installed test dependencies
+      - name: Archive installed test dependencies
         run: |
-          git archive -o /tmp/side-source.tar HEAD
           find node_modules packages -type d \( -name node_modules -o -name dist -o -name build \) -prune -print0 | tar --null -czf /tmp/side-dependencies.tar.gz -T -
+          split -b 350M -d /tmp/side-dependencies.tar.gz /tmp/side-deps-
       - uses: actions/upload-artifact@v4
         with:
-          name: side-review-workspace
-          path: |
-            /tmp/side-source.tar
-            /tmp/side-dependencies.tar.gz
+          name: side-review-deps-0
+          path: /tmp/side-deps-00
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: side-review-deps-1
+          path: /tmp/side-deps-01
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: side-review-deps-2
+          path: /tmp/side-deps-02
           retention-days: 1
           compression-level: 0
