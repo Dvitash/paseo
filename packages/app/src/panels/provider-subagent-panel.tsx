@@ -5,6 +5,7 @@ import invariant from "tiny-invariant";
 import { useShallow } from "zustand/react/shallow";
 import { AgentStreamView } from "@/agent-stream/view";
 import { getProviderIcon } from "@/components/provider-icons";
+import { BackgroundJobsPills } from "@/composer/background-jobs-pill";
 import {
   resolveComposerTrackControlClearance,
   resolveComposerTrackTailClearance,
@@ -14,9 +15,7 @@ import type { AgentScreenAgent } from "@/hooks/use-agent-screen-state-machine";
 import { usePaneContext } from "@/panels/pane-context";
 import { definePanel, type PanelDescriptor } from "@/panels/panel-registry";
 import { useSessionStore } from "@/stores/session-store";
-import { useSubagentsForParent } from "@/subagents/select";
-import { SubagentsTrack } from "@/subagents/track";
-import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
+import { useSubagentsForParent, type ProviderSubagentRow } from "@/subagents/select";
 import {
   providerSubagentKey,
   providerSubagentLifecycleStatus,
@@ -32,7 +31,6 @@ import type { TurnPresentation } from "@/timeline/turn-liveness";
 
 const EMPTY_PERMISSIONS = new Map<string, PendingPermission>();
 const EMPTY_STREAM_ITEMS: StreamItem[] = [];
-const NOOP_SUBAGENT = () => undefined;
 
 function resolveChildTrackClearance(childCount: number, isCompact: boolean) {
   if (childCount === 0) return { tail: 0, controls: 0 };
@@ -45,21 +43,25 @@ function resolveChildTrackClearance(childCount: number, isCompact: boolean) {
 function ProviderSubagentChildTrack({
   serverId,
   rows,
+  parentStreamItems,
   onOpenProviderSubagent,
 }: {
   serverId: string;
   rows: ReturnType<typeof useSubagentsForParent>;
+  parentStreamItems: readonly StreamItem[];
   onOpenProviderSubagent: (parentAgentId: string, subagentId: string) => void;
 }) {
-  if (!rows.some(isSubagentActiveOrAttention)) return null;
+  const providerRows = rows.filter(
+    (row): row is ProviderSubagentRow => row.kind === "provider",
+  );
+  if (providerRows.length === 0) return null;
   return (
     <View style={styles.childTrackContainer} pointerEvents="box-none">
-      <SubagentsTrack
+      <BackgroundJobsPills
         serverId={serverId}
-        rows={rows}
-        onOpenSubagent={NOOP_SUBAGENT}
-        onOpenProviderSubagent={onOpenProviderSubagent}
-        onArchiveSubagent={NOOP_SUBAGENT}
+        rows={providerRows}
+        parentStreamItems={parentStreamItems}
+        onOpenJob={onOpenProviderSubagent}
       />
     </View>
   );
@@ -135,9 +137,13 @@ function ProviderSubagentPanel() {
     parentAgentId: target.parentAgentId,
     providerParentSubagentId: target.subagentId,
   });
-  const childTrackClearance = resolveChildTrackClearance(
-    childRows.filter(isSubagentActiveOrAttention).length,
-    isCompact,
+  const providerChildRows = childRows.filter(
+    (row): row is ProviderSubagentRow => row.kind === "provider",
+  );
+  const childTrackClearance = resolveChildTrackClearance(providerChildRows.length, isCompact);
+  const childParentStreamItems = useMemo(
+    () => [...(timeline?.tail ?? EMPTY_STREAM_ITEMS), ...(timeline?.head ?? EMPTY_STREAM_ITEMS)],
+    [timeline?.head, timeline?.tail],
   );
   const openProviderChild = useCallback(
     (parentAgentId: string, subagentId: string) => {
@@ -268,7 +274,8 @@ function ProviderSubagentPanel() {
       />
       <ProviderSubagentChildTrack
         serverId={serverId}
-        rows={childRows}
+        rows={providerChildRows}
+        parentStreamItems={childParentStreamItems}
         onOpenProviderSubagent={openProviderChild}
       />
     </View>
