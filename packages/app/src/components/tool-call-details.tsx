@@ -768,7 +768,10 @@ export function ToolCallDetailsContent({
     () => getEvalPresentation(toolName, detail, errorText),
     [toolName, detail, errorText],
   );
-  const hub = useMemo(() => getHubPresentation(toolName, detail), [toolName, detail]);
+  const hub = useMemo(
+    () => getHubPresentation(toolName, detail, status),
+    [toolName, detail, status],
+  );
 
   let sections: ReactNode[];
   if (evaluation) {
