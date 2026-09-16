@@ -4,7 +4,6 @@ export interface BackgroundJobSnapshot {
   id: string;
   startedAt: Date;
   lastSeenAt: Date;
-  label: string | null;
 }
 
 const BACKGROUND_JOB_ID_SOURCE = "bg_[A-Za-z0-9_-]+";
@@ -13,6 +12,10 @@ const EXACT_WAIT_PATTERN = new RegExp(
   `^(?:waiting\\s+for|wait(?:ing)?\\s+on)\\s+(${BACKGROUND_JOB_ID_SOURCE})(?:\\s*(?:\\.{1,3}|…))?$`,
   "i",
 );
+const WAIT_TOOL_NAME_PATTERN =
+  /(?:^|[_\s-])(wait|await)(?:$|[_\s-])|background[_\s-]?output|task[_\s-]?(?:output|wait)/i;
+const TERMINAL_STATUS_PATTERN = /\b(completed|complete|failed|canceled|cancelled|done|exited|finished)\b/i;
+const RUNNING_STATUS_PATTERN = /\b(running|in[_\s-]?progress|pending)\b/i;
 
 function safeSerialize(value: unknown): string {
   try {
@@ -29,48 +32,80 @@ function itemText(item: StreamItem): string {
   return "";
 }
 
-function toolCallLabel(item: ToolCallItem): string | null {
+function toolCallName(item: ToolCallItem): string {
   const data = item.payload.data;
-  const name = item.payload.source === "agent" ? data.name : data.toolName;
-  return name?.trim() || null;
+  return item.payload.source === "agent" ? data.name : data.toolName;
+}
+
+function toolCallStatus(item: ToolCallItem): string {
+  return item.payload.data.status;
+}
+
+function contextAroundId(text: string, id: string): string {
+  const lower = text.toLowerCase();
+  const index = lower.indexOf(id.toLowerCase());
+  if (index < 0) return text;
+  return text.slice(Math.max(0, index - 140), Math.min(text.length, index + id.length + 180));
+}
+
+function mentionIsRunning(item: StreamItem, text: string, id: string): boolean | null {
+  const context = contextAroundId(text, id);
+  if (TERMINAL_STATUS_PATTERN.test(context)) return false;
+  if (RUNNING_STATUS_PATTERN.test(context)) return true;
+  if (item.kind === "tool_call") {
+    const status = toolCallStatus(item);
+    if (status === "running" || status === "executing") return true;
+    if (status === "completed" || status === "failed" || status === "canceled") return false;
+  }
+  return null;
 }
 
 /**
- * Provider background jobs are identified by their stable bg_* ids in the transcript/tool data.
- * They are intentionally independent from provider subagents, which have their own UI surface.
+ * Derive only background jobs that are currently running. Historical bg_* mentions are ignored;
+ * each job's latest status-bearing mention wins.
  */
-export function collectBackgroundJobs(items: readonly StreamItem[] | undefined): BackgroundJobSnapshot[] {
+export function collectRunningBackgroundJobs(
+  items: readonly StreamItem[] | undefined,
+): BackgroundJobSnapshot[] {
   if (!items?.length) return [];
 
-  const jobs = new Map<string, BackgroundJobSnapshot>();
+  const jobs = new Map<string, BackgroundJobSnapshot & { running: boolean }>();
   for (const item of items) {
     const text = itemText(item);
     if (!text) continue;
     const ids = text.match(BACKGROUND_JOB_ID_PATTERN) ?? [];
     for (const rawId of ids) {
       const id = rawId.toLowerCase();
+      const running = mentionIsRunning(item, text, id);
+      if (running === null) continue;
       const timestamp = item.startedAt ?? item.timestamp;
       const existing = jobs.get(id);
-      const label = item.kind === "tool_call" ? toolCallLabel(item) : null;
-      if (!existing) {
-        jobs.set(id, { id, startedAt: timestamp, lastSeenAt: item.timestamp, label });
-        continue;
-      }
       jobs.set(id, {
-        ...existing,
-        startedAt: existing.startedAt.getTime() <= timestamp.getTime() ? existing.startedAt : timestamp,
-        lastSeenAt:
-          existing.lastSeenAt.getTime() >= item.timestamp.getTime() ? existing.lastSeenAt : item.timestamp,
-        label: existing.label ?? label,
+        id,
+        running,
+        startedAt: running
+          ? existing?.running
+            ? existing.startedAt
+            : timestamp
+          : existing?.startedAt ?? timestamp,
+        lastSeenAt: item.timestamp,
       });
     }
   }
 
-  return [...jobs.values()].sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+  return [...jobs.values()]
+    .filter((job) => job.running)
+    .map(({ running: _running, ...job }) => job)
+    .sort((a, b) => b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
 }
 
-/** Exact provider chatter that is redundant once background jobs have their own status pills. */
+export function isWaitToolCall(item: StreamItem): item is ToolCallItem {
+  return item.kind === "tool_call" && WAIT_TOOL_NAME_PATTERN.test(toolCallName(item));
+}
+
+/** Provider wait chatter is represented by the above-composer status pills instead. */
 export function isBackgroundJobWaitChatter(item: StreamItem): boolean {
+  if (isWaitToolCall(item)) return true;
   if (item.kind !== "assistant_message" && item.kind !== "thought" && item.kind !== "notification") {
     return false;
   }
@@ -81,17 +116,4 @@ export function isBackgroundJobWaitChatter(item: StreamItem): boolean {
 export function omitBackgroundJobWaitChatter(items: StreamItem[]): StreamItem[] {
   if (!items.some(isBackgroundJobWaitChatter)) return items;
   return items.filter((item) => !isBackgroundJobWaitChatter(item));
-}
-
-export function shouldCollapseBackgroundJobs(input: {
-  count: number;
-  availableWidth: number | null;
-  compact: boolean;
-}): boolean {
-  if (input.count <= 1) return false;
-  if (input.count >= 4 || input.compact) return true;
-  if (input.availableWidth === null) return false;
-
-  const requiredWidth = input.count * 150 + (input.count - 1) * 4 + 32;
-  return input.availableWidth < requiredWidth;
 }

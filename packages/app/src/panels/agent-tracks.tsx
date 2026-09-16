@@ -2,11 +2,12 @@ import { memo, useCallback, useMemo, type ReactElement } from "react";
 import { View } from "react-native";
 import { useShallow } from "zustand/shallow";
 import { StyleSheet } from "react-native-unistyles";
-import { collectBackgroundJobs } from "@/composer/background-jobs";
-import { BackgroundJobsPills } from "@/composer/background-jobs-pill";
+import { collectRunningBackgroundJobs } from "@/composer/background-jobs";
+import { BackgroundJobsPill } from "@/composer/background-jobs-pill";
 import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import { AgentModelTurnMetricsPill, useHasModelTurnMetrics } from "@/composer/model-turn-metrics";
+import { SubagentsPill } from "@/composer/subagents-pill";
 import { AgentTaskList } from "@/composer/task-list";
 import {
   MAX_CONTENT_WIDTH,
@@ -17,8 +18,7 @@ import { usePaneContext } from "@/panels/pane-context";
 import { useSettings } from "@/hooks/use-settings";
 import { PluginComposerPills } from "@/plugins";
 import { useSessionStore } from "@/stores/session-store";
-import { useArchiveSubagent, useDetachSubagent, type SubagentRow } from "@/subagents";
-import { SubagentsTrack } from "@/subagents/track";
+import type { SubagentRow } from "@/subagents";
 import { isSubagentActiveOrAttention } from "@/subagents/track-presentation";
 import type { StreamItem, TodoEntry } from "@/types/stream";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
@@ -26,12 +26,13 @@ import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
 import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
 import { openComposerChanges } from "@/workspace-tabs/open-supporting-view";
 
-/**
- * A shared empty list keeps the stream snapshot shallow-stable while an agent has
- * no timeline yet. A fresh `[]` per selector call would defeat `useShallow` and
- * spin the store subscription into an unbounded update loop.
- */
 const EMPTY_STREAM_ITEMS: StreamItem[] = [];
+
+function isRunningSubagent(row: SubagentRow): boolean {
+  return row.kind === "paseo"
+    ? row.turn.phase === "open" || row.status === "running"
+    : row.status === "running";
+}
 
 /** The pane's ambient context as compact tracks immediately above the composer. */
 export const AgentTracks = memo(function AgentTracks({
@@ -58,23 +59,18 @@ export const AgentTracks = memo(function AgentTracks({
   const canSplit = supportsDesktopPaneSplits() && !isCompact;
   const openInSidePane = useSettings((settings) => settings.openInSidePane);
   const workspaceKey = buildWorkspaceTabPersistenceKey({ serverId, workspaceId });
-  const canDetachSubagents = useSessionStore(
-    (state) => state.sessions[serverId]?.serverInfo?.features?.agentDetach === true,
-  );
   const streamState = useSessionStore(
     useShallow((state) => ({
       tail: state.sessions[serverId]?.agentStreamTail?.get(agentId) ?? EMPTY_STREAM_ITEMS,
       head: state.sessions[serverId]?.agentStreamHead?.get(agentId) ?? EMPTY_STREAM_ITEMS,
-      turnOpen: state.sessions[serverId]?.agents.get(agentId)?.turn.phase === "open",
     })),
   );
   const streamItems = useMemo(
     () => [...streamState.tail, ...streamState.head],
     [streamState.head, streamState.tail],
   );
-  const hasBackgroundJobs = collectBackgroundJobs(streamItems).length > 0;
-  const archiveSubagent = useArchiveSubagent({ serverId });
-  const detachSubagent = useDetachSubagent({ serverId });
+  const hasBackgroundJobs = collectRunningBackgroundJobs(streamItems).length > 0;
+  const hasRunningSubagents = subagentRows.some(isRunningSubagent);
 
   const handleOpenSubagent = useCallback(
     (subagentId: string) => {
@@ -131,45 +127,38 @@ export const AgentTracks = memo(function AgentTracks({
     hasPluginComposerPills ||
     hasWorkspaceDiffStat ||
     hasModelTurnMetrics ||
-    hasBackgroundJobs;
-  const hasSubagents = subagentRows.some(isSubagentActiveOrAttention);
+    hasBackgroundJobs ||
+    hasRunningSubagents;
 
-  if (!hasPills && !hasSubagents) return null;
+  if (!hasPills) return null;
 
   return (
     <View style={styles.container} pointerEvents="box-none">
-      {hasSubagents ? (
-        <SubagentsTrack
+      <View style={styles.pillsRow} pointerEvents="box-none">
+        <AgentTaskList tasks={tasks} />
+        <PluginComposerPills
           serverId={serverId}
-          rows={subagentRows}
-          onOpenSubagent={handleOpenSubagent}
-          onOpenProviderSubagent={handleOpenProviderSubagent}
-          onArchiveSubagent={archiveSubagent}
-          onDetachSubagent={canDetachSubagents ? detachSubagent : undefined}
+          workspaceId={workspaceId}
+          agentId={agentId}
+          compact={isCompact}
         />
-      ) : null}
-      {hasPills ? (
-        <View style={styles.pillsRow} pointerEvents="box-none">
-          <AgentTaskList tasks={tasks} />
-          <PluginComposerPills
-            serverId={serverId}
-            workspaceId={workspaceId}
-            agentId={agentId}
-            compact={isCompact}
+        {hasRunningSubagents ? (
+          <SubagentsPill
+            rows={subagentRows}
+            onOpenSubagent={handleOpenSubagent}
+            onOpenProviderSubagent={handleOpenProviderSubagent}
           />
-          {hasBackgroundJobs ? (
-            <BackgroundJobsPills streamItems={streamItems} active={streamState.turnOpen} />
-          ) : null}
-          <WorkspaceDiffStatPill
-            serverId={serverId}
-            workspaceId={workspaceId}
-            onPress={handleOpenChanges}
-          />
-          {hasModelTurnMetrics ? (
-            <AgentModelTurnMetricsPill serverId={serverId} agentId={agentId} />
-          ) : null}
-        </View>
-      ) : null}
+        ) : null}
+        {hasBackgroundJobs ? <BackgroundJobsPill streamItems={streamItems} /> : null}
+        <WorkspaceDiffStatPill
+          serverId={serverId}
+          workspaceId={workspaceId}
+          onPress={handleOpenChanges}
+        />
+        {hasModelTurnMetrics ? (
+          <AgentModelTurnMetricsPill serverId={serverId} agentId={agentId} />
+        ) : null}
+      </View>
     </View>
   );
 });
@@ -199,7 +188,6 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     paddingHorizontal: theme.spacing[4],
     paddingBottom: theme.spacing[2],
-    gap: theme.spacing[1.5],
   },
   pillsRow: {
     width: "100%",
