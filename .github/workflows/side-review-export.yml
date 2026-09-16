@@ -1,0 +1,37 @@
+name: Side review export
+on:
+  push:
+    branches: [feat/side-chat-workflow]
+    paths: [.github/workflows/side-review-export.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 100
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          LEFTHOOK: '0'
+      - run: npm run build:server-deps && npm run build:app-deps
+      - name: Bundle tracked source and installed test dependencies
+        run: |
+          git bundle create /tmp/side-source.bundle HEAD refs/remotes/origin/main
+          tar -czf /tmp/side-dependencies.tar.gz node_modules packages/*/node_modules packages/*/dist packages/expo-two-way-audio/build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: side-review-workspace
+          path: |
+            /tmp/side-source.bundle
+            /tmp/side-dependencies.tar.gz
+          retention-days: 1
+          compression-level: 0
