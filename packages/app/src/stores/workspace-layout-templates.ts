@@ -186,11 +186,16 @@ export function isUnshapedWorkspaceLayout(layout: WorkspaceLayout | null): boole
   return collectAllPanes(normalizeLayout(layout).root).length <= 1;
 }
 
-/** Tabs that reference live workspace resources and survive a template apply. */
+/** Draft identities carry pending submissions as well as unsent composer state. */
+function isAgentPaneTab(tab: WorkspaceTab): boolean {
+  return tab.target.kind === "agent" || tab.target.kind === "draft";
+}
+
+/** Tabs that reference live workspace resources or drafts and survive a template apply. */
 function isCarriedTab(tab: WorkspaceTab): boolean {
   const kind = tab.target.kind;
   return (
-    kind === "agent" ||
+    isAgentPaneTab(tab) ||
     kind === "provider_subagent" ||
     kind === "setup" ||
     kind === "browser" ||
@@ -275,11 +280,9 @@ function placeTabsInPane(
     if (node.pane.id !== paneId) {
       return node;
     }
-    const existingTabs =
-      replacePlaceholder &&
-      node.pane.tabs.every((tab) => tab.target.kind === "new_tab" || tab.target.kind === "draft")
-        ? []
-        : node.pane.tabs;
+    const existingTabs = replacePlaceholder
+      ? node.pane.tabs.filter((tab) => tab.target.kind !== "new_tab" && tab.target.kind !== "draft")
+      : node.pane.tabs;
     const nextTabs = [...existingTabs, ...tabs];
     return {
       kind: "pane",
@@ -370,26 +373,23 @@ export const useWorkspaceLayoutTemplateStore = create<WorkspaceLayoutTemplateSta
         const carriedTabs = existingLayout
           ? collectAllTabs(normalizeLayout(existingLayout).root).filter(isCarriedTab)
           : [];
-        const carriedAgentTabs = carriedTabs.filter((tab) => tab.target.kind === "agent");
-        const otherCarriedTabs = carriedTabs.filter((tab) => tab.target.kind !== "agent");
+        const carriedAgentTabs = carriedTabs.filter(isAgentPaneTab);
+        const otherCarriedTabs = carriedTabs.filter((tab) => !isAgentPaneTab(tab));
         const templatePanes = collectAllPanes(instantiated.layout.root) as SplitPaneInternal[];
+        const fallbackPaneId = selectTemplateTargetPaneId(instantiated.layout);
         const agentPaneId =
-          template.agentPaneId ??
+          templatePanes.find((pane) => pane.id === template.agentPaneId)?.id ??
           templatePanes.find((pane) => pane.tabs.some((tab) => tab.target.kind === "draft"))?.id ??
-          null;
+          fallbackPaneId;
         let layout = asInternalNode(instantiated.layout.root);
-        if (agentPaneId && carriedAgentTabs.length > 0) {
-          layout = placeTabsInPane(layout, agentPaneId, carriedAgentTabs, true);
-        }
-        layout = placeTabsInPane(
-          layout,
-          selectTemplateTargetPaneId(instantiated.layout),
-          otherCarriedTabs,
-        );
+        // Carry the original draft unchanged: the submission and create-flow
+        // stores are keyed by its draftId. A fresh template draft cannot submit it.
+        layout = placeTabsInPane(layout, agentPaneId, carriedAgentTabs, true);
+        layout = placeTabsInPane(layout, fallbackPaneId, otherCarriedTabs);
         layoutStore.seedWorkspaceLayout(workspaceKey, {
           layout: normalizeLayout({
             root: layout,
-            focusedPaneId: agentPaneId ?? instantiated.layout.focusedPaneId,
+            focusedPaneId: agentPaneId,
           }),
           splitSizesByGroup: instantiated.splitSizesByGroup,
           explorerSidebarPaneId: template.explorerSidebarPaneId,
