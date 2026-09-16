@@ -4,49 +4,105 @@ on:
     branches: [feat/side-chat-workflow]
     paths: [.github/workflows/side-review-export.yml]
 permissions:
-  contents: read
+  contents: write
+  actions: read
 jobs:
-  export:
+  repair:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - run: git archive -o /tmp/side-source.tar HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: side-review-source
-          path: /tmp/side-source.tar
-          retention-days: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - name: Apply reviewed import-boundary fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('packages/app/src')
+          p = root/'components/message.tsx'
+          s = p.read_text()
+          start = s.index('const turnCopyButtonStylesheet =')
+          end = s.index('const expandableBadgeStylesheet =', start)
+          imports = '''import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+          import { Pressable, type StyleProp, type ViewStyle } from "react-native";
+          import { useTranslation } from "react-i18next";
+          import { Check, Copy } from "lucide-react-native";
+          import { StyleSheet } from "react-native-unistyles";
+          import { ICON_SIZE } from "@/styles/theme";
+          import { writeMarkdownToRichClipboard } from "@/utils/rich-clipboard";
+          import { getDefaultMarkdownClipboardEnvironment } from "@/utils/rich-clipboard-default-environment";
+
+          '''
+          (root/'components/turn-copy-button.tsx').write_text(imports + s[start:end])
+          s = s[:start] + s[end:]
+          s = s.replace('  Copy,\n', '').replace('import { ICON_SIZE, type Theme }', 'import { type Theme }')
+          s = s.replace('import { writeMarkdownToRichClipboard } from "@/utils/rich-clipboard";\n', '')
+          s = s.replace('import { getDefaultMarkdownClipboardEnvironment } from "@/utils/rich-clipboard-default-environment";\n', '')
+          p.write_text('import { TurnCopyButton } from "@/components/turn-copy-button";\n' + s)
+          p = root/'panels/side/transcript.tsx'
+          p.write_text(p.read_text().replace('from "@/components/message"', 'from "@/components/turn-copy-button"'))
+          p = root/'components/toast-host.tsx'
+          s = p.read_text().replace('Animated, Easing, Platform, Text, ToastAndroid, View', 'Animated, Easing, Text, View')
+          start = s.index('    if (Platform.OS === "android" && nativeAndroid && nativeMessage) {')
+          end = s.index('\n    }', start) + len('\n    }')
+          s = s[:start] + '''    if (nativeAndroid && nativeMessage && showNativeAndroidToast(nativeMessage, durationMs)) {
+                return;
+              }''' + s[end:]
+          p.write_text('import { showNativeAndroidToast } from "./native-android-toast";\n' + s)
+          (root/'components/native-android-toast.ts').write_text('''import { Platform, ToastAndroid } from "react-native";
+
+          export function showNativeAndroidToast(message: string, durationMs: number | null): boolean {
+            if (Platform.OS !== "android") return false;
+            const duration = durationMs !== null && durationMs <= 2500 ? ToastAndroid.SHORT : ToastAndroid.LONG;
+            ToastAndroid.showWithGravity(message, duration, ToastAndroid.TOP);
+            return true;
+          }
+          ''')
+          (root/'components/native-android-toast.web.ts').write_text('''// React Native Web has no ToastAndroid export. Keep the rendered toast on web.
+          export function showNativeAndroidToast(_message: string, _durationMs: number | null): boolean {
+            return false;
+          }
+          ''')
+          Path('.github/workflows/side-review-export.yml').unlink()
+          PY
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
           LEFTHOOK: '0'
-      - run: npm run build:server-deps && npm run build:app-deps
-      - name: Archive installed test dependencies
+      - name: Format the reviewed sources
         run: |
-          find node_modules packages -type d \( -name node_modules -o -name dist -o -name build \) -prune -print0 | tar --null -czf /tmp/side-dependencies.tar.gz -T -
-          split -b 350M -d /tmp/side-dependencies.tar.gz /tmp/side-deps-
+          npm run format:files -- .github/workflows/side-chat-validation.yml packages/app/src/components/message.tsx packages/app/src/components/turn-copy-button.tsx packages/app/src/components/toast-host.tsx packages/app/src/components/native-android-toast.ts packages/app/src/components/native-android-toast.web.ts packages/app/src/panels/side/transcript.tsx packages/app/src/utils/browser-lifecycle.ts packages/server/src/server/agent/providers/model-turn-tracker.ts
+          npm run format:check
+      - run: npm run build:server-deps && npm run build:app-deps
+      - run: npm run typecheck --workspace=@getpaseo/app && npm run lint
+      - name: Stage reviewed commit without changing the PR branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: isolate Side copy control and native toast imports for web'
+          git push origin HEAD:refs/heads/repair/side-browser-9983ef0
+          git rev-parse HEAD > /tmp/side-repaired-sha.txt
+      - name: Capture previous app test diagnostics
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/Dvitash/paseo/actions/jobs/104651933623/logs > /tmp/side-previous-app.log
+      - run: npx playwright install --with-deps chromium
+        working-directory: packages/app
+      - name: Real Chromium Side regressions
+        working-directory: packages/app
+        run: |
+          npx vitest run src/panels/side/workflow.browser.test.tsx src/hooks/standalone-pwa-viewport.browser.test.ts --project=browser --bail=1 --maxWorkers=1 > /tmp/side-browser-repair.log 2>&1 || { tail -70 /tmp/side-browser-repair.log; exit 1; }
+          tail -20 /tmp/side-browser-repair.log
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: side-review-deps-0
-          path: /tmp/side-deps-00
+          name: side-repair-diagnostics
+          path: |
+            /tmp/side-repaired-sha.txt
+            /tmp/side-previous-app.log
+            /tmp/side-browser-repair.log
+            packages/app/.vitest-screenshots
           retention-days: 1
-          compression-level: 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: side-review-deps-1
-          path: /tmp/side-deps-01
-          retention-days: 1
-          compression-level: 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: side-review-deps-2
-          path: /tmp/side-deps-02
-          retention-days: 1
-          compression-level: 0
