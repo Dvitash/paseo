@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { open, access } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as waitForImmediate, setTimeout as delay } from "node:timers/promises";
@@ -2685,6 +2685,15 @@ export class OmpAgentClient implements AgentClient {
       configFilePath: input.readOnlyConfigPath,
       extensionPaths: input.readOnlyGuardPath ? [input.readOnlyGuardPath] : undefined,
     });
+  }
+
+  async *readSessionHistory(handle: AgentPersistenceHandle): AsyncGenerator<AgentStreamEvent> {
+    const sessionFile = handle.nativeHandle;
+    if (typeof sessionFile !== "string" || !sessionFile) {
+      throw new Error("OMP saved history requires a native session file handle");
+    }
+    await access(sessionFile);
+    yield* streamOmpHistory({ sessionFile, provider: this.provider });
   }
 
   async resumeSession(

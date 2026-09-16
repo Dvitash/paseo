@@ -421,6 +421,18 @@ export const es: TranslationResources = {
       needsHostUpgrade: "Actualiza tu host para restaurar este espacio de trabajo",
       manageHost: "Administrar host",
       recovery: {
+        viewSavedChat: "Ver chat guardado",
+        continueElsewhere: "Continuar en otro espacio de trabajo",
+        savedChatTitle: "Chat guardado",
+        savedChatNotice:
+          "Historial de solo lectura. Continuar crea un chat nuevo con el contexto guardado. El original sigue archivado; no se recuperan archivos sin confirmar.",
+        destinationWorkspace: "Espacio de trabajo de destino",
+        selectWorkspace: "Elige un espacio de trabajo activo",
+        noWorkspaces: "No hay espacios activos. Abre uno primero.",
+        continueAction: "Crear borrador de continuación",
+        emptyHistory: "No hay mensajes guardados.",
+        loadOlder: "Cargar mensajes anteriores",
+        historyChanged: "El historial guardado cambió. Reintenta para recargarlo.",
         archivedTitle: "Espacio de trabajo archivado",
         restoreDescription:
           "{{workspaceName}} se archivó y se eliminó su worktree. Restaura la rama {{branch}} para volver a abrirlo.",

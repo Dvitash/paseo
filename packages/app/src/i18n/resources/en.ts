@@ -416,6 +416,18 @@ export const en = {
       needsHostUpgrade: "Update your host to restore this workspace",
       manageHost: "Manage host",
       recovery: {
+        viewSavedChat: "View saved chat",
+        continueElsewhere: "Continue in another workspace",
+        savedChatTitle: "Saved chat",
+        savedChatNotice:
+          "Read-only history. Continuing creates a new chat with saved context. The original chat stays archived; uncommitted files are not recovered.",
+        destinationWorkspace: "Destination workspace",
+        selectWorkspace: "Choose an active workspace",
+        noWorkspaces: "No active workspaces. Open a workspace first.",
+        continueAction: "Create continuation draft",
+        emptyHistory: "No saved messages.",
+        loadOlder: "Load older messages",
+        historyChanged: "The saved history changed. Retry to reload it.",
         archivedTitle: "Workspace archived",
         restoreDescription:
           "{{workspaceName}} was archived and its worktree was removed. Restore branch {{branch}} to open it again.",

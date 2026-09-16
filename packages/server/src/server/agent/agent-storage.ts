@@ -1,4 +1,5 @@
 import { promises as fs, type Dirent } from "node:fs";
+import { ArchivedAgentHistoryStore } from "./archived-agent-history.js";
 import path from "node:path";
 import { z } from "zod";
 import type { Logger } from "pino";
@@ -101,6 +102,7 @@ export function parseStoredAgentRecord(value: unknown): StoredAgentRecord {
 }
 
 export class AgentStorage {
+  readonly archivedHistory: ArchivedAgentHistoryStore;
   private cache: Map<string, StoredAgentRecord> = new Map();
   private pathById: Map<string, string> = new Map();
   private pathsById: Map<string, Set<string>> = new Map();
@@ -115,6 +117,7 @@ export class AgentStorage {
 
   constructor(baseDir: string, logger: Logger) {
     this.baseDir = baseDir;
+    this.archivedHistory = new ArchivedAgentHistoryStore(baseDir);
     this.logger = logger.child({ module: "agent", component: "agent-storage" });
   }
 
@@ -237,6 +240,7 @@ export class AgentStorage {
       }),
     );
 
+    await this.archivedHistory.remove(agentId);
     this.cache.delete(agentId);
     this.removeOwnerIndex(agentId);
     this.pathById.delete(agentId);

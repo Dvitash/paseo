@@ -791,6 +791,8 @@ export interface AgentClient {
     launchContext?: AgentLaunchContext,
     options?: AgentResumeSessionOptions,
   ): Promise<AgentSession>;
+  /** Read native saved history without starting an agent, executing tools, or unarchiving it. */
+  readSessionHistory?(handle: AgentPersistenceHandle): AsyncGenerator<AgentStreamEvent>;
   /** Equal keys share availability and catalogue discovery within this configured client.
    * Include the execution environment and effective configuration; omit to use target identity.
    * force must not affect identity. Resolve before every cache lookup. */

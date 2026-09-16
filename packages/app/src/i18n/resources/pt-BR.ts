@@ -421,6 +421,18 @@ export const ptBR: TranslationResources = {
       needsHostUpgrade: "Atualize o host para restaurar este workspace",
       manageHost: "Gerenciar host",
       recovery: {
+        viewSavedChat: "Ver conversa salva",
+        continueElsewhere: "Continuar em outro espaço de trabalho",
+        savedChatTitle: "Conversa salva",
+        savedChatNotice:
+          "Histórico somente leitura. Continuar cria uma conversa com o contexto salvo. A original permanece arquivada; arquivos não commitados não são recuperados.",
+        destinationWorkspace: "Espaço de trabalho de destino",
+        selectWorkspace: "Escolha um espaço de trabalho ativo",
+        noWorkspaces: "Nenhum espaço ativo. Abra um primeiro.",
+        continueAction: "Criar rascunho de continuação",
+        emptyHistory: "Nenhuma mensagem salva.",
+        loadOlder: "Carregar mensagens anteriores",
+        historyChanged: "O histórico salvo mudou. Tente novamente para recarregar.",
         archivedTitle: "Workspace arquivado",
         restoreDescription:
           "{{workspaceName}} foi arquivado e sua worktree foi removida. Restaure a branch {{branch}} para abri-lo novamente.",

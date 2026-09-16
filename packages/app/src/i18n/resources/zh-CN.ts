@@ -418,6 +418,18 @@ export const zhCN: TranslationResources = {
       needsHostUpgrade: "更新你的 Host 以恢复此 workspace",
       manageHost: "管理 Host",
       recovery: {
+        viewSavedChat: "查看已保存的聊天",
+        continueElsewhere: "在其他工作区继续",
+        savedChatTitle: "已保存的聊天",
+        savedChatNotice:
+          "只读历史记录。继续将使用已保存的上下文创建新聊天。原聊天仍保持归档；未提交的文件不会恢复。",
+        destinationWorkspace: "目标工作区",
+        selectWorkspace: "选择一个活动工作区",
+        noWorkspaces: "没有活动工作区。请先打开一个工作区。",
+        continueAction: "创建继续聊天的草稿",
+        emptyHistory: "没有已保存的消息。",
+        loadOlder: "加载更早的消息",
+        historyChanged: "已保存的历史记录已更改。请重试以重新加载。",
         archivedTitle: "Workspace 已归档",
         restoreDescription:
           "{{workspaceName}} 已归档，其 worktree 已移除。恢复分支 {{branch}} 以重新打开。",

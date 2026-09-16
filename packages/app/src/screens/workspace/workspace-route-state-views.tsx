@@ -8,6 +8,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatConnectionStatus } from "@/utils/daemons";
 import type { WorkspaceRouteState } from "@/screens/workspace/workspace-route-state";
 import type { Theme } from "@/styles/theme";
+import {
+  ArchivedChatRecovery,
+  type ArchivedChatSelection,
+} from "@/workspace-recovery/archived-chat-recovery";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const foregroundMutedColorMapping = (theme: Theme) => ({
@@ -22,9 +26,18 @@ interface WorkspaceRouteStateActions {
   onRetryRecoveryInspection: () => void;
 }
 
+export function buildArchivedChatSelection(input: {
+  serverId: string;
+  workspaceId: string;
+  agentId: string | null | undefined;
+}): ArchivedChatSelection | undefined {
+  return input.agentId ? { ...input, agentId: input.agentId } : undefined;
+}
+
 export function renderWorkspaceRouteGate(input: {
   state: WorkspaceRouteState;
   actions: WorkspaceRouteStateActions;
+  recoverySelection?: ArchivedChatSelection;
 }): React.ReactNode {
   switch (input.state.kind) {
     case "loading":
@@ -42,6 +55,7 @@ export function renderWorkspaceRouteGate(input: {
         <ArchivedWorkspaceRecovery
           state={input.state}
           onRecover={input.actions.onRecoverWorkspace}
+          recoverySelection={input.recoverySelection}
         />
       );
     case "needsHostUpgrade":
@@ -65,6 +79,7 @@ export function renderWorkspaceRouteGate(input: {
         <WorkspaceEmptyState
           titleKey="workspace.route.recovery.unavailableTitle"
           description={input.state.message}
+          recoverySelection={input.recoverySelection}
           onDismiss={input.actions.onDismissMissingWorkspace}
         />
       );
@@ -73,6 +88,7 @@ export function renderWorkspaceRouteGate(input: {
         <WorkspaceRecoveryInspectionFailed
           state={input.state}
           onRetry={input.actions.onRetryRecoveryInspection}
+          recoverySelection={input.recoverySelection}
           onDismiss={input.actions.onDismissMissingWorkspace}
         />
       );
@@ -112,9 +128,11 @@ function WorkspaceConnecting({ hostName }: { hostName: string }) {
 function ArchivedWorkspaceRecovery({
   state,
   onRecover,
+  recoverySelection,
 }: {
   state: Extract<WorkspaceRouteState, { kind: "archived" }>;
   onRecover: () => void;
+  recoverySelection?: ArchivedChatSelection;
 }) {
   const { t } = useTranslation();
   const { recovery } = state;
@@ -166,6 +184,7 @@ function ArchivedWorkspaceRecovery({
           {isRestoring ? t("workspace.route.recovery.restoringAction") : actionLabel}
         </Button>
       </View>
+      {renderSavedChatRecovery(recoverySelection, isRestoring)}
     </View>
   );
 }
@@ -174,8 +193,10 @@ function WorkspaceRecoveryInspectionFailed({
   state,
   onRetry,
   onDismiss,
+  recoverySelection,
 }: {
   state: Extract<WorkspaceRouteState, { kind: "recoveryInspectionFailed" }>;
+  recoverySelection?: ArchivedChatSelection;
   onRetry: () => void;
   onDismiss: () => void;
 }) {
@@ -194,6 +215,7 @@ function WorkspaceRecoveryInspectionFailed({
           {t("common.actions.back")}
         </Button>
       </View>
+      {renderSavedChatRecovery(recoverySelection)}
     </View>
   );
 }
@@ -256,10 +278,12 @@ function WorkspaceEmptyState({
   hostName,
   description,
   onDismiss,
+  recoverySelection,
 }: {
   titleKey: "workspace.route.needsHostUpgrade" | "workspace.route.recovery.unavailableTitle";
   hostName?: string;
   description?: string;
+  recoverySelection?: ArchivedChatSelection;
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
@@ -275,8 +299,19 @@ function WorkspaceEmptyState({
           {t("common.actions.back")}
         </Button>
       </View>
+      {renderSavedChatRecovery(recoverySelection)}
     </View>
   );
+}
+
+function renderSavedChatRecovery(selection?: ArchivedChatSelection, disabled?: boolean) {
+  return selection ? (
+    <ArchivedChatRecovery
+      key={`${selection.serverId}:${selection.workspaceId}:${selection.agentId}`}
+      {...selection}
+      disabled={disabled}
+    />
+  ) : null;
 }
 
 const styles = StyleSheet.create((theme) => ({
