@@ -38,7 +38,13 @@ function fillToneStyle(tone: ProviderUsageTone) {
   }
 }
 
-export function ProviderUsageWindowBar({ window }: { window: ProviderUsageWindow }) {
+export function ProviderUsageWindowBar({
+  window,
+  showReset = true,
+}: {
+  window: ProviderUsageWindow;
+  showReset?: boolean;
+}) {
   const usedPct = resolveUsedPct(window);
   const remainingPct = resolveRemainingPct(window);
   const tone = window.tone ?? deriveTone(usedPct);
@@ -52,7 +58,9 @@ export function ProviderUsageWindowBar({ window }: { window: ProviderUsageWindow
   const isAtRisk = window.runsOutAt != null && window.shortfallPct != null;
   const trailing = isAtRisk
     ? `runs out ${formatResetLabel(window.runsOutAt)?.replace("resets ", "") ?? ""}`.trim()
-    : formatResetLabel(window.resetsAt);
+    : showReset
+      ? formatResetLabel(window.resetsAt)
+      : null;
 
   return (
     <View style={styles.container}>
