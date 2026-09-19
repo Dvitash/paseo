@@ -17,11 +17,21 @@ const OmpLimitAmountSchema = z
   })
   .passthrough();
 
+const OmpLimitWindowSchema = z
+  .object({
+    id: z.string().optional(),
+    label: z.string().optional(),
+    durationMs: z.number().finite().optional(),
+    resetsAt: z.number().finite().optional(),
+  })
+  .passthrough();
+
 const OmpLimitSchema = z
   .object({
     id: z.string().optional(),
     label: z.string().optional(),
     amount: OmpLimitAmountSchema.optional(),
+    window: OmpLimitWindowSchema.optional(),
     status: z.string().optional(),
   })
   .passthrough();
@@ -356,16 +366,19 @@ function computeLimitRemainingFraction(amount: OmpLimitAmount): number | undefin
   return undefined;
 }
 
+function isSparkLimit(limit: OmpLimit): boolean {
+  return (
+    (limit.id ?? "").toLowerCase().includes("spark") ||
+    (limit.label ?? "").toLowerCase().includes("spark")
+  );
+}
+
 function resolveBindingLimit(limits?: OmpLimit[]): number | undefined {
   if (!Array.isArray(limits)) return undefined;
   let binding: number | undefined;
   for (const limit of limits) {
     const amount = limit?.amount;
-    if (!amount) continue;
-    const isSpark =
-      (limit.id ?? "").toLowerCase().includes("spark") ||
-      (limit.label ?? "").toLowerCase().includes("spark");
-    if (isSpark) continue;
+    if (!amount || isSparkLimit(limit)) continue;
 
     const rem = computeLimitRemainingFraction(amount);
     if (rem === undefined) continue;
@@ -375,6 +388,23 @@ function resolveBindingLimit(limits?: OmpLimit[]): number | undefined {
     }
   }
   return binding;
+}
+
+function resolveNextResetAt(limits: OmpLimit[] | undefined, nowMs: number): number | undefined {
+  if (!Array.isArray(limits)) return undefined;
+  let nextResetAt: number | undefined;
+  for (const limit of limits) {
+    const amount = limit?.amount;
+    const resetsAt = limit?.window?.resetsAt;
+    if (!amount || isSparkLimit(limit) || computeLimitRemainingFraction(amount) === undefined) {
+      continue;
+    }
+    if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt < nowMs) {
+      continue;
+    }
+    nextResetAt = nextResetAt === undefined ? resetsAt : Math.min(nextResetAt, resetsAt);
+  }
+  return nextResetAt;
 }
 
 function assembleProviderGroup(
@@ -392,6 +422,7 @@ function assembleProviderGroup(
   let hasErrorReport = false;
   let hasStaleReport = false;
   let oldestFetchedAt: number | undefined;
+  let nextResetAt: number | undefined;
   let rawPlan: string | undefined;
 
   for (const report of reports) {
@@ -410,6 +441,11 @@ function assembleProviderGroup(
     }
 
     rawPlan ??= reportPlan(report);
+
+    const reportNextResetAt = resolveNextResetAt(report.limits, nowMs);
+    if (reportNextResetAt !== undefined) {
+      nextResetAt = nextResetAt === undefined ? reportNextResetAt : Math.min(nextResetAt, reportNextResetAt);
+    }
 
     const binding = resolveBindingLimit(report.limits);
     if (binding !== undefined) {
@@ -451,6 +487,7 @@ function assembleProviderGroup(
     label: "Usage",
     usedPct,
     remainingPct,
+    resetsAt: nextResetAt === undefined ? null : new Date(nextResetAt).toISOString(),
     tone: usedPct === null ? undefined : toneFromUsedPct(usedPct),
   };
 
