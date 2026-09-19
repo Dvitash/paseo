@@ -104,7 +104,7 @@ export function ProviderUsageCard({
             <ProviderUsageWindowBar
               key={window.id}
               window={window}
-              showReset={usage.windows.length > 1}
+              showReset={!reset || usage.windows.length > 1 || balances.length > 0}
             />
           ))}
           {balances.map((balance) => (
