@@ -145,6 +145,16 @@ export function createHostTokenUsageReader(options?: {
         },
       };
     } catch (error) {
+      // OMP's compiled stats command can fail after or during session sync. If the
+      // local stats database is readable, keep token usage available instead of
+      // surfacing the CLI failure to the client.
+      if (existsSync(dbPath)) {
+        const sqliteRanges = await queryRangesFromSqlite(dbPath);
+        if (sqliteRanges) {
+          return { status: "available", ranges: sqliteRanges };
+        }
+      }
+
       const isMissingCommand =
         error instanceof Error &&
         "code" in error &&

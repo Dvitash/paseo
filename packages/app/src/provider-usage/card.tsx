@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ProviderUsageBalanceBar } from "./balance-bar";
-import { formatAgo } from "./format";
+import { formatAgo, formatResetLabel } from "./format";
 import { ThemedProviderUsageIcon, providerUsageIconColorMapping } from "./provider-usage-icon";
 import type { ProviderUsage } from "./types";
 import { ProviderUsageWindowBar } from "./window-bar";
@@ -11,6 +11,26 @@ import { ProviderUsageWindowBar } from "./window-bar";
 function statusText(usage: ProviderUsage): string | null {
   if (usage.status === "available") return null;
   return usage.status === "error" ? "Error" : "Unavailable";
+}
+
+function nextResetText(usage: ProviderUsage): string | null {
+  const now = Date.now();
+  let nextResetAt: string | null = null;
+  let nextResetTime = Number.POSITIVE_INFINITY;
+  const resetCandidates = [
+    ...usage.windows.map((window) => window.resetsAt),
+    ...(usage.balances ?? []).map((balance) => balance.resetsAt),
+  ];
+
+  for (const candidate of resetCandidates) {
+    if (!candidate) continue;
+    const time = new Date(candidate).getTime();
+    if (!Number.isFinite(time) || time < now || time >= nextResetTime) continue;
+    nextResetAt = candidate;
+    nextResetTime = time;
+  }
+
+  return formatResetLabel(nextResetAt);
 }
 
 function footerText(usage: ProviderUsage): string | null {
@@ -31,6 +51,7 @@ export function ProviderUsageCard({
   compact?: boolean;
 }) {
   const status = statusText(usage);
+  const reset = nextResetText(usage);
   const footer = footerText(usage);
   const balances = usage.balances ?? [];
   const details = usage.details ?? [];
@@ -62,6 +83,7 @@ export function ProviderUsageCard({
         </Text>
         {usage.planLabel ? <StatusBadge label={usage.planLabel} variant="muted" /> : null}
         <View style={styles.headerSpacer} />
+        {reset ? <Text style={styles.resetLabel}>{reset}</Text> : null}
         {status ? (
           <View style={styles.statusRow}>
             <View style={dotStyle} />
@@ -79,7 +101,11 @@ export function ProviderUsageCard({
       {usage.windows.length > 0 || balances.length > 0 ? (
         <View style={styles.bars}>
           {usage.windows.map((window) => (
-            <ProviderUsageWindowBar key={window.id} window={window} />
+            <ProviderUsageWindowBar
+              key={window.id}
+              window={window}
+              showReset={!reset || usage.windows.length > 1 || balances.length > 0}
+            />
           ))}
           {balances.map((balance) => (
             <ProviderUsageBalanceBar key={balance.id} balance={balance} />
@@ -135,6 +161,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   headerSpacer: {
     flex: 1,
+  },
+  resetLabel: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
   },
   statusRow: {
     flexDirection: "row",
