@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HostTokenUsageSampler } from "./sampler.js";
-import { parseRangesFromOmpStdout, queryRangesFromSqlite } from "./reader.js";
+import {
+  createHostTokenUsageReader,
+  parseRangesFromOmpStdout,
+  queryRangesFromSqlite,
+} from "./reader.js";
 
 describe("HostTokenUsageSampler", () => {
   it("caches snapshot within TTL and invalidates on force", async () => {
@@ -90,6 +94,49 @@ Synced 10 new entries
       cacheReadTokens: 0,
       outputTokens: 0,
     });
+  });
+
+  it("falls back to the local stats database when omp stats fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "paseo-stats-fallback-test-"));
+    const dbPath = join(tempDir, "stats.db");
+    try {
+      const sqliteSpecifier: string = "node:sqlite";
+      const { DatabaseSync } = (await import(sqliteSpecifier)) as {
+        DatabaseSync: new (path: string) => {
+          exec: (sql: string) => void;
+          close: () => void;
+        };
+      };
+      const db = new DatabaseSync(dbPath);
+      const now = Date.now();
+      db.exec(`
+        CREATE TABLE messages (
+          id INTEGER PRIMARY KEY,
+          timestamp INTEGER NOT NULL,
+          input_tokens INTEGER NOT NULL,
+          cache_read_tokens INTEGER NOT NULL,
+          output_tokens INTEGER NOT NULL
+        );
+        INSERT INTO messages VALUES (1, ${now - 30_000}, 123, 456, 78);
+      `);
+      db.close();
+
+      const read = createHostTokenUsageReader({
+        dbPath,
+        executablePath: join(tempDir, "missing-omp"),
+      });
+      const reading = await read();
+
+      expect(reading.status).toBe("available");
+      expect(reading.error).toBeUndefined();
+      expect(reading.ranges?.["1h"]).toEqual({
+        inputTokens: 123,
+        cacheReadTokens: 456,
+        outputTokens: 78,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("queries ranges from sqlite database", async () => {
