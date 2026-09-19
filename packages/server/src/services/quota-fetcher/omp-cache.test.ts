@@ -294,6 +294,40 @@ describe("OMP Usage Cache Adapter & Service", () => {
     expect(window.tone).toBe("ok");
   });
 
+  it("propagates the next non-Spark OMP quota reset into the provider rollup", async () => {
+    const fixedNow = Date.parse("2026-09-08T12:00:00.000Z");
+    const resetAt = fixedNow + 2 * 60 * 60 * 1000;
+    const payload: OmpUsageData = {
+      generatedAt: fixedNow,
+      reports: [
+        {
+          provider: "openai-codex",
+          fetchedAt: fixedNow,
+          limits: [
+            {
+              id: "spark-quota",
+              amount: { remainingFraction: 0.1 },
+              window: { resetsAt: fixedNow + 10 * 60 * 1000 },
+            },
+            {
+              id: "weekly",
+              amount: { remainingFraction: 0.8 },
+              window: { id: "weekly", label: "Weekly", resetsAt: resetAt },
+            },
+          ],
+        },
+      ],
+    };
+    writeFileSync(cacheFile, JSON.stringify(payload));
+
+    const result = await readOmpUsage({
+      cachePath: cacheFile,
+      now: () => fixedNow,
+    });
+
+    expect(result.providers[0]?.windows[0]?.resetsAt).toBe(new Date(resetAt).toISOString());
+  });
+
   it("aggregates multi-account provider into single ProviderUsage without leaking identifiers", async () => {
     const fixedNow = Date.parse("2026-09-08T12:00:00.000Z");
     const payload: OmpUsageData = {
