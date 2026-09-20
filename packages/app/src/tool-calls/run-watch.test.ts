@@ -54,7 +54,9 @@ describe("parseRunWatchToolCall", () => {
 
   it("requires both repo and branch", () => {
     expect(
-      parseRunWatchToolCall(writeDetail(JSON.stringify({ op: "run_watch", repo: "Dvitash/paseo" }))),
+      parseRunWatchToolCall(
+        writeDetail(JSON.stringify({ op: "run_watch", repo: "Dvitash/paseo" })),
+      ),
     ).toBeNull();
   });
 });
