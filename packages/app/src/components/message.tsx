@@ -64,6 +64,7 @@ import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { buildToolCallPresentation } from "@/tool-calls/presentation";
 import { ToolCallPreview } from "@/tool-calls/activity-content";
 import { formatHubTitle } from "@/tool-calls/hub";
+import { parseRunWatchToolCall, type RunWatchToolCall } from "@/tool-calls/run-watch";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { getMarkdownListMarker, getMarkdownListSpacing } from "@/utils/markdown-list";
 import { markdownNodeContainsType } from "@/utils/markdown-ast";
@@ -171,6 +172,7 @@ const ThemedMicVocal = withUnistyles(MicVocal);
 const ThemedFileSymlinkIcon = withUnistyles(FileSymlink);
 const ThemedTriangleAlertIcon = withUnistyles(TriangleAlertIcon);
 const ThemedChevronRightIcon = withUnistyles(ChevronRight);
+const ThemedCheckIcon = withUnistyles(Check);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedNotificationInfo = withUnistyles(Info);
 const ThemedNotificationWarning = withUnistyles(TriangleAlertIcon);
@@ -2967,6 +2969,220 @@ interface ToolCallProps {
   maxDetailHeight?: number;
 }
 
+const runWatchBadgeStylesheet = StyleSheet.create((theme) => ({
+  pressable: {
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: theme.borderWidth[1],
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface1,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    overflow: "hidden",
+  },
+  pressablePressed: {
+    opacity: 0.9,
+  },
+  pressableExpanded: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 36,
+  },
+  chevronSlot: {
+    width: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: theme.spacing[1],
+  },
+  statusSlot: {
+    width: 22,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: theme.spacing[2],
+  },
+  textColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  title: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  subtitle: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    marginTop: 2,
+  },
+  elapsed: {
+    color: theme.colors.foregroundMuted,
+    fontSize: STREAM_METADATA_FONT_SIZE,
+    marginLeft: theme.spacing[3],
+    flexShrink: 0,
+  },
+}));
+
+function getRunWatchTitle(watch: RunWatchToolCall, status: ToolCallProps["status"]): string {
+  if (status === "running" || status === "executing") {
+    return `Watching ${watch.branch} for changes…`;
+  }
+  if (status === "failed") {
+    return `Watch ${watch.branch} failed`;
+  }
+  if (status === "canceled") {
+    return `Watch ${watch.branch} canceled`;
+  }
+  return `Watched ${watch.branch} for changes`;
+}
+
+function RunWatchStatusIcon({ status }: { status: ToolCallProps["status"] }) {
+  if (status === "running" || status === "executing") {
+    return <ThemedLoadingSpinner size="small" uniProps={foregroundMutedColorMapping} />;
+  }
+  if (status === "failed") {
+    return <ThemedTriangleAlertIcon size={14} uniProps={destructiveColorMapping} />;
+  }
+  if (status === "canceled") {
+    return <ThemedNotificationError size={14} uniProps={foregroundMutedColorMapping} />;
+  }
+  return <ThemedCheckIcon size={14} uniProps={foregroundMutedColorMapping} />;
+}
+
+function RunWatchElapsed({
+  startedAt,
+  endedAt,
+  active,
+}: {
+  startedAt?: Date;
+  endedAt?: Date;
+  active: boolean;
+}) {
+  if (!startedAt) {
+    return null;
+  }
+  if (active) {
+    return <LiveElapsed startedAt={startedAt} style={runWatchBadgeStylesheet.elapsed} />;
+  }
+  if (!endedAt) {
+    return null;
+  }
+  return (
+    <Text style={runWatchBadgeStylesheet.elapsed}>
+      {formatDuration(Math.max(0, endedAt.getTime() - startedAt.getTime()))}
+    </Text>
+  );
+}
+
+interface RunWatchBadgeProps {
+  watch: RunWatchToolCall;
+  status: ToolCallProps["status"];
+  startedAt?: Date;
+  endedAt?: Date;
+  isExpanded: boolean;
+  onToggle?: () => void;
+  renderDetails?: () => ReactNode;
+  isLastInSequence: boolean;
+  disableOuterSpacing?: boolean;
+  onDetailHoverChange?: (hovered: boolean) => void;
+}
+
+const RunWatchBadge = memo(function RunWatchBadge({
+  watch,
+  status,
+  startedAt,
+  endedAt,
+  isExpanded,
+  onToggle,
+  renderDetails,
+  isLastInSequence,
+  disableOuterSpacing,
+  onDetailHoverChange,
+}: RunWatchBadgeProps) {
+  const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
+  const [isPressed, setIsPressed] = useState(false);
+  const active = status === "running" || status === "executing";
+  const title = getRunWatchTitle(watch, status);
+  const subtitle = `${watch.repoName} · ${watch.branch}`;
+  const detailContent = isExpanded ? renderDetails?.() : null;
+  const isInteractive = Boolean(onToggle);
+
+  const containerStyle = useMemo(
+    () => [
+      expandableBadgeStylesheet.container,
+      !resolvedDisableOuterSpacing &&
+        (isLastInSequence
+          ? expandableBadgeStylesheet.containerLastInSequence
+          : expandableBadgeStylesheet.containerSpacing),
+    ],
+    [isLastInSequence, resolvedDisableOuterSpacing],
+  );
+  const pressableStyle = useMemo(
+    () => [
+      runWatchBadgeStylesheet.pressable,
+      isPressed && isInteractive ? runWatchBadgeStylesheet.pressablePressed : null,
+      detailContent ? runWatchBadgeStylesheet.pressableExpanded : null,
+    ],
+    [detailContent, isInteractive, isPressed],
+  );
+  const chevronStyle = useMemo(
+    () =>
+      inlineUnistylesStyle({
+        transform: isExpanded ? [{ rotate: "90deg" }] : undefined,
+      }),
+    [isExpanded],
+  );
+
+  return (
+    <View style={containerStyle} testID="run-watch-tool-call">
+      <Pressable
+        onPress={onToggle}
+        onPressIn={isInteractive ? () => setIsPressed(true) : undefined}
+        onPressOut={isInteractive ? () => setIsPressed(false) : undefined}
+        disabled={!isInteractive}
+        accessibilityRole={isInteractive ? "button" : undefined}
+        accessibilityLabel={`${title}, ${subtitle}`}
+        accessibilityState={{ expanded: isInteractive ? isExpanded : undefined, busy: active }}
+        style={pressableStyle}
+      >
+        <View style={runWatchBadgeStylesheet.row}>
+          <View style={runWatchBadgeStylesheet.chevronSlot}>
+            {isInteractive ? (
+              <View style={chevronStyle}>
+                <ThemedChevronRightIcon size={12} uniProps={foregroundMutedColorMapping} />
+              </View>
+            ) : null}
+          </View>
+          <View style={runWatchBadgeStylesheet.statusSlot}>
+            <RunWatchStatusIcon status={status} />
+          </View>
+          <View style={runWatchBadgeStylesheet.textColumn}>
+            <Text style={runWatchBadgeStylesheet.title} numberOfLines={1}>
+              {title}
+            </Text>
+            <Text style={runWatchBadgeStylesheet.subtitle} numberOfLines={1}>
+              {subtitle}
+            </Text>
+          </View>
+          <RunWatchElapsed startedAt={startedAt} endedAt={endedAt} active={active} />
+        </View>
+      </Pressable>
+      {detailContent ? (
+        <Pressable
+          style={expandableBadgeStylesheet.detailWrapper}
+          onHoverIn={() => onDetailHoverChange?.(true)}
+          onHoverOut={() => onDetailHoverChange?.(false)}
+        >
+          {detailContent}
+        </Pressable>
+      ) : null}
+    </View>
+  );
+});
+
 export const ToolCall = memo(function ToolCall({
   toolName,
   args,
@@ -3008,6 +3224,7 @@ export const ToolCall = memo(function ToolCall({
     }
     return undefined;
   }, [detail, args, result]);
+  const runWatch = useMemo(() => parseRunWatchToolCall(effectiveDetail), [effectiveDetail]);
 
   const presentation = useMemo(
     () =>
@@ -3159,6 +3376,23 @@ export const ToolCall = memo(function ToolCall({
         label={effectiveDetail?.type === "plain_text" ? effectiveDetail.label : undefined}
         testID="timeline-advisor-comments"
         disableOuterSpacing={disableOuterSpacing}
+      />
+    );
+  }
+
+  if (runWatch) {
+    return (
+      <RunWatchBadge
+        watch={runWatch}
+        status={status}
+        startedAt={startedAt}
+        endedAt={endedAt}
+        isExpanded={shouldRenderInline && isExpanded}
+        onToggle={presentation.canOpenDetails ? handleToggle : undefined}
+        renderDetails={presentation.canOpenDetails && shouldRenderInline ? renderDetails : undefined}
+        isLastInSequence={isLastInSequence}
+        disableOuterSpacing={disableOuterSpacing}
+        onDetailHoverChange={onInlineDetailsHoverChange}
       />
     );
   }
