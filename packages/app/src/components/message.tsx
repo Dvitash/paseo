@@ -3131,7 +3131,7 @@ const RunWatchBadge = memo(function RunWatchBadge({
   const chevronStyle = useMemo(
     () =>
       inlineUnistylesStyle({
-        transform: isExpanded ? [{ rotate: "90deg" }] : undefined,
+        transform: [{ rotate: isExpanded ? "90deg" : "0deg" }],
       }),
     [isExpanded],
   );
@@ -3389,7 +3389,9 @@ export const ToolCall = memo(function ToolCall({
         endedAt={endedAt}
         isExpanded={shouldRenderInline && isExpanded}
         onToggle={presentation.canOpenDetails ? handleToggle : undefined}
-        renderDetails={presentation.canOpenDetails && shouldRenderInline ? renderDetails : undefined}
+        renderDetails={
+          presentation.canOpenDetails && shouldRenderInline ? renderDetails : undefined
+        }
         isLastInSequence={isLastInSequence}
         disableOuterSpacing={disableOuterSpacing}
         onDetailHoverChange={onInlineDetailsHoverChange}
