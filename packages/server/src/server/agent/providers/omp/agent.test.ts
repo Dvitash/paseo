@@ -458,6 +458,31 @@ describe("OMP agent client and session", () => {
     await expect(completion).resolves.toMatchObject({ finalText: "first done" });
   });
 
+  test("does not let an interrupted turn's idle check clear replacement prompt correlation", async () => {
+    const omp = new OmpHarness();
+    await omp.start();
+    await omp.requireStartTurn("first", { clientMessageId: "first-client" });
+
+    const runtime = omp.runtime();
+    runtime.beginTurn();
+    runtime.acceptPrompt("first", "user-1");
+    runtime.streamAssistantText("first done");
+    const releaseStateRequest = runtime.deferStateRequest();
+    runtime.finishTurn();
+    await omp.waitForProviderStateChecks(1);
+
+    await omp.interrupt();
+    await omp.requireStartTurn("replacement", { clientMessageId: "replacement-client" });
+    releaseStateRequest();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    runtime.beginTurn();
+    runtime.acceptPrompt("replacement", "user-2");
+    expect(
+      omp.timeline().find((item) => item.type === "user_message" && item.text === "replacement"),
+    ).toMatchObject({ clientMessageId: "replacement-client", messageId: "user-2" });
+  });
+
   test("does not complete on OMP's extension-notice agent_end", async () => {
     const omp = new OmpHarness();
     await omp.start();

@@ -2471,7 +2471,12 @@ export class OmpAgentSession implements AgentSession {
       try {
         const state = await this.runtimeSession.getState();
         this.state = state;
-        if (!state.isStreaming && !state.isCompacting) {
+        if (
+          !state.isStreaming &&
+          !state.isCompacting &&
+          this.activeTurnStarted &&
+          this.currentTurnIdForEvent() === turnId
+        ) {
           this.completeTurn(turnId, messages);
           return;
         }

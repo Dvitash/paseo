@@ -150,6 +150,7 @@ export class FakeOmpSession implements OmpRuntimeSession {
   private nextHeldPrompt: { promise: Promise<void>; reject: (error: Error) => void } | null = null;
   private activeHeldPrompt: { promise: Promise<void>; reject: (error: Error) => void } | null =
     null;
+  private pendingStateRequest: { promise: Promise<void>; resolve: () => void } | null = null;
 
   constructor(launch: OmpRuntimeLaunch) {
     this.state = {
@@ -252,6 +253,7 @@ export class FakeOmpSession implements OmpRuntimeSession {
       if (this.getStateRequestCount >= waiter.count) waiter.resolve();
       else this.stateRequestWaiters.push(waiter);
     }
+    await this.pendingStateRequest?.promise;
     if (this.getStateError) {
       throw this.getStateError;
     }
@@ -264,6 +266,18 @@ export class FakeOmpSession implements OmpRuntimeSession {
 
   queueStateReports(states: OmpSessionState[]): void {
     this.stateReports.push(...states);
+  }
+
+  deferStateRequest(): () => void {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    this.pendingStateRequest = { promise, resolve };
+    return () => {
+      this.pendingStateRequest?.resolve();
+      this.pendingStateRequest = null;
+    };
   }
 
   waitForStateRequests(count: number): Promise<void> {

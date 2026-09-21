@@ -2016,6 +2016,39 @@ describe("turn lifecycle events", () => {
     assert.strictEqual(userMessages[0]?.messageId, "provider-owned-head");
   });
 
+  it("collapses a daemon-recorded prompt with its uncorrelated provider echo", () => {
+    const submitted = createUserMessage({
+      id: "msg_interrupt",
+      clientMessageId: "msg_interrupt",
+      messageId: "msg_interrupt",
+      text: "replacement prompt",
+      timestamp: new Date("2025-01-01T15:03:02Z"),
+    });
+
+    const result = applyStreamEvent({
+      tail: [submitted],
+      head: [],
+      event: {
+        type: "timeline",
+        provider: "omp",
+        item: {
+          type: "user_message",
+          text: submitted.text,
+          messageId: "provider-prompt",
+        },
+      },
+      timestamp: new Date("2025-01-01T15:03:03Z"),
+      source: "live",
+    });
+
+    expect(result.tail).toHaveLength(1);
+    expect(result.tail[0]).toMatchObject({
+      id: "msg_interrupt",
+      clientMessageId: "msg_interrupt",
+      messageId: "provider-prompt",
+    });
+  });
+
   it("keeps a replacement assistant separate after an interrupted prompt is reconciled", () => {
     const interruptedAssistant: StreamItem = {
       kind: "assistant_message",

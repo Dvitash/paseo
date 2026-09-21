@@ -183,14 +183,19 @@ export function removeSubmittedUserMessage(input: {
 
 // COMPAT(userMessageClientId): added in v0.2.0, remove after 2027-01-20 once the
 // supported daemon floor emits clientMessageId on submitted user messages. Until then a
-// locally submitted row (clientMessageId, no messageId) and its canonical twin from an
-// old daemon (messageId, no clientMessageId) share no identifier, so canonical ingestion
-// may match an explicit local candidate by the id supplied over the wire or by text.
+// locally submitted or daemon-recorded row (clientMessageId, with no distinct provider
+// messageId) and its provider twin (messageId, no clientMessageId) share no identifier, so
+// canonical ingestion may match that explicit submitted candidate by wire id or text.
 function matchesLegacyCanonicalUserMessage(
   submitted: UserMessageItem,
   canonical: UserMessageItem,
 ): boolean {
-  if (submitted.clientMessageId === undefined || submitted.messageId !== undefined) return false;
+  if (
+    submitted.clientMessageId === undefined ||
+    (submitted.messageId !== undefined && submitted.messageId !== submitted.clientMessageId)
+  ) {
+    return false;
+  }
   if (canonical.messageId === undefined) return false;
   return canonical.messageId === submitted.clientMessageId || canonical.text === submitted.text;
 }
@@ -205,8 +210,8 @@ function matchesUserMessage(
   if (existing.clientMessageId && incoming.clientMessageId) {
     return existing.clientMessageId === incoming.clientMessageId;
   }
-  if (existing.messageId && incoming.messageId) {
-    return existing.messageId === incoming.messageId;
+  if (existing.messageId && incoming.messageId && existing.messageId === incoming.messageId) {
+    return true;
   }
   if (matchesLegacyCanonicalUserMessage(existing, incoming)) return true;
   return policy === "handoff" && matchesLegacyCanonicalUserMessage(incoming, existing);
